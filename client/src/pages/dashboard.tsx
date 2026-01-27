@@ -16,6 +16,7 @@ import {
   Bell, 
   BellOff, 
   CheckCircle2, 
+  Copy,
   ExternalLink, 
   Mail, 
   Play, 
@@ -24,11 +25,22 @@ import {
   Wallet,
   Zap
 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import type { Swap, MonitoringStatus, NotificationSettings } from "@shared/schema";
 
 export default function Dashboard() {
   const [email, setEmail] = useState("");
   const [minAmount, setMinAmount] = useState("");
+  const { toast } = useToast();
+
+  const copyToClipboard = async (text: string, label: string = "Address") => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ description: `${label} copied to clipboard` });
+    } catch {
+      toast({ description: "Failed to copy", variant: "destructive" });
+    }
+  };
 
   // WebSocket for real-time updates
   const handleWebSocketMessage = useCallback((message: any) => {
@@ -142,15 +154,26 @@ export default function Dashboard() {
                   </p>
                 </div>
               </div>
-              <a
-                href={`https://solscan.io/account/${wallet?.address}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary text-sm flex items-center gap-1 hover:underline"
-                data-testid="link-solscan"
-              >
-                View on Solscan <ExternalLink className="h-3 w-3" />
-              </a>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => wallet?.address && copyToClipboard(wallet.address, "Wallet address")}
+                  data-testid="button-copy-wallet"
+                >
+                  <Copy className="h-3 w-3 mr-1" />
+                  Copy
+                </Button>
+                <a
+                  href={`https://solscan.io/account/${wallet?.address}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary text-sm flex items-center gap-1 hover:underline"
+                  data-testid="link-solscan"
+                >
+                  View on Solscan <ExternalLink className="h-3 w-3" />
+                </a>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -363,15 +386,26 @@ export default function Dashboard() {
                         </div>
                       </div>
                     </div>
-                    <a
-                      href={`https://solscan.io/tx/${swap.signature}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-primary text-sm flex items-center gap-1 hover:underline shrink-0"
-                      data-testid={`link-tx-${swap.id}`}
-                    >
-                      View TX <ExternalLink className="h-3 w-3" />
-                    </a>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => copyToClipboard(swap.toToken, "Token address")}
+                        data-testid={`button-copy-token-${swap.id}`}
+                        title="Copy token address"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </Button>
+                      <a
+                        href={`https://solscan.io/tx/${swap.signature}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary text-sm flex items-center gap-1 hover:underline"
+                        data-testid={`link-tx-${swap.id}`}
+                      >
+                        View TX <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
                   </div>
                 ))}
               </div>
