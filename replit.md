@@ -231,3 +231,5 @@ npm run db:push  # Push schema changes to database
 ```
 
 ## Future Enhancements (TODO)
+
+- **User-supplied Helius API keys**: Allow users to optionally provide their own Helius API key to distribute API load across multiple keys, scaling limits with user count
