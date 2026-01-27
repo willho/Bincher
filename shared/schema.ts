@@ -36,6 +36,12 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   label: text("label"),
   enabled: boolean("enabled").default(true),
   createdAt: integer("created_at").notNull(),
+  // Community sharing fields
+  isShared: boolean("is_shared").default(false),
+  shareStatus: text("share_status").default("none"), // none, pending, approved, rejected
+  aiScore: integer("ai_score"), // 0-100 score from AI analysis
+  aiScoreDetails: text("ai_score_details"), // JSON with hit rate, avg multiplier, risk, etc.
+  aiScoreUpdatedAt: integer("ai_score_updated_at"),
 });
 
 // Database tables

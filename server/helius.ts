@@ -219,6 +219,192 @@ export async function getWebhooks(): Promise<any[]> {
   }
 }
 
+// Fetch historical swap transactions for a wallet address
+export interface HistoricalSwap {
+  signature: string;
+  timestamp: number;
+  type: "BUY" | "SELL";
+  tokenMint: string;
+  tokenSymbol: string;
+  tokenAmount: number;
+  solAmount: number;
+  pricePerToken: number;
+}
+
+export interface WalletTradingHistory {
+  walletAddress: string;
+  swaps: HistoricalSwap[];
+  tokenSummaries: Map<string, {
+    tokenMint: string;
+    tokenSymbol: string;
+    totalBuys: number;
+    totalSells: number;
+    totalBuyAmount: number;
+    totalSellAmount: number;
+    totalBuySol: number;
+    totalSellSol: number;
+    avgBuyPrice: number;
+    avgSellPrice: number;
+    realizedPnl: number;
+    currentHoldings: number;
+  }>;
+}
+
+export async function fetchWalletSwapHistory(walletAddress: string, limit: number = 100): Promise<HistoricalSwap[]> {
+  if (!HELIUS_API_KEY) {
+    console.error("No Helius API key configured");
+    return [];
+  }
+
+  try {
+    // Use Helius parsed transaction history API
+    const response = await fetch(`https://api.helius.xyz/v0/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&type=SWAP&limit=${limit}`);
+    
+    if (!response.ok) {
+      console.error("Failed to fetch wallet history:", await response.text());
+      return [];
+    }
+
+    const transactions = await response.json();
+    const swaps: HistoricalSwap[] = [];
+
+    for (const tx of transactions) {
+      if (!tx.events?.swap) continue;
+
+      const swapEvent = tx.events.swap;
+      const timestamp = tx.timestamp || Math.floor(Date.now() / 1000);
+      const signature = tx.signature;
+
+      // Parse the swap direction
+      const nativeInput = swapEvent.nativeInput;
+      const nativeOutput = swapEvent.nativeOutput;
+      const tokenInputs = swapEvent.tokenInputs || [];
+      const tokenOutputs = swapEvent.tokenOutputs || [];
+
+      if (nativeInput && tokenOutputs.length > 0) {
+        // SOL -> Token (BUY)
+        const tokenOut = tokenOutputs[0];
+        const solAmount = nativeInput.amount / 1e9;
+        const tokenAmount = tokenOut.rawTokenAmount?.tokenAmount 
+          ? parseFloat(tokenOut.rawTokenAmount.tokenAmount) / Math.pow(10, tokenOut.rawTokenAmount.decimals || 9)
+          : 0;
+        
+        if (tokenAmount > 0) {
+          swaps.push({
+            signature,
+            timestamp,
+            type: "BUY",
+            tokenMint: tokenOut.mint,
+            tokenSymbol: getTokenSymbol(tokenOut.mint),
+            tokenAmount,
+            solAmount,
+            pricePerToken: solAmount / tokenAmount,
+          });
+        }
+      } else if (tokenInputs.length > 0 && nativeOutput) {
+        // Token -> SOL (SELL)
+        const tokenIn = tokenInputs[0];
+        const solAmount = nativeOutput.amount / 1e9;
+        const tokenAmount = tokenIn.rawTokenAmount?.tokenAmount
+          ? parseFloat(tokenIn.rawTokenAmount.tokenAmount) / Math.pow(10, tokenIn.rawTokenAmount.decimals || 9)
+          : 0;
+
+        if (tokenAmount > 0) {
+          swaps.push({
+            signature,
+            timestamp,
+            type: "SELL",
+            tokenMint: tokenIn.mint,
+            tokenSymbol: getTokenSymbol(tokenIn.mint),
+            tokenAmount,
+            solAmount,
+            pricePerToken: solAmount / tokenAmount,
+          });
+        }
+      }
+    }
+
+    return swaps;
+  } catch (error) {
+    console.error("Error fetching wallet swap history:", error);
+    return [];
+  }
+}
+
+export async function analyzeWalletTradingHistory(walletAddress: string): Promise<WalletTradingHistory> {
+  const swaps = await fetchWalletSwapHistory(walletAddress, 200);
+  
+  const tokenSummaries = new Map<string, {
+    tokenMint: string;
+    tokenSymbol: string;
+    totalBuys: number;
+    totalSells: number;
+    totalBuyAmount: number;
+    totalSellAmount: number;
+    totalBuySol: number;
+    totalSellSol: number;
+    avgBuyPrice: number;
+    avgSellPrice: number;
+    realizedPnl: number;
+    currentHoldings: number;
+  }>();
+
+  for (const swap of swaps) {
+    if (!tokenSummaries.has(swap.tokenMint)) {
+      tokenSummaries.set(swap.tokenMint, {
+        tokenMint: swap.tokenMint,
+        tokenSymbol: swap.tokenSymbol,
+        totalBuys: 0,
+        totalSells: 0,
+        totalBuyAmount: 0,
+        totalSellAmount: 0,
+        totalBuySol: 0,
+        totalSellSol: 0,
+        avgBuyPrice: 0,
+        avgSellPrice: 0,
+        realizedPnl: 0,
+        currentHoldings: 0,
+      });
+    }
+
+    const summary = tokenSummaries.get(swap.tokenMint)!;
+    
+    if (swap.type === "BUY") {
+      summary.totalBuys++;
+      summary.totalBuyAmount += swap.tokenAmount;
+      summary.totalBuySol += swap.solAmount;
+    } else {
+      summary.totalSells++;
+      summary.totalSellAmount += swap.tokenAmount;
+      summary.totalSellSol += swap.solAmount;
+    }
+  }
+
+  // Calculate averages and PnL
+  for (const [, summary] of tokenSummaries) {
+    if (summary.totalBuyAmount > 0) {
+      summary.avgBuyPrice = summary.totalBuySol / summary.totalBuyAmount;
+    }
+    if (summary.totalSellAmount > 0) {
+      summary.avgSellPrice = summary.totalSellSol / summary.totalSellAmount;
+    }
+    
+    // Current holdings = bought - sold
+    summary.currentHoldings = summary.totalBuyAmount - summary.totalSellAmount;
+    
+    // Realized PnL = SOL from sells - (proportional SOL spent on those tokens)
+    const soldRatio = summary.totalBuyAmount > 0 ? summary.totalSellAmount / summary.totalBuyAmount : 0;
+    const costBasis = summary.totalBuySol * soldRatio;
+    summary.realizedPnl = summary.totalSellSol - costBasis;
+  }
+
+  return {
+    walletAddress,
+    swaps,
+    tokenSummaries,
+  };
+}
+
 export async function updateWebhookUrl(webhookId: string, newUrl: string, walletAddresses: string[]): Promise<boolean> {
   if (!HELIUS_API_KEY) return false;
   
