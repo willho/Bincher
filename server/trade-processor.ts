@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { pendingBuys, holdings, tradeConfig } from "@shared/schema";
-import { eq, and, lte } from "drizzle-orm";
+import { eq, and, lte, or } from "drizzle-orm";
 import { getTradeConfig, getHotWalletBalance, getAllPendingBuys } from "./wallet";
 import { buyToken, getTokenPrice } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
@@ -25,7 +25,7 @@ export async function processPendingBuys(): Promise<void> {
       .from(pendingBuys)
       .where(
         and(
-          eq(pendingBuys.cancelled, false),
+          eq(pendingBuys.status, "active"),
           eq(pendingBuys.buyTriggered, false),
           lte(pendingBuys.scheduledBuyAt, now)
         )
@@ -81,13 +81,13 @@ export async function executePendingBuy(
         and(
           eq(pendingBuys.id, pendingId),
           eq(pendingBuys.buyTriggered, false),
-          eq(pendingBuys.cancelled, false)
+          eq(pendingBuys.status, "active")
         )
       )
       .returning();
     
     if (updateResult.length === 0) {
-      console.log("Pending buy already processed, cancelled, or locked:", pendingId);
+      console.log("Pending buy already processed, paused, cancelled, or locked:", pendingId);
       return false;
     }
 
@@ -100,7 +100,7 @@ export async function executePendingBuy(
     if (existingHolding.length > 0) {
       console.log(`Already have holding for ${buy.tokenSymbol}, skipping buy`);
       await db.update(pendingBuys).set({
-        cancelled: true,
+        status: "cancelled",
         triggerReason: "already_holding",
       }).where(eq(pendingBuys.id, pendingId));
       return false;
@@ -111,7 +111,7 @@ export async function executePendingBuy(
     
     if (balance < 0.01) {
       console.error("Hot wallet balance too low:", balance);
-      await cancelPendingBuy(pendingId, "insufficient_balance");
+      await pausePendingBuy(pendingId, "insufficient_funds");
       return false;
     }
 
@@ -150,6 +150,7 @@ export async function executePendingBuy(
 
     await db.update(pendingBuys).set({
       buyTriggered: true,
+      status: "completed",
       triggerReason: `completed:${triggerReason}`,
     }).where(eq(pendingBuys.id, pendingId));
 
@@ -168,12 +169,93 @@ export async function executePendingBuy(
   }
 }
 
+async function pausePendingBuy(pendingId: number, reason: string): Promise<void> {
+  await db.update(pendingBuys).set({
+    status: "paused",
+    pauseReason: reason,
+    triggerReason: null,
+  }).where(eq(pendingBuys.id, pendingId));
+  console.log(`Paused pending buy ${pendingId}: ${reason}`);
+}
+
 async function cancelPendingBuy(pendingId: number, reason: string): Promise<void> {
   await db.update(pendingBuys).set({
-    cancelled: true,
+    status: "cancelled",
     triggerReason: reason,
   }).where(eq(pendingBuys.id, pendingId));
   console.log(`Cancelled pending buy ${pendingId}: ${reason}`);
+}
+
+export async function resumePendingBuy(pendingId: number): Promise<boolean> {
+  const result = await db.update(pendingBuys).set({
+    status: "active",
+    pauseReason: null,
+  }).where(
+    and(
+      eq(pendingBuys.id, pendingId),
+      eq(pendingBuys.status, "paused")
+    )
+  ).returning();
+  if (result.length > 0) {
+    console.log(`Resumed pending buy ${pendingId}`);
+    return true;
+  }
+  return false;
+}
+
+export async function userCancelPendingBuy(pendingId: number, userId: number): Promise<boolean> {
+  // Only allow cancelling active or paused pending buys (not completed/already cancelled)
+  const result = await db.update(pendingBuys).set({
+    status: "cancelled",
+    triggerReason: "user_cancelled",
+  }).where(
+    and(
+      eq(pendingBuys.id, pendingId),
+      eq(pendingBuys.userId, userId),
+      or(eq(pendingBuys.status, "active"), eq(pendingBuys.status, "paused"))
+    )
+  ).returning();
+  if (result.length > 0) {
+    console.log(`User cancelled pending buy ${pendingId}`);
+    return true;
+  }
+  return false;
+}
+
+export async function userPausePendingBuy(pendingId: number, userId: number): Promise<boolean> {
+  const result = await db.update(pendingBuys).set({
+    status: "paused",
+    pauseReason: "user_paused",
+  }).where(
+    and(
+      eq(pendingBuys.id, pendingId),
+      eq(pendingBuys.userId, userId),
+      eq(pendingBuys.status, "active")
+    )
+  ).returning();
+  if (result.length > 0) {
+    console.log(`User paused pending buy ${pendingId}`);
+    return true;
+  }
+  return false;
+}
+
+export async function userResumePendingBuy(pendingId: number, userId: number): Promise<boolean> {
+  const result = await db.update(pendingBuys).set({
+    status: "active",
+    pauseReason: null,
+  }).where(
+    and(
+      eq(pendingBuys.id, pendingId),
+      eq(pendingBuys.userId, userId),
+      eq(pendingBuys.status, "paused")
+    )
+  ).returning();
+  if (result.length > 0) {
+    console.log(`User resumed pending buy ${pendingId}`);
+    return true;
+  }
+  return false;
 }
 
 async function sendBuyNotification(
@@ -263,7 +345,7 @@ export async function updateBuyCount(tokenMint: string): Promise<void> {
       and(
         eq(pendingBuys.tokenMint, tokenMint),
         eq(pendingBuys.buyTriggered, false),
-        eq(pendingBuys.cancelled, false)
+        eq(pendingBuys.status, "active")
       )
     );
 
@@ -271,13 +353,15 @@ export async function updateBuyCount(tokenMint: string): Promise<void> {
     if (!p.userId) continue;
     
     const newCount = (p.buyCount || 0) + 1;
+    const initialCount = p.initialBuyCount || 0;
     await db.update(pendingBuys)
       .set({ buyCount: newCount })
       .where(eq(pendingBuys.id, p.id));
 
     const config = await getTradeConfig(p.userId);
-    if (newCount >= config.highVolumeBuyCount) {
-      console.log(`High volume detected for ${p.tokenSymbol}: ${newCount} buys`);
+    const buysSinceQueued = newCount - initialCount;
+    if (buysSinceQueued >= config.highVolumeBuyCount) {
+      console.log(`High volume detected for ${p.tokenSymbol}: ${buysSinceQueued} buys since queued`);
       await triggerEarlyBuy(p.id, p.userId, "high_volume");
     }
   }
@@ -289,7 +373,7 @@ export async function checkPriceRiseTrigger(tokenMint: string, currentPrice: num
       and(
         eq(pendingBuys.tokenMint, tokenMint),
         eq(pendingBuys.buyTriggered, false),
-        eq(pendingBuys.cancelled, false)
+        eq(pendingBuys.status, "active")
       )
     );
 
@@ -298,9 +382,10 @@ export async function checkPriceRiseTrigger(tokenMint: string, currentPrice: num
 
     const priceRise = ((currentPrice - p.initialPrice) / p.initialPrice) * 100;
     
-    const config = await getTradeConfig(p.userId);
-    if (priceRise >= config.priceRiseTriggerPercent) {
-      console.log(`Price rise trigger for ${p.tokenSymbol}: ${priceRise.toFixed(1)}% rise`);
+    // Trigger early if price rises 10% from queue time (hard-coded per user request)
+    const PRICE_RISE_TRIGGER_PERCENT = 10;
+    if (priceRise >= PRICE_RISE_TRIGGER_PERCENT) {
+      console.log(`Price rise trigger for ${p.tokenSymbol}: ${priceRise.toFixed(1)}% rise (threshold: ${PRICE_RISE_TRIGGER_PERCENT}%)`);
       await triggerEarlyBuy(p.id, p.userId, "price_rise");
     }
   }

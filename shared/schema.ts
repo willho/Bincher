@@ -87,7 +87,7 @@ export const hotWallet = pgTable("hot_wallet", {
   createdAt: integer("created_at").notNull(),
 });
 
-// Holdings - tokens owned by the hot wallet from copy trades
+// Holdings - tokens owned by per-token disposable wallets from copy trades
 export const holdings = pgTable("holdings", {
   id: serial("id").primaryKey(),
   userId: integer("user_id"),
@@ -109,9 +109,12 @@ export const holdings = pgTable("holdings", {
   alertedMilestones: jsonb("alerted_milestones").$type<number[]>().default([]),
   reclaimedMilestones: jsonb("reclaimed_milestones").$type<number[]>().default([]),
   dumpAlertSent: boolean("dump_alert_sent").default(false),
+  tokenWalletPublicKey: text("token_wallet_public_key"),
+  tokenWalletEncryptedKey: text("token_wallet_encrypted_key"),
 });
 
 // Pending buys - tokens queued for purchase with delay
+// Status: active (waiting), paused (insufficient funds), cancelled (user cancelled), completed (buy executed)
 export const pendingBuys = pgTable("pending_buys", {
   id: serial("id").primaryKey(),
   userId: integer("user_id"),
@@ -124,7 +127,9 @@ export const pendingBuys = pgTable("pending_buys", {
   buyTriggered: boolean("buy_triggered").default(false),
   triggerReason: text("trigger_reason"),
   buyCount: integer("buy_count").default(0),
-  cancelled: boolean("cancelled").default(false),
+  initialBuyCount: integer("initial_buy_count").default(0),
+  status: text("status").default("active"),
+  pauseReason: text("pause_reason"),
 });
 
 // Trade config - settings for copy trading
@@ -234,6 +239,7 @@ export const holdingSchema = z.object({
   alertedMilestones: z.array(z.number()).default([]),
   reclaimedMilestones: z.array(z.number()).default([]),
   dumpAlertSent: z.boolean().default(false),
+  tokenWalletPublicKey: z.string().optional(),
 });
 
 export type Holding = z.infer<typeof holdingSchema>;
@@ -249,7 +255,9 @@ export const pendingBuySchema = z.object({
   buyTriggered: z.boolean().default(false),
   triggerReason: z.string().optional(),
   buyCount: z.number().default(0),
-  cancelled: z.boolean().default(false),
+  initialBuyCount: z.number().default(0),
+  status: z.enum(["active", "paused", "cancelled", "completed"]).default("active"),
+  pauseReason: z.string().optional(),
 });
 
 export type PendingBuy = z.infer<typeof pendingBuySchema>;

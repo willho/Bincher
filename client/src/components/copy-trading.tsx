@@ -15,11 +15,14 @@ import {
   Copy,
   DollarSign,
   ExternalLink, 
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   Trash2,
   TrendingUp,
   Wallet,
+  XCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { TradeConfig, Holding, PendingBuy } from "@shared/schema";
@@ -133,6 +136,42 @@ export function CopyTrading() {
     },
     onError: (error: any) => {
       toast({ description: error.message || "Sell failed", variant: "destructive" });
+    },
+  });
+
+  const pausePendingBuy = useMutation({
+    mutationFn: (pendingId: number) => 
+      apiRequest("POST", `/api/copy-trade/pending/${pendingId}/pause`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/pending"] });
+      toast({ description: "Pending buy paused" });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to pause", variant: "destructive" });
+    },
+  });
+
+  const resumePendingBuy = useMutation({
+    mutationFn: (pendingId: number) => 
+      apiRequest("POST", `/api/copy-trade/pending/${pendingId}/resume`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/pending"] });
+      toast({ description: "Pending buy resumed" });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to resume", variant: "destructive" });
+    },
+  });
+
+  const cancelPendingBuy = useMutation({
+    mutationFn: (pendingId: number) => 
+      apiRequest("POST", `/api/copy-trade/pending/${pendingId}/cancel`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/pending"] });
+      toast({ description: "Pending buy cancelled" });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to cancel", variant: "destructive" });
     },
   });
 
@@ -505,30 +544,86 @@ export function CopyTrading() {
                 </div>
               ) : pendingBuys && pendingBuys.length > 0 ? (
                 <div className="space-y-2">
-                  {pendingBuys.map((pending) => (
-                    <div
-                      key={pending.id}
-                      className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
-                      data-testid={`pending-buy-${pending.id}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-full bg-amber-500/10">
-                          <Clock className="h-4 w-4 text-amber-500" />
+                  {pendingBuys.map((pending) => {
+                    const isPaused = pending.status === "paused";
+                    const isActive = pending.status === "active";
+                    
+                    return (
+                      <div
+                        key={pending.id}
+                        className={`flex items-center justify-between p-3 rounded-lg border ${isPaused ? "bg-amber-500/5 border-amber-500/20" : "bg-muted/30"}`}
+                        data-testid={`pending-buy-${pending.id}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`p-2 rounded-full ${isPaused ? "bg-amber-500/20" : "bg-amber-500/10"}`}>
+                            {isPaused ? (
+                              <Pause className="h-4 w-4 text-amber-500" />
+                            ) : (
+                              <Clock className="h-4 w-4 text-amber-500" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-medium">{pending.tokenSymbol}</p>
+                              {isPaused && (
+                                <Badge variant="outline" className="text-amber-500 border-amber-500/30 text-xs">
+                                  Paused
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              Initial: {formatPrice(pending.initialPrice)}
+                              {isPaused && pending.pauseReason && (
+                                <span className="text-amber-500 ml-2">
+                                  ({pending.pauseReason === "insufficient_funds" ? "Low balance" : pending.pauseReason})
+                                </span>
+                              )}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-medium">{pending.tokenSymbol}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Initial: {formatPrice(pending.initialPrice)}
-                          </p>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline">
+                            {formatTime(pending.scheduledBuyAt)}
+                          </Badge>
+                          <div className="flex items-center gap-1">
+                            {isActive ? (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => pausePendingBuy.mutate(pending.id)}
+                                disabled={pausePendingBuy.isPending}
+                                title="Pause"
+                                data-testid={`button-pause-pending-${pending.id}`}
+                              >
+                                <Pause className="h-4 w-4" />
+                              </Button>
+                            ) : isPaused ? (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => resumePendingBuy.mutate(pending.id)}
+                                disabled={resumePendingBuy.isPending}
+                                title="Resume"
+                                data-testid={`button-resume-pending-${pending.id}`}
+                              >
+                                <Play className="h-4 w-4 text-green-500" />
+                              </Button>
+                            ) : null}
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => cancelPendingBuy.mutate(pending.id)}
+                              disabled={cancelPendingBuy.isPending}
+                              title="Cancel"
+                              data-testid={`button-cancel-pending-${pending.id}`}
+                            >
+                              <XCircle className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <Badge variant="outline">
-                          {formatTime(pending.scheduledBuyAt)}
-                        </Badge>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">

@@ -628,6 +628,63 @@ export async function registerRoutes(
     }
   });
 
+  // Pause a pending buy
+  app.post("/api/copy-trade/pending/:pendingId/pause", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const pendingId = parseInt(req.params.pendingId);
+      if (isNaN(pendingId)) {
+        return res.status(400).json({ error: "Invalid pending buy ID" });
+      }
+      const { userPausePendingBuy } = await import("./trade-processor");
+      const success = await userPausePendingBuy(pendingId, req.userId!);
+      if (!success) {
+        return res.status(400).json({ error: "Could not pause pending buy (may already be paused, cancelled, or completed)" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error pausing pending buy:", error);
+      res.status(500).json({ error: "Failed to pause pending buy" });
+    }
+  });
+
+  // Resume a paused pending buy
+  app.post("/api/copy-trade/pending/:pendingId/resume", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const pendingId = parseInt(req.params.pendingId);
+      if (isNaN(pendingId)) {
+        return res.status(400).json({ error: "Invalid pending buy ID" });
+      }
+      const { userResumePendingBuy } = await import("./trade-processor");
+      const success = await userResumePendingBuy(pendingId, req.userId!);
+      if (!success) {
+        return res.status(400).json({ error: "Could not resume pending buy (may not be paused)" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error resuming pending buy:", error);
+      res.status(500).json({ error: "Failed to resume pending buy" });
+    }
+  });
+
+  // Cancel a pending buy
+  app.post("/api/copy-trade/pending/:pendingId/cancel", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const pendingId = parseInt(req.params.pendingId);
+      if (isNaN(pendingId)) {
+        return res.status(400).json({ error: "Invalid pending buy ID" });
+      }
+      const { userCancelPendingBuy } = await import("./trade-processor");
+      const success = await userCancelPendingBuy(pendingId, req.userId!);
+      if (!success) {
+        return res.status(400).json({ error: "Could not cancel pending buy (may already be cancelled, completed, or not found)" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error cancelling pending buy:", error);
+      res.status(500).json({ error: "Failed to cancel pending buy" });
+    }
+  });
+
   // Withdraw SOL from hot wallet
   const withdrawSchema = z.object({
     destination: z.string().min(32).max(44),

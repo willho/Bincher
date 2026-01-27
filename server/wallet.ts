@@ -2,7 +2,7 @@ import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transa
 import { db } from "./db";
 import { hotWallet, tradeConfig, holdings, pendingBuys } from "@shared/schema";
 import type { HotWallet, TradeConfig, Holding, PendingBuy } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import * as crypto from "crypto";
 
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
@@ -217,8 +217,12 @@ export async function getHoldings(userId: number): Promise<Holding[]> {
 }
 
 export async function getPendingBuys(userId: number): Promise<PendingBuy[]> {
+  // Return active and paused pending buys for the user
   const rows = await db.select().from(pendingBuys).where(
-    and(eq(pendingBuys.userId, userId), eq(pendingBuys.cancelled, false))
+    and(
+      eq(pendingBuys.userId, userId), 
+      or(eq(pendingBuys.status, "active"), eq(pendingBuys.status, "paused"))
+    )
   );
   return rows.map(row => ({
     id: row.id,
@@ -232,7 +236,9 @@ export async function getPendingBuys(userId: number): Promise<PendingBuy[]> {
     buyTriggered: row.buyTriggered ?? false,
     triggerReason: row.triggerReason ?? undefined,
     buyCount: row.buyCount ?? 0,
-    cancelled: row.cancelled ?? false,
+    initialBuyCount: row.initialBuyCount ?? 0,
+    status: (row.status ?? "active") as "active" | "paused" | "cancelled" | "completed",
+    pauseReason: row.pauseReason ?? undefined,
   }));
 }
 
@@ -242,8 +248,13 @@ export async function hasTokenBeenBought(userId: number, tokenMint: string): Pro
   ).limit(1);
   if (existingHolding.length > 0) return true;
   
+  // Check for active or paused pending buys (not cancelled/completed)
   const existingPending = await db.select().from(pendingBuys).where(
-    and(eq(pendingBuys.userId, userId), eq(pendingBuys.tokenMint, tokenMint))
+    and(
+      eq(pendingBuys.userId, userId), 
+      eq(pendingBuys.tokenMint, tokenMint),
+      or(eq(pendingBuys.status, "active"), eq(pendingBuys.status, "paused"))
+    )
   ).limit(1);
   if (existingPending.length > 0) return true;
   
@@ -279,7 +290,8 @@ export async function addPendingBuy(
     initialPrice,
     buyTriggered: false,
     buyCount: 0,
-    cancelled: false,
+    initialBuyCount: 0,
+    status: "active",
   }).returning();
   
   console.log(`Added pending buy for ${tokenSymbol} for user ${userId}, scheduled for ${new Date(scheduledBuyAt * 1000).toISOString()}`);
@@ -296,7 +308,9 @@ export async function addPendingBuy(
     buyTriggered: result[0].buyTriggered ?? false,
     triggerReason: result[0].triggerReason ?? undefined,
     buyCount: result[0].buyCount ?? 0,
-    cancelled: result[0].cancelled ?? false,
+    initialBuyCount: result[0].initialBuyCount ?? 0,
+    status: result[0].status ?? "active",
+    pauseReason: result[0].pauseReason ?? undefined,
   };
 }
 
@@ -364,7 +378,10 @@ export async function withdrawSol(
 }
 
 export async function getAllPendingBuys(): Promise<(PendingBuy & { userId: number })[]> {
-  const rows = await db.select().from(pendingBuys).where(eq(pendingBuys.cancelled, false));
+  // Return active and paused pending buys (not cancelled/completed)
+  const rows = await db.select().from(pendingBuys).where(
+    or(eq(pendingBuys.status, "active"), eq(pendingBuys.status, "paused"))
+  );
   return rows.filter(row => row.userId !== null).map(row => ({
     id: row.id,
     userId: row.userId!,
@@ -377,7 +394,9 @@ export async function getAllPendingBuys(): Promise<(PendingBuy & { userId: numbe
     buyTriggered: row.buyTriggered ?? false,
     triggerReason: row.triggerReason ?? undefined,
     buyCount: row.buyCount ?? 0,
-    cancelled: row.cancelled ?? false,
+    initialBuyCount: row.initialBuyCount ?? 0,
+    status: (row.status ?? "active") as "active" | "paused" | "cancelled" | "completed",
+    pauseReason: row.pauseReason ?? undefined,
   }));
 }
 

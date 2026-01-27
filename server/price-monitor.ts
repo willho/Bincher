@@ -52,7 +52,7 @@ export async function checkPricesAndReclaim(): Promise<void> {
       .where(
         and(
           eq(pendingBuys.buyTriggered, false),
-          eq(pendingBuys.cancelled, false)
+          eq(pendingBuys.status, "active")
         )
       );
     

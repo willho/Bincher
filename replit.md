@@ -102,6 +102,9 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `PATCH /api/copy-trade/config` - Update trade configuration
 - `GET /api/copy-trade/holdings` - Get token holdings
 - `GET /api/copy-trade/pending` - Get pending buy queue
+- `POST /api/copy-trade/pending/:pendingId/pause` - Pause a pending buy
+- `POST /api/copy-trade/pending/:pendingId/resume` - Resume a paused pending buy
+- `POST /api/copy-trade/pending/:pendingId/cancel` - Cancel a pending buy
 
 ### Admin (requires isAdmin)
 - `GET /api/admin/users` - Get all users
@@ -122,16 +125,19 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **Hot Wallet**: Server-side Solana keypair with AES-256-GCM encrypted storage
 - **Automatic Buys**: Queues token purchases when monitored wallet buys SOL → Token
 - **Random Delay**: 20-40 minute random delay before executing buy (configurable)
-- **Early Triggers**: Buy immediately if 10+ buys detected OR 15% price rise
+- **Early Triggers**: Buy immediately if 10+ buys detected OR 10% price rise from queue time
 - **Buy Size**: Uses 10% of hot wallet SOL balance per trade (configurable)
 - **Auto-Reclaim at 4x**: Automatically sells 2x initial investment when tokens hit 4x multiplier
 - **Progressive Take-Profit**: Sells 10% of remaining holdings at 10x, 100x, 1000x+ milestones
 - **Milestone Tracking**: Each reclaim milestone tracked per token (4x, 10x, 100x, etc.)
 - **Milestone Alerts**: Email notifications at 2x, 4x, 10x multipliers (configurable)
-- **Duplicate Prevention**: Never buys the same token twice
+- **Duplicate Prevention**: Never buys the same token twice (checks holdings + active/paused pending buys)
 - **Rate Limiting**: Jupiter/DexScreener API calls rate-limited to stay within free tier
 - **SOL Withdrawal**: Withdraw SOL from hot wallet to any external Solana address
 - **Manual Sell**: Sell holdings manually at 25%, 50%, or 100%
+- **Pending Buy States**: active (waiting), paused (insufficient funds), cancelled, completed
+- **Auto-Pause**: Pending buys are automatically paused when hot wallet balance is too low
+- **Manual Control**: Users can pause, resume, or cancel pending buys via UI
 
 ## Security
 - User passwords hashed with PBKDF2 (10,000 iterations, random salt per user)
