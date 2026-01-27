@@ -1,4 +1,4 @@
-import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { db } from "./db";
 import { hotWallet, tradeConfig, holdings, pendingBuys } from "@shared/schema";
 import type { HotWallet, TradeConfig, Holding, PendingBuy } from "@shared/schema";
@@ -204,6 +204,7 @@ export async function getHoldings(): Promise<Holding[]> {
     lastPrice: row.lastPrice ?? undefined,
     highestMultiplier: row.highestMultiplier ?? 1,
     alertedMilestones: (row.alertedMilestones as number[]) ?? [],
+    reclaimedMilestones: (row.reclaimedMilestones as number[]) ?? [],
   }));
 }
 
@@ -281,4 +282,66 @@ export async function addPendingBuy(
     buyCount: result[0].buyCount ?? 0,
     cancelled: result[0].cancelled ?? false,
   };
+}
+
+export interface WithdrawResult {
+  success: boolean;
+  signature?: string;
+  amount?: number;
+  error?: string;
+}
+
+export async function withdrawSol(
+  destinationAddress: string,
+  amountSol: number
+): Promise<WithdrawResult> {
+  try {
+    const keypair = await getHotWalletKeypair();
+    if (!keypair) {
+      return { success: false, error: "Hot wallet not found or decryption failed" };
+    }
+
+    const balance = await getHotWalletBalance();
+    const reserveForFees = 0.005;
+    
+    if (amountSol > balance - reserveForFees) {
+      return { 
+        success: false, 
+        error: `Insufficient balance. Available: ${(balance - reserveForFees).toFixed(4)} SOL (keeping ${reserveForFees} SOL for fees)` 
+      };
+    }
+
+    let destinationPubkey: PublicKey;
+    try {
+      destinationPubkey = new PublicKey(destinationAddress);
+    } catch {
+      return { success: false, error: "Invalid destination address" };
+    }
+
+    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: keypair.publicKey,
+        toPubkey: destinationPubkey,
+        lamports,
+      })
+    );
+
+    console.log(`Withdrawing ${amountSol} SOL to ${destinationAddress}`);
+    
+    const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
+    
+    console.log(`Withdrawal successful: ${signature}`);
+    
+    return {
+      success: true,
+      signature,
+      amount: amountSol,
+    };
+  } catch (error) {
+    console.error("Withdrawal failed:", error);
+    return { success: false, error: String(error) };
+  }
 }

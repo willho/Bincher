@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { 
+  ArrowUpRight,
   Bot,
   Clock,
   Copy,
@@ -16,6 +17,7 @@ import {
   ExternalLink, 
   Plus,
   RefreshCw,
+  Trash2,
   TrendingUp,
   Wallet,
 } from "lucide-react";
@@ -31,6 +33,9 @@ interface HotWalletInfo {
 
 export function CopyTrading() {
   const { toast } = useToast();
+  const [withdrawAddress, setWithdrawAddress] = useState("");
+  const [withdrawAmount, setWithdrawAmount] = useState("");
+  const [showWithdraw, setShowWithdraw] = useState(false);
 
   const copyToClipboard = async (text: string, label: string = "Address") => {
     try {
@@ -81,6 +86,34 @@ export function CopyTrading() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/config"] });
       toast({ description: "Settings saved" });
+    },
+  });
+
+  const withdrawSol = useMutation({
+    mutationFn: (data: { destination: string; amount: number }) => 
+      apiRequest("POST", "/api/copy-trade/withdraw", data),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/wallet"] });
+      setWithdrawAddress("");
+      setWithdrawAmount("");
+      setShowWithdraw(false);
+      toast({ description: `Withdrew ${data.amount} SOL successfully` });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Withdrawal failed", variant: "destructive" });
+    },
+  });
+
+  const sellHolding = useMutation({
+    mutationFn: ({ holdingId, percentage }: { holdingId: number; percentage?: number }) => 
+      apiRequest("POST", `/api/copy-trade/sell/${holdingId}`, { percentage }),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/holdings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/wallet"] });
+      toast({ description: `Sold tokens for ${data.solReceived?.toFixed(4) || "?"} SOL` });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Sell failed", variant: "destructive" });
     },
   });
 
@@ -193,6 +226,78 @@ export function CopyTrading() {
                 <p className="text-sm text-amber-700 dark:text-amber-300">
                   Deposit SOL to this wallet to enable copy trading. The bot will use 10% of your balance for each trade.
                 </p>
+              </div>
+
+              <div className="border rounded-lg overflow-hidden">
+                <button
+                  className="w-full p-4 flex items-center justify-between hover-elevate"
+                  onClick={() => setShowWithdraw(!showWithdraw)}
+                  data-testid="button-toggle-withdraw"
+                >
+                  <div className="flex items-center gap-2">
+                    <ArrowUpRight className="h-4 w-4" />
+                    <span className="font-medium">Withdraw SOL</span>
+                  </div>
+                  <span className="text-sm text-muted-foreground">
+                    {showWithdraw ? "Hide" : "Show"}
+                  </span>
+                </button>
+                
+                {showWithdraw && (
+                  <div className="p-4 border-t space-y-4 bg-muted/30">
+                    <div className="space-y-2">
+                      <Label htmlFor="withdraw-address">Destination Address</Label>
+                      <Input
+                        id="withdraw-address"
+                        placeholder="Solana wallet address"
+                        value={withdrawAddress}
+                        onChange={(e) => setWithdrawAddress(e.target.value)}
+                        data-testid="input-withdraw-address"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="withdraw-amount">Amount (SOL)</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="withdraw-amount"
+                          type="number"
+                          step="0.001"
+                          min="0"
+                          placeholder="0.0"
+                          value={withdrawAmount}
+                          onChange={(e) => setWithdrawAmount(e.target.value)}
+                          data-testid="input-withdraw-amount"
+                        />
+                        <Button
+                          variant="outline"
+                          onClick={() => setWithdrawAmount(((hotWallet?.balance || 0) - 0.005).toFixed(4))}
+                          data-testid="button-withdraw-max"
+                        >
+                          Max
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Available: {((hotWallet?.balance || 0) - 0.005).toFixed(4)} SOL (0.005 reserved for fees)
+                      </p>
+                    </div>
+                    <Button
+                      className="w-full"
+                      onClick={() => withdrawSol.mutate({ 
+                        destination: withdrawAddress, 
+                        amount: parseFloat(withdrawAmount) 
+                      })}
+                      disabled={withdrawSol.isPending || !withdrawAddress || !withdrawAmount}
+                      data-testid="button-withdraw-sol"
+                    >
+                      {withdrawSol.isPending ? (
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <ArrowUpRight className="h-4 w-4 mr-2" />
+                      )}
+                      Withdraw
+                    </Button>
+                  </div>
+                )}
               </div>
 
               {configLoading ? (
@@ -368,38 +473,91 @@ export function CopyTrading() {
                       : 1;
                     const isProfit = multiplier > 1;
                     
+                    const reclaimedMilestones = holding.reclaimedMilestones || [];
+                    
                     return (
                       <div
                         key={holding.id}
-                        className="flex items-center justify-between p-4 rounded-lg border bg-muted/30"
+                        className="p-4 rounded-lg border bg-muted/30 space-y-3"
                         data-testid={`holding-${holding.id}`}
                       >
-                        <div className="flex items-center gap-3">
-                          <div className={`p-2 rounded-full ${isProfit ? "bg-green-500/10" : "bg-red-500/10"}`}>
-                            <DollarSign className={`h-4 w-4 ${isProfit ? "text-green-500" : "text-red-500"}`} />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium">{holding.tokenSymbol}</p>
-                              {holding.reclaimed && (
-                                <Badge variant="secondary" className="text-xs">
-                                  Reclaimed
-                                </Badge>
-                              )}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <div className={`p-2 rounded-full ${isProfit ? "bg-green-500/10" : "bg-red-500/10"}`}>
+                              <DollarSign className={`h-4 w-4 ${isProfit ? "text-green-500" : "text-red-500"}`} />
                             </div>
+                            <div>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <p className="font-medium">{holding.tokenSymbol}</p>
+                                {reclaimedMilestones.length > 0 && reclaimedMilestones.map((m) => (
+                                  <Badge key={m} variant={m === 4 ? "secondary" : "outline"} className="text-xs">
+                                    {m}x
+                                  </Badge>
+                                ))}
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Bought: {holding.solSpent.toFixed(4)} SOL @ {formatPrice(holding.buyPrice)}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className={`font-semibold ${isProfit ? "text-green-500" : "text-red-500"}`}>
+                              {multiplier.toFixed(2)}x
+                            </p>
                             <p className="text-xs text-muted-foreground">
-                              Bought: {holding.solSpent.toFixed(4)} SOL @ {formatPrice(holding.buyPrice)}
+                              {formatPrice(holding.lastPrice)}
                             </p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <p className={`font-semibold ${isProfit ? "text-green-500" : "text-red-500"}`}>
-                            {multiplier.toFixed(2)}x
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            {formatPrice(holding.lastPrice)}
-                          </p>
-                        </div>
+                        
+                        {holding.currentAmount > 0 && (
+                          <div className="flex items-center gap-2 pt-2 border-t">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => sellHolding.mutate({ holdingId: holding.id, percentage: 25 })}
+                              disabled={sellHolding.isPending}
+                              data-testid={`button-sell-25-${holding.id}`}
+                            >
+                              Sell 25%
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => sellHolding.mutate({ holdingId: holding.id, percentage: 50 })}
+                              disabled={sellHolding.isPending}
+                              data-testid={`button-sell-50-${holding.id}`}
+                            >
+                              Sell 50%
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => sellHolding.mutate({ holdingId: holding.id, percentage: 100 })}
+                              disabled={sellHolding.isPending}
+                              data-testid={`button-sell-all-${holding.id}`}
+                            >
+                              {sellHolding.isPending ? (
+                                <RefreshCw className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <>
+                                  <Trash2 className="h-3 w-3 mr-1" />
+                                  Sell All
+                                </>
+                              )}
+                            </Button>
+                            <a
+                              href={`https://dexscreener.com/solana/${holding.tokenMint}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="ml-auto"
+                            >
+                              <Button size="icon" variant="ghost">
+                                <ExternalLink className="h-4 w-4" />
+                              </Button>
+                            </a>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

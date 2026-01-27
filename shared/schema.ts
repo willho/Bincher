@@ -83,6 +83,7 @@ export const holdings = pgTable("holdings", {
   lastPrice: real("last_price"),
   highestMultiplier: real("highest_multiplier").default(1),
   alertedMilestones: jsonb("alerted_milestones").$type<number[]>().default([]),
+  reclaimedMilestones: jsonb("reclaimed_milestones").$type<number[]>().default([]),
 });
 
 // Pending buys - tokens queued for purchase with delay
@@ -192,6 +193,7 @@ export const holdingSchema = z.object({
   lastPrice: z.number().optional(),
   highestMultiplier: z.number().default(1),
   alertedMilestones: z.array(z.number()).default([]),
+  reclaimedMilestones: z.array(z.number()).default([]),
 });
 
 export type Holding = z.infer<typeof holdingSchema>;

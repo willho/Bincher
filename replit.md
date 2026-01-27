@@ -89,11 +89,14 @@ A real-time monitoring application that tracks swap transactions for a specific 
 - **Random Delay**: 20-40 minute random delay before executing buy (configurable)
 - **Early Triggers**: Buy immediately if 10+ buys detected OR 15% price rise
 - **Buy Size**: Uses 10% of hot wallet SOL balance per trade (configurable)
-- **Auto-Reclaim**: Automatically sells 2x initial investment when tokens hit 4x multiplier
-- **One-Time Reclaim**: Each token only reclaimed once, remaining tokens are pure profit
+- **Auto-Reclaim at 4x**: Automatically sells 2x initial investment when tokens hit 4x multiplier
+- **Progressive Take-Profit**: Sells 10% of remaining holdings at 10x, 100x, 1000x+ milestones
+- **Milestone Tracking**: Each reclaim milestone tracked per token (4x, 10x, 100x, etc.)
 - **Milestone Alerts**: Email notifications at 2x, 4x, 10x multipliers (configurable)
 - **Duplicate Prevention**: Never buys the same token twice
 - **Rate Limiting**: Jupiter/DexScreener API calls rate-limited to stay within free tier
+- **SOL Withdrawal**: Withdraw SOL from hot wallet to any external Solana address
+- **Manual Sell**: Sell holdings manually at 25%, 50%, or 100%
 
 ## Security
 - Hot wallet private key encrypted with AES-256-GCM (authenticated encryption)

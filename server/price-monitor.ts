@@ -113,9 +113,20 @@ async function checkHoldingPrice(
       }
     }
 
+    const reclaimedMilestones = (holding.reclaimedMilestones as number[]) || [];
+    
     if (!holding.reclaimed && multiplier >= config.reclaimMultiplier) {
       console.log(`Reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${config.reclaimMultiplier}x`);
-      await executeReclaim(holding, currentPrice, config.reclaimMultiplier);
+      await executeReclaim(holding, currentPrice, config.reclaimMultiplier, "initial");
+    }
+    
+    const progressiveMilestones = [10, 100, 1000, 10000, 100000];
+    for (const milestone of progressiveMilestones) {
+      if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
+        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x`);
+        await executeProgressiveReclaim(holding, currentPrice, milestone);
+        break;
+      }
     }
     
   } catch (error) {
@@ -126,7 +137,8 @@ async function checkHoldingPrice(
 async function executeReclaim(
   holding: typeof holdings.$inferSelect,
   currentPrice: number,
-  reclaimMultiplier: number
+  reclaimMultiplier: number,
+  type: "initial" | "progressive"
 ): Promise<void> {
   try {
     const tokensToSell = (holding.solSpent * 2 / currentPrice);
@@ -136,7 +148,7 @@ async function executeReclaim(
       return;
     }
 
-    console.log(`Executing reclaim for ${holding.tokenSymbol}: selling ${tokensToSell.toLocaleString()} tokens`);
+    console.log(`Executing initial reclaim for ${holding.tokenSymbol}: selling ${tokensToSell.toLocaleString()} tokens`);
 
     const result = await sellToken(holding.tokenMint, tokensToSell);
     
@@ -148,11 +160,15 @@ async function executeReclaim(
     const now = Math.floor(Date.now() / 1000);
     const newAmount = holding.currentAmount - tokensToSell;
 
+    const existingReclaimedMilestones = (holding.reclaimedMilestones as number[]) || [];
+    const newReclaimedMilestones = [...existingReclaimedMilestones, 4];
+    
     await db.update(holdings).set({
       reclaimed: true,
       reclaimTimestamp: now,
       reclaimSignature: result.signature,
       currentAmount: newAmount,
+      reclaimedMilestones: newReclaimedMilestones,
     }).where(eq(holdings.id, holding.id));
 
     console.log(`Reclaim successful for ${holding.tokenSymbol}:`);
@@ -161,10 +177,58 @@ async function executeReclaim(
     console.log(`  SOL received: ~${result.inputAmount} SOL`);
     console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
 
-    await sendReclaimNotification(holding, tokensToSell, result.inputAmount || 0, reclaimMultiplier, result.signature);
+    await sendReclaimNotification(holding, tokensToSell, result.inputAmount || 0, reclaimMultiplier, result.signature, "initial");
 
   } catch (error) {
     console.error(`Error executing reclaim for ${holding.tokenSymbol}:`, error);
+  }
+}
+
+async function executeProgressiveReclaim(
+  holding: typeof holdings.$inferSelect,
+  currentPrice: number,
+  milestone: number
+): Promise<void> {
+  try {
+    const tokensToSell = holding.currentAmount * 0.1;
+    
+    if (tokensToSell <= 0) {
+      console.log(`No tokens to reclaim for ${holding.tokenSymbol}`);
+      return;
+    }
+
+    console.log(`Executing progressive reclaim for ${holding.tokenSymbol} at ${milestone}x: selling ${tokensToSell.toLocaleString()} tokens (10%)`);
+
+    const result = await sellToken(holding.tokenMint, tokensToSell);
+    
+    if (!result.success) {
+      console.error(`Progressive reclaim failed for ${holding.tokenSymbol}:`, result.error);
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const newAmount = holding.currentAmount - tokensToSell;
+    const reclaimedMilestones = (holding.reclaimedMilestones as number[]) || [];
+    const newReclaimedMilestones = [...reclaimedMilestones, milestone];
+
+    await db.update(holdings).set({
+      reclaimTimestamp: now,
+      reclaimSignature: result.signature,
+      currentAmount: newAmount,
+      reclaimedMilestones: newReclaimedMilestones,
+    }).where(eq(holdings.id, holding.id));
+
+    console.log(`Progressive reclaim successful for ${holding.tokenSymbol}:`);
+    console.log(`  Milestone: ${milestone}x`);
+    console.log(`  Signature: ${result.signature}`);
+    console.log(`  Tokens sold: ${tokensToSell.toLocaleString()} (10%)`);
+    console.log(`  SOL received: ~${result.inputAmount} SOL`);
+    console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
+
+    await sendReclaimNotification(holding, tokensToSell, result.inputAmount || 0, milestone, result.signature, "progressive");
+
+  } catch (error) {
+    console.error(`Error executing progressive reclaim for ${holding.tokenSymbol}:`, error);
   }
 }
 
@@ -245,18 +309,26 @@ async function sendReclaimNotification(
   tokensSold: number,
   solReceived: number,
   multiplier: number,
-  signature: string | undefined
+  signature: string | undefined,
+  type: "initial" | "progressive"
 ): Promise<void> {
   const settings = await storage.getNotificationSettings();
   if (!settings?.enabled || !settings.emails?.length) {
     return;
   }
 
-  const subject = `Reclaimed 2x initial from ${holding.tokenSymbol}`;
+  const isInitial = type === "initial";
+  const subject = isInitial 
+    ? `Reclaimed 2x initial from ${holding.tokenSymbol}`
+    : `${holding.tokenSymbol}: Sold 10% at ${multiplier}x`;
+  
+  const description = isInitial
+    ? "The remaining tokens are now pure profit. Initial investment reclaimed."
+    : `Progressive take-profit: Sold 10% of holdings at ${multiplier}x milestone.`;
   
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #fff; padding: 20px; border-radius: 12px;">
-      <h2 style="color: #00ff88; margin-bottom: 20px;">Investment Reclaimed: ${holding.tokenSymbol}</h2>
+      <h2 style="color: #00ff88; margin-bottom: 20px;">${isInitial ? 'Investment Reclaimed' : 'Progressive Take-Profit'}: ${holding.tokenSymbol}</h2>
       
       <div style="background: #16213e; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
         <table style="width: 100%; color: #e0e0e0;">
@@ -266,7 +338,7 @@ async function sendReclaimNotification(
           </tr>
           <tr>
             <td style="padding: 4px 0;">Tokens Sold:</td>
-            <td style="text-align: right; color: #fff;">${formatNumber(tokensSold).replace('$', '')}</td>
+            <td style="text-align: right; color: #fff;">${formatNumber(tokensSold).replace('$', '')}${!isInitial ? ' (10%)' : ''}</td>
           </tr>
           <tr>
             <td style="padding: 4px 0;">SOL Received:</td>
@@ -276,15 +348,11 @@ async function sendReclaimNotification(
             <td style="padding: 4px 0;">Initial Investment:</td>
             <td style="text-align: right; color: #fff;">${holding.solSpent.toFixed(4)} SOL</td>
           </tr>
-          <tr>
-            <td style="padding: 4px 0;">Profit:</td>
-            <td style="text-align: right; color: #00ff88;">${(solReceived - holding.solSpent).toFixed(4)} SOL</td>
-          </tr>
         </table>
       </div>
       
       <p style="color: #f59e0b; font-size: 14px;">
-        The remaining tokens are now pure profit. This token will not be auto-sold again.
+        ${description}
       </p>
       
       ${signature ? `

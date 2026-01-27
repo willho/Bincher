@@ -17,8 +17,13 @@ import {
   getHoldings, 
   getPendingBuys,
   addPendingBuy,
-  hasTokenBeenBought
+  hasTokenBeenBought,
+  withdrawSol
 } from "./wallet";
+import { sellToken } from "./jupiter";
+import { db } from "./db";
+import { holdings } from "@shared/schema";
+import { eq } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 
@@ -366,6 +371,98 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting pending buys:", error);
       res.status(500).json({ error: "Failed to get pending buys" });
+    }
+  });
+
+  // Withdraw SOL from hot wallet
+  const withdrawSchema = z.object({
+    destination: z.string().min(32).max(44),
+    amount: z.number().positive().finite(),
+  });
+  
+  app.post("/api/copy-trade/withdraw", async (req, res) => {
+    try {
+      const parsed = withdrawSchema.safeParse(req.body);
+      
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Valid destination address and amount are required" });
+      }
+      
+      const { destination, amount } = parsed.data;
+      
+      const result = await withdrawSol(destination, amount);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ 
+        success: true, 
+        signature: result.signature,
+        amount: result.amount 
+      });
+    } catch (error) {
+      console.error("Error withdrawing SOL:", error);
+      res.status(500).json({ error: "Failed to withdraw SOL" });
+    }
+  });
+
+  // Manually sell a token holding
+  const sellSchema = z.object({
+    percentage: z.number().min(1).max(100).optional().default(100),
+  });
+  
+  app.post("/api/copy-trade/sell/:holdingId", async (req, res) => {
+    try {
+      const holdingId = parseInt(req.params.holdingId);
+      if (isNaN(holdingId)) {
+        return res.status(400).json({ error: "Invalid holding ID" });
+      }
+      
+      const parsed = sellSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Percentage must be between 1 and 100" });
+      }
+      
+      const sellPercentage = parsed.data.percentage;
+      
+      const holdingRows = await db.select().from(holdings).where(eq(holdings.id, holdingId));
+      
+      if (holdingRows.length === 0) {
+        return res.status(404).json({ error: "Holding not found" });
+      }
+      
+      const holding = holdingRows[0];
+      const tokensToSell = holding.currentAmount * (sellPercentage / 100);
+      
+      if (tokensToSell <= 0) {
+        return res.status(400).json({ error: "No tokens to sell" });
+      }
+      
+      console.log(`Manual sell: ${tokensToSell.toLocaleString()} tokens of ${holding.tokenSymbol} (${sellPercentage}%)`);
+      
+      const result = await sellToken(holding.tokenMint, tokensToSell);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      const newAmount = holding.currentAmount - tokensToSell;
+      
+      await db.update(holdings).set({
+        currentAmount: newAmount,
+      }).where(eq(holdings.id, holdingId));
+      
+      res.json({ 
+        success: true, 
+        signature: result.signature,
+        tokensSold: tokensToSell,
+        remainingTokens: newAmount,
+        solReceived: result.inputAmount
+      });
+    } catch (error) {
+      console.error("Error selling token:", error);
+      res.status(500).json({ error: "Failed to sell token" });
     }
   });
 
