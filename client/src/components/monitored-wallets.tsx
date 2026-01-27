@@ -7,7 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X, Share2, Users, Clock, CheckCircle, XCircle, Brain } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface MonitoredWallet {
@@ -17,6 +19,10 @@ interface MonitoredWallet {
   label: string | null;
   enabled: boolean | null;
   createdAt: number;
+  isShared: boolean | null;
+  shareStatus: string | null;
+  aiScore: number | null;
+  aiScoreDetails: string | null;
 }
 
 export function MonitoredWallets() {
@@ -68,6 +74,60 @@ export function MonitoredWallets() {
   const syncWebhook = useMutation({
     mutationFn: () => apiRequest("POST", "/api/monitored-wallets/sync"),
   });
+
+  const shareWallet = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/monitored-wallets/${id}/share`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/monitored-wallets"] });
+      toast({ description: "Wallet submitted for community sharing approval" });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to submit wallet", variant: "destructive" });
+    },
+  });
+
+  const unshareWallet = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/monitored-wallets/${id}/unshare`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/monitored-wallets"] });
+      toast({ description: "Wallet sharing cancelled" });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to cancel sharing", variant: "destructive" });
+    },
+  });
+
+  const getShareStatusBadge = (wallet: MonitoredWallet) => {
+    if (!wallet.isShared || wallet.shareStatus === "none") return null;
+    switch (wallet.shareStatus) {
+      case "pending":
+        return (
+          <Badge variant="outline" className="text-yellow-500 border-yellow-500/50 gap-1">
+            <Clock className="h-3 w-3" /> Pending
+          </Badge>
+        );
+      case "approved":
+        return (
+          <Badge variant="outline" className="text-green-500 border-green-500/50 gap-1">
+            <CheckCircle className="h-3 w-3" /> Shared
+          </Badge>
+        );
+      case "rejected":
+        return (
+          <Badge variant="outline" className="text-red-500 border-red-500/50 gap-1">
+            <XCircle className="h-3 w-3" /> Rejected
+          </Badge>
+        );
+      default:
+        return null;
+    }
+  };
+
+  const getScoreColor = (score: number) => {
+    if (score >= 70) return "text-green-500";
+    if (score >= 40) return "text-yellow-500";
+    return "text-red-500";
+  };
 
   const copyToClipboard = async (text: string) => {
     try {
@@ -169,84 +229,127 @@ export function MonitoredWallets() {
               <div
                 key={wallet.id}
                 data-testid={`wallet-item-${wallet.id}`}
-                className="flex items-center gap-2 p-3 bg-muted/50 rounded-lg"
+                className="flex flex-col gap-2 p-3 bg-muted/50 rounded-lg"
               >
-                <div className="flex-1 min-w-0">
-                  {editingId === wallet.id ? (
-                    <div className="flex items-center gap-2">
-                      <Input
-                        value={editLabel}
-                        onChange={(e) => setEditLabel(e.target.value)}
-                        placeholder="Enter label"
-                        className="h-8"
-                        data-testid={`input-edit-label-${wallet.id}`}
-                      />
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => saveEdit(wallet.id)}
-                        data-testid={`button-save-label-${wallet.id}`}
-                      >
-                        <Check className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => setEditingId(null)}
-                        data-testid={`button-cancel-edit-${wallet.id}`}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0">
+                    {editingId === wallet.id ? (
                       <div className="flex items-center gap-2">
-                        <span className="font-medium truncate">
-                          {wallet.label || "Unnamed Wallet"}
-                        </span>
+                        <Input
+                          value={editLabel}
+                          onChange={(e) => setEditLabel(e.target.value)}
+                          placeholder="Enter label"
+                          className="h-8"
+                          data-testid={`input-edit-label-${wallet.id}`}
+                        />
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-6 w-6"
-                          onClick={() => startEditing(wallet)}
-                          data-testid={`button-edit-wallet-${wallet.id}`}
+                          onClick={() => saveEdit(wallet.id)}
+                          data-testid={`button-save-label-${wallet.id}`}
                         >
-                          <Edit2 className="h-3 w-3" />
+                          <Check className="h-4 w-4" />
                         </Button>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-xs text-muted-foreground font-mono truncate">
-                          {wallet.walletAddress.slice(0, 8)}...{wallet.walletAddress.slice(-6)}
-                        </span>
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-6 w-6"
-                          onClick={() => copyToClipboard(wallet.walletAddress)}
-                          data-testid={`button-copy-address-${wallet.id}`}
+                          onClick={() => setEditingId(null)}
+                          data-testid={`button-cancel-edit-${wallet.id}`}
                         >
-                          <Copy className="h-3 w-3" />
+                          <X className="h-4 w-4" />
                         </Button>
                       </div>
-                    </>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium truncate">
+                            {wallet.label || "Unnamed Wallet"}
+                          </span>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6"
+                            onClick={() => startEditing(wallet)}
+                            data-testid={`button-edit-wallet-${wallet.id}`}
+                          >
+                            <Edit2 className="h-3 w-3" />
+                          </Button>
+                          {wallet.aiScore !== null && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge variant="outline" className={`gap-1 ${getScoreColor(wallet.aiScore)}`}>
+                                  <Brain className="h-3 w-3" />
+                                  {wallet.aiScore}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>AI Trading Score based on historical performance</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                          {getShareStatusBadge(wallet)}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-muted-foreground font-mono truncate">
+                            {wallet.walletAddress.slice(0, 8)}...{wallet.walletAddress.slice(-6)}
+                          </span>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6"
+                            onClick={() => copyToClipboard(wallet.walletAddress)}
+                            data-testid={`button-copy-address-${wallet.id}`}
+                          >
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <Switch
+                    checked={wallet.enabled ?? true}
+                    onCheckedChange={(enabled) =>
+                      updateWallet.mutate({ id: wallet.id, enabled })
+                    }
+                    data-testid={`switch-wallet-enabled-${wallet.id}`}
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => deleteWallet.mutate(wallet.id)}
+                    disabled={deleteWallet.isPending}
+                    data-testid={`button-delete-wallet-${wallet.id}`}
+                  >
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2 pt-1 border-t border-muted">
+                  {!wallet.isShared || wallet.shareStatus === "none" ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1 text-xs"
+                      onClick={() => shareWallet.mutate(wallet.id)}
+                      disabled={shareWallet.isPending}
+                      data-testid={`button-share-wallet-${wallet.id}`}
+                    >
+                      <Share2 className="h-3 w-3" />
+                      Share with Community
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1 text-xs text-muted-foreground"
+                      onClick={() => unshareWallet.mutate(wallet.id)}
+                      disabled={unshareWallet.isPending}
+                      data-testid={`button-unshare-wallet-${wallet.id}`}
+                    >
+                      <X className="h-3 w-3" />
+                      Cancel Sharing
+                    </Button>
                   )}
                 </div>
-                <Switch
-                  checked={wallet.enabled ?? true}
-                  onCheckedChange={(enabled) =>
-                    updateWallet.mutate({ id: wallet.id, enabled })
-                  }
-                  data-testid={`switch-wallet-enabled-${wallet.id}`}
-                />
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  onClick={() => deleteWallet.mutate(wallet.id)}
-                  disabled={deleteWallet.isPending}
-                  data-testid={`button-delete-wallet-${wallet.id}`}
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
               </div>
             ))}
           </div>
