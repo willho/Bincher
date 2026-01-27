@@ -278,6 +278,92 @@ export interface ChatMessage {
   content: string;
 }
 
+const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "refresh_token_score",
+      description: "Refresh the AI score for a specific token by its symbol or name. Use when the user asks to refresh, rescore, or re-analyze a specific token.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenIdentifier: {
+            type: "string",
+            description: "The token symbol (e.g., 'PEPE', 'BONK') or partial name to search for"
+          }
+        },
+        required: ["tokenIdentifier"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "refresh_all_scores",
+      description: "Refresh AI scores for all tokens or multiple tokens. Use when the user asks to refresh all scores, rescore everything, or update all token analyses.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: {
+            type: "number",
+            description: "Maximum number of tokens to refresh (default 10, max 50)"
+          }
+        },
+        required: []
+      }
+    }
+  }
+];
+
+async function executeScoreRefresh(tokenIdentifier: string): Promise<{ success: boolean; message: string; score?: number }> {
+  const snapshots = await getAllSnapshots();
+  const searchLower = tokenIdentifier.toLowerCase();
+  
+  const match = snapshots.find(s => 
+    s.tokenSymbol.toLowerCase() === searchLower ||
+    s.tokenSymbol.toLowerCase().includes(searchLower) ||
+    (s.tokenName && s.tokenName.toLowerCase().includes(searchLower))
+  );
+  
+  if (!match) {
+    return { success: false, message: `No token found matching "${tokenIdentifier}"` };
+  }
+  
+  const result = await scoreToken(match.id);
+  if (!result) {
+    return { success: false, message: `Failed to refresh score for ${match.tokenSymbol}` };
+  }
+  
+  return { 
+    success: true, 
+    message: `Refreshed score for ${match.tokenSymbol}: ${result.score}/100`,
+    score: result.score
+  };
+}
+
+async function executeBatchScoreRefresh(limit: number = 10): Promise<{ success: boolean; message: string; refreshed: number }> {
+  const maxLimit = Math.min(limit, 50);
+  const snapshots = await getAllSnapshots();
+  const toRefresh = snapshots.slice(0, maxLimit);
+  
+  let refreshed = 0;
+  const results: string[] = [];
+  
+  for (const snapshot of toRefresh) {
+    const result = await scoreToken(snapshot.id);
+    if (result) {
+      refreshed++;
+      results.push(`${snapshot.tokenSymbol}: ${result.score}`);
+    }
+  }
+  
+  return {
+    success: true,
+    message: `Refreshed ${refreshed}/${toRefresh.length} token scores. Results: ${results.join(', ')}`,
+    refreshed
+  };
+}
+
 export async function chatWithAI(
   userId: number,
   userMessage: string
@@ -307,13 +393,21 @@ export async function chatWithAI(
 - Trading performance insights
 - Market trends and signals
 
+You can also TAKE ACTIONS when requested:
+- Refresh/rescore a specific token using refresh_token_score
+- Refresh all token scores using refresh_all_scores
+
+When the user asks to refresh, rescore, re-analyze, or update scores, USE THE APPROPRIATE FUNCTION.
+
 CURRENT DATABASE STATS:
 - Total tokens analyzed: ${snapshots.length}
 - Tokens with outcomes: ${snapshotsWithOutcomes.length}
 
 RECENT TOKEN SNAPSHOTS (last 10):
 ${JSON.stringify(snapshots.slice(0, 10).map(s => ({
+  id: s.id,
   symbol: s.tokenSymbol,
+  name: s.tokenName,
   score: s.aiScore,
   liquidity: s.liquidity,
   marketCap: s.marketCap,
@@ -333,7 +427,7 @@ ${JSON.stringify(snapshotsWithOutcomes.slice(0, 10).map(s => ({
 })), null, 2)}
 ` : ''}
 
-Be helpful, concise, and data-driven. If asked about patterns, analyze the available data.`;
+Be helpful, concise, and data-driven. When refreshing scores, call the appropriate function and report the results.`;
 
   const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
     { role: "system", content: systemPrompt },
@@ -347,11 +441,61 @@ Be helpful, concise, and data-driven. If asked about patterns, analyze the avail
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages,
+      tools: chatTools,
+      tool_choice: "auto",
       max_completion_tokens: 1000,
       temperature: 0.7,
     });
 
-    const assistantMessage = response.choices[0]?.message?.content || "I couldn't generate a response.";
+    const message = response.choices[0]?.message;
+    
+    // Handle function calls
+    if (message?.tool_calls && message.tool_calls.length > 0) {
+      const toolResults: string[] = [];
+      
+      for (const toolCall of message.tool_calls) {
+        const args = JSON.parse(toolCall.function.arguments);
+        
+        if (toolCall.function.name === "refresh_token_score") {
+          const result = await executeScoreRefresh(args.tokenIdentifier);
+          toolResults.push(result.message);
+        } else if (toolCall.function.name === "refresh_all_scores") {
+          const result = await executeBatchScoreRefresh(args.limit || 10);
+          toolResults.push(result.message);
+        }
+      }
+      
+      // Get a natural response after executing tools
+      const followUpMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        ...messages,
+        message as OpenAI.Chat.ChatCompletionMessageParam,
+        ...message.tool_calls.map((tc, i) => ({
+          role: "tool" as const,
+          tool_call_id: tc.id,
+          content: toolResults[i] || "Done"
+        }))
+      ];
+      
+      const followUp = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: followUpMessages,
+        max_completion_tokens: 500,
+        temperature: 0.7,
+      });
+      
+      const assistantMessage = followUp.choices[0]?.message?.content || toolResults.join("\n");
+      
+      await db.insert(aiChatMessages).values({
+        userId,
+        role: "assistant",
+        content: assistantMessage,
+        createdAt: Math.floor(Date.now() / 1000),
+      });
+      
+      return assistantMessage;
+    }
+
+    const assistantMessage = message?.content || "I couldn't generate a response.";
 
     await db.insert(aiChatMessages).values({
       userId,
