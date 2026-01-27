@@ -1,5 +1,5 @@
 import { type Swap, type InsertSwap, type NotificationSettings, type MonitoringStatus, type MonitoredWallet, type InsertMonitoredWallet } from "@shared/schema";
-import { swaps, settings, monitoringState, monitoredWallets } from "@shared/schema";
+import { swaps, settings, monitoringState, monitoredWallets, users, hotWallet, holdings, pendingBuys, tradeConfig } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and } from "drizzle-orm";
 
@@ -260,6 +260,74 @@ export class DatabaseStorage implements IStorage {
 
   async getAllEnabledMonitoredWallets(): Promise<MonitoredWallet[]> {
     return await db.select().from(monitoredWallets).where(eq(monitoredWallets.enabled, true));
+  }
+
+  // Admin functions
+  async getAllUsers(): Promise<Array<{ id: number; username: string; isAdmin: boolean; createdAt: number; lastLoginAt: number | null }>> {
+    const rows = await db.select({
+      id: users.id,
+      username: users.username,
+      isAdmin: users.isAdmin,
+      createdAt: users.createdAt,
+      lastLoginAt: users.lastLoginAt,
+    }).from(users);
+    return rows.map(r => ({
+      id: r.id,
+      username: r.username,
+      isAdmin: r.isAdmin ?? false,
+      createdAt: r.createdAt,
+      lastLoginAt: r.lastLoginAt,
+    }));
+  }
+
+  async deleteUser(userId: number): Promise<boolean> {
+    // Delete all user data
+    await db.delete(monitoredWallets).where(eq(monitoredWallets.userId, userId));
+    await db.delete(swaps).where(eq(swaps.userId, userId));
+    await db.delete(settings).where(eq(settings.userId, userId));
+    await db.delete(hotWallet).where(eq(hotWallet.userId, userId));
+    await db.delete(holdings).where(eq(holdings.userId, userId));
+    await db.delete(pendingBuys).where(eq(pendingBuys.userId, userId));
+    await db.delete(tradeConfig).where(eq(tradeConfig.userId, userId));
+    await db.delete(users).where(eq(users.id, userId));
+    return true;
+  }
+
+  async getAllWalletsAdmin(): Promise<Array<{ id: number; userId: number; username: string; walletAddress: string; label: string | null; enabled: boolean }>> {
+    const rows = await db.select({
+      id: monitoredWallets.id,
+      userId: monitoredWallets.userId,
+      walletAddress: monitoredWallets.walletAddress,
+      label: monitoredWallets.label,
+      enabled: monitoredWallets.enabled,
+    }).from(monitoredWallets);
+    
+    // Get usernames for each wallet
+    const userRows = await db.select({ id: users.id, username: users.username }).from(users);
+    const userMap = new Map(userRows.map(u => [u.id, u.username]));
+    
+    return rows.map(r => ({
+      id: r.id,
+      userId: r.userId,
+      username: userMap.get(r.userId) ?? "Unknown",
+      walletAddress: r.walletAddress,
+      label: r.label,
+      enabled: r.enabled ?? true,
+    }));
+  }
+
+  async getAdminStats(): Promise<{ totalUsers: number; totalSwaps: number; totalWallets: number; activeWallets: number }> {
+    const userRows = await db.select().from(users);
+    const swapRows = await db.select().from(swaps);
+    const walletRows = await db.select().from(monitoredWallets);
+    const activeWalletRows = await db.select().from(monitoredWallets).where(eq(monitoredWallets.enabled, true));
+    
+    return {
+      totalUsers: userRows.length,
+      totalSwaps: swapRows.length,
+      totalWallets: walletRows.length,
+      activeWallets: activeWalletRows.length,
+    };
   }
 }
 

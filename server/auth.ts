@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { users } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import crypto from "crypto";
 
 const SESSION_DURATION_SHORT = 24 * 60 * 60 * 1000; // 1 day
@@ -9,6 +9,7 @@ const SESSION_DURATION_LONG = 30 * 24 * 60 * 60 * 1000; // 30 days
 interface Session {
   userId: number;
   username: string;
+  isAdmin: boolean;
   expiresAt: number;
 }
 
@@ -32,7 +33,10 @@ function generateSessionToken(): string {
 
 export async function createUser(username: string, password: string): Promise<{ success: boolean; error?: string; userId?: number }> {
   try {
-    const existing = await db.select().from(users).where(eq(users.username, username)).limit(1);
+    // Check username uniqueness case-insensitively
+    const existing = await db.select().from(users)
+      .where(sql`LOWER(${users.username}) = LOWER(${username})`)
+      .limit(1);
     if (existing.length > 0) {
       return { success: false, error: "Username already exists" };
     }
@@ -53,8 +57,9 @@ export async function createUser(username: string, password: string): Promise<{ 
   }
 }
 
-export async function authenticateUser(username: string, password: string): Promise<{ success: boolean; userId?: number; error?: string }> {
+export async function authenticateUser(username: string, password: string): Promise<{ success: boolean; userId?: number; isAdmin?: boolean; error?: string }> {
   try {
+    // Login is case-sensitive
     const userRows = await db.select().from(users).where(eq(users.username, username)).limit(1);
     if (userRows.length === 0) {
       return { success: false, error: "Invalid username or password" };
@@ -67,18 +72,18 @@ export async function authenticateUser(username: string, password: string): Prom
 
     await db.update(users).set({ lastLoginAt: Math.floor(Date.now() / 1000) }).where(eq(users.id, user.id));
 
-    return { success: true, userId: user.id };
+    return { success: true, userId: user.id, isAdmin: user.isAdmin ?? false };
   } catch (error) {
     console.error("Error authenticating user:", error);
     return { success: false, error: "Authentication failed" };
   }
 }
 
-export function createSession(userId: number, username: string, rememberMe: boolean): string {
+export function createSession(userId: number, username: string, isAdmin: boolean, rememberMe: boolean): string {
   const token = generateSessionToken();
   const expiresAt = Date.now() + (rememberMe ? SESSION_DURATION_LONG : SESSION_DURATION_SHORT);
   
-  sessions.set(token, { userId, username, expiresAt });
+  sessions.set(token, { userId, username, isAdmin, expiresAt });
   
   return token;
 }

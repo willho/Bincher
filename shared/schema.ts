@@ -23,6 +23,7 @@ export const users = pgTable("users", {
   id: serial("id").primaryKey(),
   username: text("username").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  isAdmin: boolean("is_admin").default(false),
   createdAt: integer("created_at").notNull(),
   lastLoginAt: integer("last_login_at"),
 });

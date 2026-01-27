@@ -94,6 +94,7 @@ export async function registerRoutes(
   interface AuthenticatedRequest extends Request {
     userId?: number;
     username?: string;
+    isAdmin?: boolean;
   }
 
   // Auth middleware - extracts user from session cookie
@@ -104,6 +105,7 @@ export async function registerRoutes(
       if (session) {
         req.userId = session.userId;
         req.username = session.username;
+        req.isAdmin = session.isAdmin;
       }
     }
     next();
@@ -113,6 +115,17 @@ export async function registerRoutes(
   const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.userId) {
       return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  };
+
+  // Require admin middleware - blocks non-admin requests
+  const requireAdmin = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    if (!req.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
     }
     next();
   };
@@ -132,7 +145,7 @@ export async function registerRoutes(
 
   app.get("/api/auth/session", (req: AuthenticatedRequest, res) => {
     if (req.userId && req.username) {
-      res.json({ authenticated: true, username: req.username, userId: req.userId });
+      res.json({ authenticated: true, username: req.username, userId: req.userId, isAdmin: req.isAdmin ?? false });
     } else {
       res.json({ authenticated: false });
     }
@@ -175,7 +188,7 @@ export async function registerRoutes(
         return res.status(401).json({ error: result.error || "Invalid credentials" });
       }
 
-      const token = createSession(result.userId, username, rememberMe === true);
+      const token = createSession(result.userId, username, result.isAdmin ?? false, rememberMe === true);
       
       const maxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
       res.cookie("session", token, {
@@ -787,6 +800,62 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error in manual buy:", error);
       res.status(500).json({ error: "Failed to execute manual buy" });
+    }
+  });
+
+  // ==================== Admin Routes ====================
+
+  // Get all users (admin only)
+  app.get("/api/admin/users", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const users = await storage.getAllUsers();
+      res.json(users);
+    } catch (error) {
+      console.error("Error getting users:", error);
+      res.status(500).json({ error: "Failed to get users" });
+    }
+  });
+
+  // Delete a user (admin only)
+  app.delete("/api/admin/users/:userId", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = parseInt(req.params.userId);
+      if (isNaN(userId)) {
+        return res.status(400).json({ error: "Invalid user ID" });
+      }
+      
+      // Prevent admin from deleting themselves
+      if (userId === req.userId) {
+        return res.status(400).json({ error: "Cannot delete your own account" });
+      }
+      
+      await storage.deleteUser(userId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting user:", error);
+      res.status(500).json({ error: "Failed to delete user" });
+    }
+  });
+
+  // Get all monitored wallets across all users (admin only)
+  app.get("/api/admin/wallets", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const wallets = await storage.getAllWalletsAdmin();
+      res.json(wallets);
+    } catch (error) {
+      console.error("Error getting all wallets:", error);
+      res.status(500).json({ error: "Failed to get wallets" });
+    }
+  });
+
+  // Get system statistics (admin only)
+  app.get("/api/admin/stats", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const stats = await storage.getAdminStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting stats:", error);
+      res.status(500).json({ error: "Failed to get stats" });
     }
   });
 
