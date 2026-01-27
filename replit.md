@@ -44,6 +44,8 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `token_snapshots` - SHARED across all users, captures comprehensive token data for AI analysis
 - `ai_chat_messages` - Per-user AI chat conversation history
 - `password_reset_tokens` - Temporary tokens for password recovery (expires in 15 minutes)
+- `user_event_preferences` - Per-user AI event preferences (minValueThreshold, mutedTokens, focusWallets, summaryFocus)
+- `trade_events` - Shared events table for price milestones, big movers, LP changes
 
 ### Key Components
 - `/server/db.ts` - Database connection using Drizzle ORM
@@ -57,6 +59,7 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `/server/price-monitor.ts` - Price monitoring and auto-reclaim logic
 - `/server/routes.ts` - API endpoints, webhook handler, and startup restoration
 - `/server/ai.ts` - AI scoring service with token analysis, chat interface, and insights
+- `/server/heat-score.ts` - Dynamic token heat scoring based on activity, volatility, attention
 - `/client/src/pages/dashboard.tsx` - Main dashboard UI
 - `/client/src/pages/login.tsx` - Login and registration page
 - `/client/src/components/copy-trading.tsx` - Copy trading UI component
@@ -170,9 +173,17 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **Auto-Pause**: Pending buys are automatically paused when hot wallet balance is too low
 - **Manual Control**: Users can pause, resume, or cancel pending buys via UI
 
-### AI Token Analysis
+### AI Token Analysis (Miss Pincher)
+- **Miss Pincher Persona**: Jaded, suspicious AI trader who gives opinions (not advice) with hedging language ("if it were me...", "could go either way")
 - **Token Snapshots**: Comprehensive data captured at queue time (market cap, liquidity, volume, buy/sell pressure, LP info, holder distribution, social presence)
+- **Top 100 Holders**: Stores holder addresses and percentages based on actual token supply
 - **Shared Learning**: Token snapshots are shared across all users for collective AI learning
+- **Dynamic Heat Scoring**: Tokens scored 0-100 based on:
+  - Recent buys (30% weight)
+  - Price volatility (25% weight)
+  - User attention (25% weight)
+  - Recency (20% weight)
+  - Heat tiers: hot (60+), warm (30-59), cold (<30)
 - **AI Scoring**: GPT-4o-mini analyzes tokens and assigns 0-100 quality score
 - **Score at Queue Time**: Score calculated once when token is queued, with manual refresh option
 - **Optional Score Threshold**: Can set minimum AI score for automated buys in trade config
@@ -181,8 +192,12 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **AI Function Calling**: Chat can trigger actions via natural language:
   - "Refresh score for PEPE" - Rescores a specific token
   - "Refresh all token scores" - Batch refresh up to 50 tokens
+  - Update user preferences (muted tokens, focus wallets, alert thresholds)
+- **User Event Preferences**: Customizable preferences (minValueThreshold, mutedTokens, focusWallets, summaryFocus) that inject into Pincher's context
+- **Events Feed**: Two-panel UI with filterable events list (left) and Pincher chat (right)
 - **Outcome Tracking**: Links trade outcomes (final multiplier, hold time) to snapshots for learning
 - **Cost Efficient**: Uses gpt-4o-mini via Replit AI Integrations (<$1/month typical usage)
+- **Batched Price Checks**: DexScreener calls batched up to 30 tokens per request for efficiency
 
 ## Security
 - User passwords hashed with PBKDF2 (10,000 iterations, random salt per user)
@@ -202,7 +217,7 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - WebSocket at `/ws` for real-time frontend updates
 - Webhook URL automatically adapts between dev and production environments
 - Trade processor runs every 30 seconds to check pending buys
-- Price monitor runs every 60 seconds to check holdings prices
+- Price monitor runs every 30 seconds to check holdings prices
 
 ## Running
 ```bash

@@ -13,7 +13,7 @@ import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
 import { checkPriceRiseTrigger } from "./trade-processor";
 
-const PRICE_CHECK_INTERVAL_MS = 60000;
+const PRICE_CHECK_INTERVAL_MS = 30000;
 const MIN_CHECK_INTERVAL_PER_TOKEN_MS = 30000;
 
 let isPriceMonitorRunning = false;
