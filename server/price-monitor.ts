@@ -12,9 +12,12 @@ import { sellToken, sellTokenWithWallet, getTokenPrice, getBatchTokenPrices, est
 import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
 import { checkPriceRiseTrigger } from "./trade-processor";
+import { calculateTokenHeat, TokenHeatData } from "./heat-score";
 
 const PRICE_CHECK_INTERVAL_MS = 30000;
 const MIN_CHECK_INTERVAL_PER_TOKEN_MS = 30000;
+const HOT_POLLING_INTERVAL_MS = 5 * 60 * 1000;
+const WARM_POLLING_INTERVAL_MS = 15 * 60 * 1000;
 
 const SWING_THRESHOLD_PERCENT = 10;
 const SWING_5MIN_THRESHOLD_PERCENT = 5;
@@ -27,8 +30,37 @@ let isPriceMonitorRunning = false;
 let priceMonitorInterval: NodeJS.Timeout | null = null;
 
 const tokenCheckTimestamps: Map<string, number> = new Map();
+const tieredPollTimestamps: Map<string, number> = new Map();
 const swingEventCooldowns: Map<string, number> = new Map();
 const priceHistory: Map<string, Array<{ price: number; timestamp: number }>> = new Map();
+const tokenHeatCache: Map<string, { heat: TokenHeatData; cachedAt: number }> = new Map();
+const HEAT_CACHE_TTL_MS = 60 * 1000;
+
+function getPollingIntervalForTier(tier: "hot" | "warm" | "cold"): number {
+  switch (tier) {
+    case "hot": return HOT_POLLING_INTERVAL_MS;
+    case "warm": return WARM_POLLING_INTERVAL_MS;
+    case "cold": return Infinity;
+  }
+}
+
+async function getTokenHeatCached(tokenMint: string): Promise<TokenHeatData> {
+  const cached = tokenHeatCache.get(tokenMint);
+  if (cached && Date.now() - cached.cachedAt < HEAT_CACHE_TTL_MS) {
+    return cached.heat;
+  }
+  const heat = await calculateTokenHeat(tokenMint);
+  tokenHeatCache.set(tokenMint, { heat, cachedAt: Date.now() });
+  return heat;
+}
+
+function shouldPollToken(tokenMint: string, heatTier: "hot" | "warm" | "cold"): boolean {
+  if (heatTier === "cold") return false;
+  
+  const lastPoll = tieredPollTimestamps.get(tokenMint) || 0;
+  const interval = getPollingIntervalForTier(heatTier);
+  return Date.now() - lastPoll >= interval;
+}
 
 export async function checkPricesAndReclaim(): Promise<void> {
   if (isPriceMonitorRunning) {
@@ -51,12 +83,24 @@ export async function checkPricesAndReclaim(): Promise<void> {
     const now = Date.now();
     const tokenMintsToCheck = new Set<string>();
     
+    const allTokenMints = new Set<string>();
+    holdingsList.forEach(h => allTokenMints.add(h.tokenMint));
+    pendingBuysList.forEach(p => allTokenMints.add(p.tokenMint));
+    
+    const tokenHeatMap = new Map<string, TokenHeatData>();
+    for (const tokenMint of allTokenMints) {
+      const heat = await getTokenHeatCached(tokenMint);
+      tokenHeatMap.set(tokenMint, heat);
+    }
+    
     const holdingsToProcess: typeof holdingsList = [];
     for (const holding of holdingsList) {
       if (!holding.userId) continue;
       
-      const lastCheck = tokenCheckTimestamps.get(`${holding.userId}_${holding.tokenMint}`) || 0;
-      if (now - lastCheck < MIN_CHECK_INTERVAL_PER_TOKEN_MS) continue;
+      const heat = tokenHeatMap.get(holding.tokenMint);
+      if (!heat) continue;
+      
+      if (!shouldPollToken(holding.tokenMint, heat.heatTier)) continue;
       
       holdingsToProcess.push(holding);
       tokenMintsToCheck.add(holding.tokenMint);
@@ -65,9 +109,6 @@ export async function checkPricesAndReclaim(): Promise<void> {
     const pendingsToProcess: typeof pendingBuysList = [];
     for (const pending of pendingBuysList) {
       if (!pending.initialPrice || !pending.userId) continue;
-      
-      const lastCheck = tokenCheckTimestamps.get(`pending_${pending.userId}_${pending.tokenMint}`) || 0;
-      if (now - lastCheck < MIN_CHECK_INTERVAL_PER_TOKEN_MS) continue;
       
       pendingsToProcess.push(pending);
       tokenMintsToCheck.add(pending.tokenMint);
@@ -87,6 +128,7 @@ export async function checkPricesAndReclaim(): Promise<void> {
       if (!config.enabled) continue;
       
       tokenCheckTimestamps.set(`${holding.userId}_${holding.tokenMint}`, now);
+      tieredPollTimestamps.set(holding.tokenMint, now);
       await checkHoldingPriceWithBatch(holding, holding.userId!, config, priceData.price);
     }
     
