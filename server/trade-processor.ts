@@ -1,8 +1,17 @@
 import { db } from "./db";
 import { pendingBuys, holdings, tradeConfig } from "@shared/schema";
 import { eq, and, lte, or } from "drizzle-orm";
-import { getTradeConfig, getHotWalletBalance, getAllPendingBuys } from "./wallet";
-import { buyToken, getTokenPrice } from "./jupiter";
+import { 
+  getTradeConfig, 
+  getHotWalletBalance, 
+  getAllPendingBuys, 
+  getHotWalletKeypair,
+  generateTokenWallet,
+  getTokenWalletKeypair,
+  fundTokenWallet,
+  getOrCreateHotWallet
+} from "./wallet";
+import { buyTokenWithWallet, getTokenPrice, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
 
@@ -109,17 +118,58 @@ export async function executePendingBuy(
     const config = await getTradeConfig(userId);
     const balance = await getHotWalletBalance(userId);
     
-    if (balance < 0.01) {
-      console.error("Hot wallet balance too low:", balance);
+    // Estimate priority fee for funding calculation
+    const priorityFeeLamports = await estimatePriorityFee();
+    const priorityFeeSol = priorityFeeToSol(priorityFeeLamports);
+    
+    // Calculate required funds:
+    // - buyAmount: SOL to swap for tokens
+    // - 4x priority fee: for buy, sell, and profit transfer transactions
+    // - 0.002 SOL base fee buffer: covers base fees for ~40 signatures (0.00005 each)
+    const solAmount = balance * (config.buyPercentage / 100);
+    const gasReserve = (priorityFeeSol * 4) + 0.002; // 4x priority + base fee buffer
+    const totalRequired = solAmount + gasReserve;
+    
+    if (balance < totalRequired + 0.005) {
+      console.error(`Hot wallet balance too low: ${balance.toFixed(4)} SOL < ${totalRequired.toFixed(4)} SOL required`);
       await pausePendingBuy(pendingId, "insufficient_funds");
       return false;
     }
 
-    const solAmount = balance * (config.buyPercentage / 100);
+    // Generate a new disposable token wallet for this buy
+    console.log(`Generating token wallet for ${buy.tokenSymbol} buy...`);
+    const tokenWallet = generateTokenWallet();
+    console.log(`Created token wallet: ${tokenWallet.publicKey}`);
+    
+    // Get main wallet keypair to fund token wallet
+    const mainWalletKeypair = await getHotWalletKeypair(userId);
+    if (!mainWalletKeypair) {
+      console.error("Failed to get main wallet keypair");
+      await cancelPendingBuy(pendingId, "main_wallet_not_found");
+      return false;
+    }
+    
+    // Fund token wallet with buyAmount + gas reserve
+    console.log(`Funding token wallet with ${totalRequired.toFixed(4)} SOL...`);
+    const fundResult = await fundTokenWallet(mainWalletKeypair, tokenWallet.publicKey, totalRequired);
+    if (!fundResult.success) {
+      console.error("Failed to fund token wallet:", fundResult.error);
+      await cancelPendingBuy(pendingId, `funding_failed: ${fundResult.error}`);
+      return false;
+    }
+    console.log(`Token wallet funded: ${fundResult.signature}`);
+    
+    // Get token wallet keypair for the buy
+    const tokenWalletKeypair = getTokenWalletKeypair(tokenWallet.encryptedPrivateKey);
+    if (!tokenWalletKeypair) {
+      console.error("Failed to decrypt token wallet keypair");
+      await cancelPendingBuy(pendingId, "token_wallet_decrypt_failed");
+      return false;
+    }
     
     console.log(`Buying ${buy.tokenSymbol} with ${solAmount.toFixed(4)} SOL (${config.buyPercentage}% of ${balance.toFixed(4)} SOL)`);
 
-    const result = await buyToken(userId, buy.tokenMint, solAmount);
+    const result = await buyTokenWithWallet(tokenWalletKeypair, buy.tokenMint, solAmount);
 
     if (!result.success) {
       console.error("Buy failed:", result.error);
@@ -130,6 +180,7 @@ export async function executePendingBuy(
     const currentPrice = await getTokenPrice(buy.tokenMint);
     const now = Math.floor(Date.now() / 1000);
 
+    // Store holding with token wallet info for future sells
     await db.insert(holdings).values({
       userId: userId,
       tokenMint: buy.tokenMint,
@@ -146,6 +197,8 @@ export async function executePendingBuy(
       lastPrice: currentPrice,
       highestMultiplier: 1,
       alertedMilestones: [],
+      tokenWalletPublicKey: tokenWallet.publicKey,
+      tokenWalletEncryptedKey: tokenWallet.encryptedPrivateKey,
     });
 
     await db.update(pendingBuys).set({

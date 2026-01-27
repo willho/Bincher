@@ -123,6 +123,12 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 
 ### Copy Trading
 - **Hot Wallet**: Server-side Solana keypair with AES-256-GCM encrypted storage
+- **Per-Token Wallets**: Each buy gets a unique disposable wallet for maximum privacy
+  - Generates new keypair for each purchase
+  - Main wallet funds token wallet with buyAmount + (fee × 4)
+  - Token wallet encrypted key stored in holdings table
+  - On sells, keeps 4x gas reserve and sends profits to main wallet
+- **Dynamic Priority Fees**: Uses Helius RPC to estimate current network fees
 - **Automatic Buys**: Queues token purchases when monitored wallet buys SOL → Token
 - **Random Delay**: 20-40 minute random delay before executing buy (configurable)
 - **Early Triggers**: Buy immediately if 10+ buys detected OR 10% price rise from queue time

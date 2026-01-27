@@ -1,12 +1,12 @@
 import { Connection, PublicKey, Transaction, VersionedTransaction, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { getHotWalletKeypair, getHotWalletBalance } from "./wallet";
+import { getHotWalletKeypair, getHotWalletBalance, getTokenWalletBalance } from "./wallet";
 
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 const JUPITER_API = "https://quote-api.jup.ag/v6";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 const SLIPPAGE_BPS = 500;
-const PRIORITY_FEE_LAMPORTS = 100000;
+const DEFAULT_PRIORITY_FEE_LAMPORTS = 100000; // 0.0001 SOL
 
 const MIN_REQUEST_INTERVAL_MS = 500;
 const MAX_REQUESTS_PER_MINUTE = 30;
@@ -65,6 +65,37 @@ interface SwapResult {
   error?: string;
 }
 
+// Estimate priority fee using Helius RPC
+export async function estimatePriorityFee(): Promise<number> {
+  try {
+    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const recentFees = await connection.getRecentPrioritizationFees();
+    
+    if (recentFees.length === 0) {
+      return DEFAULT_PRIORITY_FEE_LAMPORTS;
+    }
+    
+    // Get median priority fee from recent transactions
+    const fees = recentFees.map(f => f.prioritizationFee).sort((a, b) => a - b);
+    const medianFee = fees[Math.floor(fees.length / 2)];
+    
+    // Add 20% buffer and clamp between min/max
+    const bufferedFee = Math.floor(medianFee * 1.2);
+    const minFee = 50000; // 0.00005 SOL
+    const maxFee = 500000; // 0.0005 SOL
+    
+    return Math.max(minFee, Math.min(maxFee, bufferedFee));
+  } catch (error) {
+    console.error("Failed to estimate priority fee:", error);
+    return DEFAULT_PRIORITY_FEE_LAMPORTS;
+  }
+}
+
+// Convert priority fee to SOL for funding calculations
+export function priorityFeeToSol(priorityFeeLamports: number): number {
+  return priorityFeeLamports / LAMPORTS_PER_SOL;
+}
+
 export async function getQuote(
   inputMint: string,
   outputMint: string,
@@ -93,15 +124,17 @@ export async function getQuote(
 
 export async function executeSwap(
   quote: JupiterQuote,
-  keypair: Keypair
+  keypair: Keypair,
+  priorityFeeLamports?: number
 ): Promise<SwapResult> {
   try {
+    const fee = priorityFeeLamports ?? await estimatePriorityFee();
     const swapBody = {
       quoteResponse: quote,
       userPublicKey: keypair.publicKey.toBase58(),
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: PRIORITY_FEE_LAMPORTS,
+      prioritizationFeeLamports: fee,
     };
 
     const swapResponse = await rateLimitedFetch(`${JUPITER_API}/swap`, {
@@ -263,4 +296,62 @@ export async function getTokenInfo(tokenMint: string): Promise<{ name: string; s
     console.error("Failed to get token info:", error);
     return null;
   }
+}
+
+// Buy token using a specific token wallet keypair (for per-token wallet system)
+export async function buyTokenWithWallet(
+  tokenWalletKeypair: Keypair,
+  tokenMint: string,
+  solAmount: number
+): Promise<SwapResult> {
+  const walletAddress = tokenWalletKeypair.publicKey.toBase58();
+  console.log(`Token wallet ${walletAddress}: Attempting to buy ${tokenMint} with ${solAmount} SOL`);
+
+  const balance = await getTokenWalletBalance(walletAddress);
+  if (balance < solAmount) {
+    return { 
+      success: false, 
+      error: `Insufficient token wallet balance: ${balance.toFixed(4)} SOL < ${solAmount.toFixed(4)} SOL` 
+    };
+  }
+
+  const amountInLamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
+  const quote = await getQuote(SOL_MINT, tokenMint, amountInLamports);
+  
+  if (!quote) {
+    return { success: false, error: "Failed to get quote from Jupiter" };
+  }
+
+  console.log(`Got quote: ${solAmount} SOL -> ${parseInt(quote.outAmount).toLocaleString()} tokens`);
+  console.log(`Price impact: ${quote.priceImpactPct}%`);
+
+  const priceImpact = parseFloat(quote.priceImpactPct);
+  if (priceImpact > 10) {
+    return { 
+      success: false, 
+      error: `Price impact too high: ${priceImpact.toFixed(2)}%` 
+    };
+  }
+
+  return executeSwap(quote, tokenWalletKeypair);
+}
+
+// Sell token using a specific token wallet keypair and return profits to main wallet
+export async function sellTokenWithWallet(
+  tokenWalletKeypair: Keypair,
+  tokenMint: string,
+  tokenAmount: number
+): Promise<SwapResult> {
+  const walletAddress = tokenWalletKeypair.publicKey.toBase58();
+  console.log(`Token wallet ${walletAddress}: Attempting to sell ${tokenAmount} tokens of ${tokenMint}`);
+
+  const quote = await getQuote(tokenMint, SOL_MINT, Math.floor(tokenAmount));
+  
+  if (!quote) {
+    return { success: false, error: "Failed to get quote from Jupiter" };
+  }
+
+  console.log(`Got quote: ${tokenAmount.toLocaleString()} tokens -> ${parseInt(quote.outAmount) / LAMPORTS_PER_SOL} SOL`);
+
+  return executeSwap(quote, tokenWalletKeypair);
 }

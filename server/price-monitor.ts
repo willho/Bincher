@@ -1,8 +1,14 @@
 import { db } from "./db";
 import { holdings, pendingBuys, tradeConfig } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
-import { getTradeConfig, getAllHoldings } from "./wallet";
-import { sellToken, getTokenPrice } from "./jupiter";
+import { 
+  getTradeConfig, 
+  getAllHoldings, 
+  getTokenWalletKeypair, 
+  getOrCreateHotWallet,
+  sendProfitsToMainWallet 
+} from "./wallet";
+import { sellToken, sellTokenWithWallet, getTokenPrice, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
 import { checkPriceRiseTrigger } from "./trade-processor";
@@ -183,7 +189,38 @@ async function executeReclaim(
 
     console.log(`Executing initial reclaim for ${holding.tokenSymbol}: selling ${tokensToSell.toLocaleString()} tokens`);
 
-    const result = await sellToken(userId, holding.tokenMint, tokensToSell);
+    let result;
+    
+    // Use token wallet if available, otherwise fall back to main wallet
+    if (holding.tokenWalletEncryptedKey) {
+      const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
+      if (!tokenWalletKeypair) {
+        console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
+        // Fallback to main wallet if token wallet decryption fails
+        result = await sellToken(userId, holding.tokenMint, tokensToSell);
+      } else {
+        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        
+        // Send profits back to main wallet (keep 4x gas reserve)
+        if (result.success) {
+          const mainWallet = await getOrCreateHotWallet(userId);
+          if (mainWallet) {
+            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+            const profitResult = await sendProfitsToMainWallet(
+              tokenWalletKeypair,
+              mainWallet.publicKey,
+              gasReserve
+            );
+            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL profits to main wallet`);
+            }
+          }
+        }
+      }
+    } else {
+      // Legacy: use main wallet
+      result = await sellToken(userId, holding.tokenMint, tokensToSell);
+    }
     
     if (!result.success) {
       console.error(`Reclaim failed for ${holding.tokenSymbol}:`, result.error);
@@ -243,7 +280,38 @@ async function executeProgressiveReclaim(
 
     console.log(`Executing progressive reclaim for ${holding.tokenSymbol} at ${milestone}x: selling ${tokensToSell.toLocaleString()} tokens (10%)`);
 
-    const result = await sellToken(userId, holding.tokenMint, tokensToSell);
+    let result;
+    
+    // Use token wallet if available, otherwise fall back to main wallet
+    if (holding.tokenWalletEncryptedKey) {
+      const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
+      if (!tokenWalletKeypair) {
+        console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
+        // Fallback to main wallet if token wallet decryption fails
+        result = await sellToken(userId, holding.tokenMint, tokensToSell);
+      } else {
+        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        
+        // Send profits back to main wallet (keep 4x gas reserve)
+        if (result.success) {
+          const mainWallet = await getOrCreateHotWallet(userId);
+          if (mainWallet) {
+            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+            const profitResult = await sendProfitsToMainWallet(
+              tokenWalletKeypair,
+              mainWallet.publicKey,
+              gasReserve
+            );
+            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL profits to main wallet`);
+            }
+          }
+        }
+      }
+    } else {
+      // Legacy: use main wallet
+      result = await sellToken(userId, holding.tokenMint, tokensToSell);
+    }
     
     if (!result.success) {
       console.error(`Progressive reclaim failed for ${holding.tokenSymbol}:`, result.error);

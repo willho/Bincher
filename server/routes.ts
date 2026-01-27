@@ -20,9 +20,11 @@ import {
   getPendingBuys,
   addPendingBuy,
   hasTokenBeenBought,
-  withdrawSol
+  withdrawSol,
+  getTokenWalletKeypair,
+  sendProfitsToMainWallet
 } from "./wallet";
-import { sellToken, buyToken, getTokenPrice, getTokenInfo } from "./jupiter";
+import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
 import { holdings } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
@@ -754,7 +756,38 @@ export async function registerRoutes(
       
       console.log(`Manual sell: ${tokensToSell.toLocaleString()} tokens of ${holding.tokenSymbol} (${sellPercentage}%)`);
       
-      const result = await sellToken(req.userId!, holding.tokenMint, tokensToSell);
+      let result;
+      
+      // Use token wallet if available, otherwise fall back to main wallet
+      if (holding.tokenWalletEncryptedKey) {
+        const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
+        if (!tokenWalletKeypair) {
+          console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
+          // Fallback to main wallet if token wallet decryption fails
+          result = await sellToken(req.userId!, holding.tokenMint, tokensToSell);
+        } else {
+          result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+          
+          // Send profits back to main wallet (keep 4x gas reserve)
+          if (result.success) {
+            const mainWallet = await getOrCreateHotWallet(req.userId!);
+            if (mainWallet) {
+              const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+              const profitResult = await sendProfitsToMainWallet(
+                tokenWalletKeypair,
+                mainWallet.publicKey,
+                gasReserve
+              );
+              if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+                console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL profits to main wallet`);
+              }
+            }
+          }
+        }
+      } else {
+        // Legacy: use main wallet
+        result = await sellToken(req.userId!, holding.tokenMint, tokensToSell);
+      }
       
       if (!result.success) {
         return res.status(400).json({ error: result.error });

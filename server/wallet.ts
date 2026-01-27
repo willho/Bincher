@@ -424,3 +424,112 @@ export async function getAllHoldings(): Promise<(Holding & { userId: number })[]
     reclaimedMilestones: (row.reclaimedMilestones as number[]) ?? [],
   }));
 }
+
+// Per-token wallet functions for privacy
+export interface TokenWallet {
+  publicKey: string;
+  encryptedPrivateKey: string;
+}
+
+export function generateTokenWallet(): TokenWallet {
+  const keypair = Keypair.generate();
+  const publicKeyStr = keypair.publicKey.toBase58();
+  const privateKeyStr = Buffer.from(keypair.secretKey).toString('hex');
+  const encryptedPrivateKey = encrypt(privateKeyStr);
+  
+  return {
+    publicKey: publicKeyStr,
+    encryptedPrivateKey,
+  };
+}
+
+export function getTokenWalletKeypair(encryptedPrivateKey: string): Keypair | null {
+  try {
+    const decrypted = decrypt(encryptedPrivateKey);
+    const secretKey = Uint8Array.from(Buffer.from(decrypted, 'hex'));
+    return Keypair.fromSecretKey(secretKey);
+  } catch (error) {
+    console.error("Failed to decrypt token wallet key:", error);
+    return null;
+  }
+}
+
+export async function fundTokenWallet(
+  fromKeypair: Keypair,
+  toAddress: string,
+  amountSol: number
+): Promise<{ success: boolean; signature?: string; error?: string }> {
+  try {
+    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const toPubkey = new PublicKey(toAddress);
+    const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
+
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: fromKeypair.publicKey,
+        toPubkey: toPubkey,
+        lamports,
+      })
+    );
+
+    const signature = await sendAndConfirmTransaction(connection, transaction, [fromKeypair]);
+    console.log(`Funded token wallet ${toAddress} with ${amountSol} SOL: ${signature}`);
+    
+    return { success: true, signature };
+  } catch (error) {
+    console.error("Failed to fund token wallet:", error);
+    return { success: false, error: String(error) };
+  }
+}
+
+export async function getTokenWalletBalance(publicKey: string): Promise<number> {
+  try {
+    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const pubkey = new PublicKey(publicKey);
+    const balance = await connection.getBalance(pubkey);
+    return balance / LAMPORTS_PER_SOL;
+  } catch (error) {
+    console.error("Failed to get token wallet balance:", error);
+    return 0;
+  }
+}
+
+export async function sendProfitsToMainWallet(
+  tokenWalletKeypair: Keypair,
+  mainWalletAddress: string,
+  gasReserveSol: number
+): Promise<{ success: boolean; signature?: string; amountSent?: number; error?: string }> {
+  try {
+    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const balance = await connection.getBalance(tokenWalletKeypair.publicKey);
+    const balanceSol = balance / LAMPORTS_PER_SOL;
+    
+    // Keep 4x gas reserve + base fee buffer in token wallet, send rest to main
+    // Base fee buffer of 0.0005 SOL covers ~10 base fees (0.00005 each)
+    const reserveToKeep = (gasReserveSol * 4) + 0.0005;
+    const amountToSend = balanceSol - reserveToKeep;
+    
+    if (amountToSend <= 0.0001) {
+      return { success: true, amountSent: 0 }; // Nothing to send
+    }
+    
+    const lamportsToSend = Math.floor(amountToSend * LAMPORTS_PER_SOL);
+    const mainPubkey = new PublicKey(mainWalletAddress);
+
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: tokenWalletKeypair.publicKey,
+        toPubkey: mainPubkey,
+        lamports: lamportsToSend,
+      })
+    );
+
+    const signature = await sendAndConfirmTransaction(connection, transaction, [tokenWalletKeypair]);
+    console.log(`Sent ${amountToSend.toFixed(4)} SOL profits to main wallet: ${signature}`);
+    
+    return { success: true, signature, amountSent: amountToSend };
+  } catch (error) {
+    console.error("Failed to send profits to main wallet:", error);
+    return { success: false, error: String(error) };
+  }
+}
