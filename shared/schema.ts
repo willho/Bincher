@@ -54,10 +54,73 @@ export const monitoringState = pgTable("monitoring_state", {
   totalSwapsDetected: integer("total_swaps_detected").default(0),
 });
 
+// Copy Trading Tables
+
+// Hot wallet for automated trading (encrypted private key stored securely)
+export const hotWallet = pgTable("hot_wallet", {
+  id: serial("id").primaryKey(),
+  publicKey: text("public_key").notNull(),
+  encryptedPrivateKey: text("encrypted_private_key").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+// Holdings - tokens owned by the hot wallet from copy trades
+export const holdings = pgTable("holdings", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull().unique(),
+  tokenSymbol: text("token_symbol").notNull(),
+  tokenName: text("token_name"),
+  amountBought: real("amount_bought").notNull(),
+  solSpent: real("sol_spent").notNull(),
+  buyPrice: real("buy_price").notNull(),
+  buyTimestamp: integer("buy_timestamp").notNull(),
+  buySignature: text("buy_signature").notNull(),
+  currentAmount: real("current_amount").notNull(),
+  reclaimed: boolean("reclaimed").default(false),
+  reclaimTimestamp: integer("reclaim_timestamp"),
+  reclaimSignature: text("reclaim_signature"),
+  lastPriceCheck: integer("last_price_check"),
+  lastPrice: real("last_price"),
+  highestMultiplier: real("highest_multiplier").default(1),
+  alertedMilestones: jsonb("alerted_milestones").$type<number[]>().default([]),
+});
+
+// Pending buys - tokens queued for purchase with delay
+export const pendingBuys = pgTable("pending_buys", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull().unique(),
+  tokenSymbol: text("token_symbol").notNull(),
+  tokenName: text("token_name"),
+  detectedAt: integer("detected_at").notNull(),
+  scheduledBuyAt: integer("scheduled_buy_at").notNull(),
+  initialPrice: real("initial_price"),
+  buyTriggered: boolean("buy_triggered").default(false),
+  triggerReason: text("trigger_reason"),
+  buyCount: integer("buy_count").default(0),
+  cancelled: boolean("cancelled").default(false),
+});
+
+// Trade config - settings for copy trading
+export const tradeConfig = pgTable("trade_config", {
+  id: serial("id").primaryKey(),
+  enabled: boolean("enabled").default(false),
+  buyPercentage: real("buy_percentage").default(10),
+  minDelayMinutes: integer("min_delay_minutes").default(20),
+  maxDelayMinutes: integer("max_delay_minutes").default(40),
+  highVolumeBuyCount: integer("high_volume_buy_count").default(10),
+  priceRiseTriggerPercent: real("price_rise_trigger_percent").default(15),
+  reclaimMultiplier: real("reclaim_multiplier").default(4),
+  milestonesToAlert: jsonb("milestones_to_alert").$type<number[]>().default([2, 4, 10]),
+});
+
 // Insert schemas
 export const insertSwapSchema = createInsertSchema(swaps).omit({ id: true });
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
 export const insertMonitoringStateSchema = createInsertSchema(monitoringState).omit({ id: true });
+export const insertHotWalletSchema = createInsertSchema(hotWallet).omit({ id: true });
+export const insertHoldingSchema = createInsertSchema(holdings).omit({ id: true });
+export const insertPendingBuySchema = createInsertSchema(pendingBuys).omit({ id: true });
+export const insertTradeConfigSchema = createInsertSchema(tradeConfig).omit({ id: true });
 
 // Types for API use
 export const swapSchema = z.object({
@@ -101,6 +164,67 @@ export const monitoringStatusSchema = z.object({
 });
 
 export type MonitoringStatus = z.infer<typeof monitoringStatusSchema>;
+
+// Copy Trading Types
+export const hotWalletSchema = z.object({
+  id: z.number(),
+  publicKey: z.string(),
+  createdAt: z.number(),
+});
+
+export type HotWallet = z.infer<typeof hotWalletSchema>;
+
+export const holdingSchema = z.object({
+  id: z.number(),
+  tokenMint: z.string(),
+  tokenSymbol: z.string(),
+  tokenName: z.string().optional(),
+  amountBought: z.number(),
+  solSpent: z.number(),
+  buyPrice: z.number(),
+  buyTimestamp: z.number(),
+  buySignature: z.string(),
+  currentAmount: z.number(),
+  reclaimed: z.boolean().default(false),
+  reclaimTimestamp: z.number().optional(),
+  reclaimSignature: z.string().optional(),
+  lastPriceCheck: z.number().optional(),
+  lastPrice: z.number().optional(),
+  highestMultiplier: z.number().default(1),
+  alertedMilestones: z.array(z.number()).default([]),
+});
+
+export type Holding = z.infer<typeof holdingSchema>;
+
+export const pendingBuySchema = z.object({
+  id: z.number(),
+  tokenMint: z.string(),
+  tokenSymbol: z.string(),
+  tokenName: z.string().optional(),
+  detectedAt: z.number(),
+  scheduledBuyAt: z.number(),
+  initialPrice: z.number().optional(),
+  buyTriggered: z.boolean().default(false),
+  triggerReason: z.string().optional(),
+  buyCount: z.number().default(0),
+  cancelled: z.boolean().default(false),
+});
+
+export type PendingBuy = z.infer<typeof pendingBuySchema>;
+
+export const tradeConfigSchema = z.object({
+  id: z.number(),
+  enabled: z.boolean().default(false),
+  buyPercentage: z.number().default(10),
+  minDelayMinutes: z.number().default(20),
+  maxDelayMinutes: z.number().default(40),
+  highVolumeBuyCount: z.number().default(10),
+  priceRiseTriggerPercent: z.number().default(15),
+  reclaimMultiplier: z.number().default(4),
+  milestonesToAlert: z.array(z.number()).default([2, 4, 10]),
+});
+
+export type TradeConfig = z.infer<typeof tradeConfigSchema>;
 
 // Helius webhook payload types
 export interface HeliusWebhookPayload {

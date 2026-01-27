@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -10,12 +10,13 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CopyTrading } from "@/components/copy-trading";
 import { 
   Activity, 
   ArrowRightLeft, 
   Bell, 
-  BellOff, 
-  CheckCircle2, 
+  Bot,
   Copy,
   ExternalLink, 
   Mail, 
@@ -165,6 +166,19 @@ export default function Dashboard() {
       </header>
 
       <main className="container mx-auto px-4 py-6 space-y-6">
+        <Tabs defaultValue="monitor" className="w-full">
+          <TabsList className="grid w-full grid-cols-2 mb-6">
+            <TabsTrigger value="monitor" className="flex items-center gap-2" data-testid="tab-monitor">
+              <Activity className="h-4 w-4" />
+              Monitor
+            </TabsTrigger>
+            <TabsTrigger value="copy-trade" className="flex items-center gap-2" data-testid="tab-copy-trade">
+              <Bot className="h-4 w-4" />
+              Copy Trade
+            </TabsTrigger>
+          </TabsList>
+          
+          <TabsContent value="monitor" className="space-y-6">
         {/* Wallet Card */}
         <Card>
           <CardContent className="py-4">
@@ -473,6 +487,12 @@ export default function Dashboard() {
             )}
           </CardContent>
         </Card>
+          </TabsContent>
+          
+          <TabsContent value="copy-trade">
+            <CopyTrading />
+          </TabsContent>
+        </Tabs>
       </main>
     </div>
   );

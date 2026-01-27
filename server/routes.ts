@@ -5,9 +5,20 @@ import { storage } from "./storage";
 import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl } from "./helius";
 import { sendSwapNotification } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
-import { notificationSettingsSchema } from "@shared/schema";
+import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
+import { 
+  getOrCreateHotWallet, 
+  createHotWallet, 
+  getHotWalletBalance, 
+  getTradeConfig, 
+  updateTradeConfig, 
+  getHoldings, 
+  getPendingBuys,
+  addPendingBuy,
+  hasTokenBeenBought
+} from "./wallet";
 
 let wss: WebSocketServer;
 
@@ -191,6 +202,25 @@ export async function registerRoutes(
           }
         }
 
+        // Copy trading: Queue pending buy if this is a BUY (SOL -> Token)
+        const tradeConf = await getTradeConfig();
+        if (tradeConf.enabled && swap.fromTokenSymbol === "SOL") {
+          const alreadyBought = await hasTokenBeenBought(swap.toToken);
+          if (!alreadyBought) {
+            const pendingBuy = await addPendingBuy(
+              swap.toToken,
+              swap.toTokenSymbol,
+              toTokenMetadata?.name,
+              toTokenMetadata?.priceUsd
+            );
+            if (pendingBuy) {
+              console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol);
+            }
+          } else {
+            console.log("Copy trade: Token already bought/pending, skipping", swap.toTokenSymbol);
+          }
+        }
+
         // Update status
         const status = await storage.getMonitoringStatus();
         broadcastStatus(status);
@@ -251,6 +281,90 @@ export async function registerRoutes(
   app.get("/api/webhooks", async (req, res) => {
     const webhooks = await getWebhooks();
     res.json(webhooks);
+  });
+
+  // ==================== Copy Trading Routes ====================
+
+  // Get or create hot wallet
+  app.get("/api/copy-trade/wallet", async (req, res) => {
+    try {
+      const wallet = await getOrCreateHotWallet();
+      if (!wallet) {
+        return res.json({ exists: false });
+      }
+      const balance = await getHotWalletBalance();
+      res.json({ exists: true, publicKey: wallet.publicKey, balance, createdAt: wallet.createdAt });
+    } catch (error) {
+      console.error("Error getting hot wallet:", error);
+      res.status(500).json({ error: "Failed to get wallet" });
+    }
+  });
+
+  // Create hot wallet
+  app.post("/api/copy-trade/wallet", async (req, res) => {
+    try {
+      const wallet = await createHotWallet();
+      const balance = await getHotWalletBalance();
+      res.json({ success: true, publicKey: wallet.publicKey, balance, createdAt: wallet.createdAt });
+    } catch (error) {
+      console.error("Error creating hot wallet:", error);
+      res.status(500).json({ error: "Failed to create wallet" });
+    }
+  });
+
+  // Get hot wallet balance
+  app.get("/api/copy-trade/balance", async (req, res) => {
+    try {
+      const balance = await getHotWalletBalance();
+      res.json({ balance });
+    } catch (error) {
+      console.error("Error getting balance:", error);
+      res.status(500).json({ error: "Failed to get balance" });
+    }
+  });
+
+  // Get trade config
+  app.get("/api/copy-trade/config", async (req, res) => {
+    try {
+      const config = await getTradeConfig();
+      res.json(config);
+    } catch (error) {
+      console.error("Error getting trade config:", error);
+      res.status(500).json({ error: "Failed to get config" });
+    }
+  });
+
+  // Update trade config
+  app.patch("/api/copy-trade/config", async (req, res) => {
+    try {
+      const config = await updateTradeConfig(req.body);
+      res.json(config);
+    } catch (error) {
+      console.error("Error updating trade config:", error);
+      res.status(500).json({ error: "Failed to update config" });
+    }
+  });
+
+  // Get holdings
+  app.get("/api/copy-trade/holdings", async (req, res) => {
+    try {
+      const holdingsList = await getHoldings();
+      res.json(holdingsList);
+    } catch (error) {
+      console.error("Error getting holdings:", error);
+      res.status(500).json({ error: "Failed to get holdings" });
+    }
+  });
+
+  // Get pending buys
+  app.get("/api/copy-trade/pending", async (req, res) => {
+    try {
+      const pending = await getPendingBuys();
+      res.json(pending);
+    } catch (error) {
+      console.error("Error getting pending buys:", error);
+      res.status(500).json({ error: "Failed to get pending buys" });
+    }
   });
 
   // Restore monitoring on startup if it was active
