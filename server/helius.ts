@@ -4,17 +4,21 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const WALLET_ADDRESS = "C92nBXrrANmWpgJKhBdbnqtUuCcoEZ7kQJoyScZ5sQak";
 
 export function getWebhookUrl(): string {
-  if (process.env.REPLIT_DEPLOYMENT) {
-    const slug = process.env.REPL_SLUG || "app";
-    const owner = process.env.REPL_OWNER || "user";
-    return `https://${slug}-${owner.toLowerCase()}.replit.app/api/webhook/helius`;
+  // In production deployment, REPLIT_DEPLOYMENT=1 and REPLIT_DOMAINS contains the .replit.app domain
+  if (process.env.REPLIT_DEPLOYMENT === "1" && process.env.REPLIT_DOMAINS) {
+    // REPLIT_DOMAINS is comma-separated, first one is the primary domain
+    const domains = process.env.REPLIT_DOMAINS.split(",");
+    const primaryDomain = domains[0];
+    return `https://${primaryDomain}/api/webhook/helius`;
   }
   
+  // In development, use REPLIT_DEV_DOMAIN
   if (process.env.REPLIT_DEV_DOMAIN) {
     return `https://${process.env.REPLIT_DEV_DOMAIN}/api/webhook/helius`;
   }
   
-  return `https://${process.env.REPL_ID || 'app'}.worf.replit.dev/api/webhook/helius`;
+  // Fallback for local development
+  return `https://localhost:5000/api/webhook/helius`;
 }
 
 export function getWalletAddress(): string {
