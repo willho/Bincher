@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata } from "./helius";
 import { sendSwapNotification } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import { notificationSettingsSchema } from "@shared/schema";
@@ -176,6 +176,13 @@ export async function registerRoutes(
         if (!swap) {
           console.log("Not a swap transaction:", payload.type);
           continue;
+        }
+
+        // Fetch token metadata for the token being bought
+        const toTokenMetadata = await fetchTokenMetadata(swap.toToken);
+        if (toTokenMetadata) {
+          swap.toTokenMetadata = toTokenMetadata;
+          console.log("Token metadata fetched:", toTokenMetadata.symbol, "MC:", toTokenMetadata.marketCap);
         }
 
         const savedSwap = await storage.addSwap(swap);

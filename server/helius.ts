@@ -1,10 +1,48 @@
-import type { HeliusWebhookPayload, InsertSwap } from "@shared/schema";
+import type { HeliusWebhookPayload, InsertSwap, TokenMetadata } from "@shared/schema";
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const WALLET_ADDRESS = "C92nBXrrANmWpgJKhBdbnqtUuCcoEZ7kQJoyScZ5sQak";
 
 export function getWalletAddress(): string {
   return WALLET_ADDRESS;
+}
+
+export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMetadata | undefined> {
+  // Skip SOL - it's native and doesn't have DexScreener data
+  if (mintAddress === "So11111111111111111111111111111111111111112") {
+    return undefined;
+  }
+  
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`);
+    if (!response.ok) return undefined;
+    
+    const data = await response.json();
+    if (!data.pairs || data.pairs.length === 0) return undefined;
+    
+    // Get the pair with highest liquidity
+    const pair = data.pairs.reduce((best: any, current: any) => {
+      const bestLiq = best.liquidity?.usd || 0;
+      const currLiq = current.liquidity?.usd || 0;
+      return currLiq > bestLiq ? current : best;
+    });
+    
+    return {
+      name: pair.baseToken?.name,
+      symbol: pair.baseToken?.symbol,
+      priceUsd: parseFloat(pair.priceUsd) || undefined,
+      marketCap: pair.marketCap || pair.fdv || undefined,
+      fdv: pair.fdv || undefined,
+      liquidity: pair.liquidity?.usd || undefined,
+      volume24h: pair.volume?.h24 || undefined,
+      priceChange24h: pair.priceChange?.h24 || undefined,
+      dexId: pair.dexId,
+      pairAddress: pair.pairAddress,
+    };
+  } catch (error) {
+    console.error("Error fetching token metadata:", error);
+    return undefined;
+  }
 }
 
 // Token mint to symbol mapping for common Solana tokens

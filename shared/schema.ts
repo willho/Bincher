@@ -1,5 +1,21 @@
 import { z } from "zod";
 
+// Token metadata schema (from DexScreener)
+export const tokenMetadataSchema = z.object({
+  name: z.string().optional(),
+  symbol: z.string().optional(),
+  priceUsd: z.number().optional(),
+  marketCap: z.number().optional(),
+  fdv: z.number().optional(),
+  liquidity: z.number().optional(),
+  volume24h: z.number().optional(),
+  priceChange24h: z.number().optional(),
+  dexId: z.string().optional(),
+  pairAddress: z.string().optional(),
+});
+
+export type TokenMetadata = z.infer<typeof tokenMetadataSchema>;
+
 // Swap transaction schema
 export const swapSchema = z.object({
   id: z.string(),
@@ -16,6 +32,7 @@ export const swapSchema = z.object({
   fee: z.number().optional(),
   slot: z.number(),
   notificationSent: z.boolean().default(false),
+  toTokenMetadata: tokenMetadataSchema.optional(),
 });
 
 export type Swap = z.infer<typeof swapSchema>;
