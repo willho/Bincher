@@ -1,16 +1,18 @@
 import { useState, useEffect } from "react";
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
 import Login from "@/pages/login";
+import ResetPassword from "@/pages/reset-password";
 import NotFound from "@/pages/not-found";
 import { Loader2 } from "lucide-react";
 
 function AuthenticatedApp() {
   const [authKey, setAuthKey] = useState(0);
+  const [location] = useLocation();
   
   const { data: session, isLoading, refetch } = useQuery<{ authenticated: boolean; username?: string }>({
     queryKey: ["/api/auth/session"],
@@ -23,6 +25,11 @@ function AuthenticatedApp() {
       refetch();
     }
   }, [authKey, refetch]);
+
+  // Allow password reset page without authentication
+  if (location.startsWith("/reset-password")) {
+    return <ResetPassword />;
+  }
 
   if (isLoading) {
     return (

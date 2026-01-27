@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { users } from "@shared/schema";
-import { eq, sql } from "drizzle-orm";
+import { users, settings, passwordResetTokens } from "@shared/schema";
+import { eq, sql, and } from "drizzle-orm";
 import crypto from "crypto";
 
 const SESSION_DURATION_SHORT = 24 * 60 * 60 * 1000; // 1 day
@@ -112,4 +112,118 @@ export async function getUserCount(): Promise<number> {
 export async function getUserById(userId: number): Promise<typeof users.$inferSelect | null> {
   const result = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   return result.length > 0 ? result[0] : null;
+}
+
+const RESET_TOKEN_EXPIRY = 15 * 60 * 1000; // 15 minutes
+
+function generateResetToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+// Constant-time comparison to prevent timing attacks
+function secureCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+export async function findUserByEmail(email: string): Promise<{ userId: number; username: string } | null> {
+  // Look up user by their recovery email in settings
+  const settingsRows = await db.select()
+    .from(settings)
+    .where(eq(settings.email, email))
+    .limit(1);
+  
+  if (settingsRows.length === 0) {
+    // Also check emails array for additional emails
+    const allSettings = await db.select().from(settings);
+    for (const s of allSettings) {
+      if (s.emails && Array.isArray(s.emails) && s.emails.includes(email)) {
+        const user = await getUserById(s.userId!);
+        if (user) return { userId: user.id, username: user.username };
+      }
+    }
+    return null;
+  }
+
+  const userId = settingsRows[0].userId;
+  if (!userId) return null;
+  
+  const user = await getUserById(userId);
+  if (!user) return null;
+  
+  return { userId: user.id, username: user.username };
+}
+
+export async function createPasswordResetToken(userId: number): Promise<string> {
+  const token = generateResetToken();
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = Math.floor((Date.now() + RESET_TOKEN_EXPIRY) / 1000);
+
+  // Invalidate any existing tokens for this user
+  await db.update(passwordResetTokens)
+    .set({ used: true })
+    .where(eq(passwordResetTokens.userId, userId));
+
+  // Create new token
+  await db.insert(passwordResetTokens).values({
+    userId,
+    token,
+    expiresAt,
+    used: false,
+    createdAt: now,
+  });
+
+  return token;
+}
+
+export async function validateResetToken(token: string): Promise<{ valid: boolean; userId?: number; error?: string }> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const tokenRows = await db.select()
+    .from(passwordResetTokens)
+    .where(eq(passwordResetTokens.token, token))
+    .limit(1);
+
+  if (tokenRows.length === 0) {
+    return { valid: false, error: "Invalid or expired reset link" };
+  }
+
+  const resetToken = tokenRows[0];
+
+  if (resetToken.used) {
+    return { valid: false, error: "This reset link has already been used" };
+  }
+
+  if (resetToken.expiresAt < now) {
+    return { valid: false, error: "This reset link has expired" };
+  }
+
+  return { valid: true, userId: resetToken.userId };
+}
+
+export async function resetPassword(token: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
+  const validation = await validateResetToken(token);
+  
+  if (!validation.valid || !validation.userId) {
+    return { success: false, error: validation.error || "Invalid token" };
+  }
+
+  try {
+    const passwordHash = hashPassword(newPassword);
+    
+    // Update user's password
+    await db.update(users)
+      .set({ passwordHash })
+      .where(eq(users.id, validation.userId));
+
+    // Mark token as used
+    await db.update(passwordResetTokens)
+      .set({ used: true })
+      .where(eq(passwordResetTokens.token, token));
+
+    return { success: true };
+  } catch (error) {
+    console.error("Error resetting password:", error);
+    return { success: false, error: "Failed to reset password" };
+  }
 }

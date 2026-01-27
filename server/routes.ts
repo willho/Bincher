@@ -4,12 +4,12 @@ import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
 import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress } from "./helius";
-import { sendSwapNotification } from "./email";
+import { sendSwapNotification, sendPasswordResetEmail } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
-import { createUser, authenticateUser, createSession, getSession, destroySession, getUserCount } from "./auth";
+import { createUser, authenticateUser, createSession, getSession, destroySession, getUserCount, findUserByEmail, createPasswordResetToken, validateResetToken, resetPassword } from "./auth";
 import { 
   getOrCreateHotWallet, 
   createHotWallet, 
@@ -215,6 +215,113 @@ export async function registerRoutes(
     }
     res.clearCookie("session");
     res.json({ success: true });
+  });
+
+  // Rate limiting for password reset requests (simple in-memory)
+  const resetAttempts = new Map<string, { count: number; lastAttempt: number }>();
+  const RATE_LIMIT_WINDOW = 60 * 60 * 1000; // 1 hour
+  const MAX_RESET_ATTEMPTS = 3;
+
+  // Request password reset
+  app.post("/api/auth/request-reset", async (req, res) => {
+    try {
+      const { email } = req.body;
+      
+      if (!email || typeof email !== "string") {
+        return res.status(400).json({ error: "Email is required" });
+      }
+
+      const normalizedEmail = email.toLowerCase().trim();
+
+      // Rate limiting check
+      const clientIp = req.ip || req.connection.remoteAddress || "unknown";
+      const rateLimitKey = `${clientIp}:${normalizedEmail}`;
+      const now = Date.now();
+      const attempts = resetAttempts.get(rateLimitKey);
+      
+      if (attempts) {
+        if (now - attempts.lastAttempt < RATE_LIMIT_WINDOW && attempts.count >= MAX_RESET_ATTEMPTS) {
+          // Don't reveal rate limiting - same response as success
+          return res.json({ success: true, message: "If an account with that email exists, a reset link has been sent." });
+        }
+        if (now - attempts.lastAttempt >= RATE_LIMIT_WINDOW) {
+          resetAttempts.set(rateLimitKey, { count: 1, lastAttempt: now });
+        } else {
+          attempts.count++;
+          attempts.lastAttempt = now;
+        }
+      } else {
+        resetAttempts.set(rateLimitKey, { count: 1, lastAttempt: now });
+      }
+
+      // Find user by email (always return same response to prevent email enumeration)
+      const user = await findUserByEmail(normalizedEmail);
+      
+      if (user) {
+        const token = await createPasswordResetToken(user.userId);
+        
+        // Construct reset link using current host
+        const protocol = req.headers["x-forwarded-proto"] || "https";
+        const host = req.headers.host || "localhost:5000";
+        const resetLink = `${protocol}://${host}/reset-password?token=${token}`;
+        
+        await sendPasswordResetEmail(normalizedEmail, resetLink, user.username);
+      }
+
+      // Always return success to prevent email enumeration
+      res.json({ success: true, message: "If an account with that email exists, a reset link has been sent." });
+    } catch (error) {
+      console.error("Password reset request error:", error);
+      // Still return success to prevent enumeration
+      res.json({ success: true, message: "If an account with that email exists, a reset link has been sent." });
+    }
+  });
+
+  // Validate reset token (for frontend to check before showing form)
+  app.get("/api/auth/validate-reset-token", async (req, res) => {
+    try {
+      const { token } = req.query;
+      
+      if (!token || typeof token !== "string") {
+        return res.status(400).json({ valid: false, error: "Token is required" });
+      }
+
+      const result = await validateResetToken(token);
+      res.json(result);
+    } catch (error) {
+      console.error("Token validation error:", error);
+      res.status(500).json({ valid: false, error: "Validation failed" });
+    }
+  });
+
+  // Complete password reset
+  app.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const { token, newPassword } = req.body;
+      
+      if (!token || typeof token !== "string") {
+        return res.status(400).json({ success: false, error: "Token is required" });
+      }
+      
+      if (!newPassword || typeof newPassword !== "string") {
+        return res.status(400).json({ success: false, error: "New password is required" });
+      }
+      
+      if (newPassword.length < 8) {
+        return res.status(400).json({ success: false, error: "Password must be at least 8 characters" });
+      }
+
+      const result = await resetPassword(token, newPassword);
+      
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json({ success: true, message: "Password has been reset successfully" });
+    } catch (error) {
+      console.error("Password reset error:", error);
+      res.status(500).json({ success: false, error: "Password reset failed" });
+    }
   });
 
   // Get monitoring status

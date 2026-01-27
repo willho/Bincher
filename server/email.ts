@@ -170,3 +170,62 @@ export async function sendEmail(to: string, subject: string, html: string): Prom
     return false;
   }
 }
+
+export async function sendPasswordResetEmail(to: string, resetLink: string, username: string): Promise<boolean> {
+  try {
+    const { data, error } = await resend.emails.send({
+      from: "Swap Monitor <onboarding@resend.dev>",
+      to: [to],
+      subject: "Reset Your Password - Swap Monitor",
+      html: `
+        <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-radius: 16px;">
+          <div style="text-align: center; margin-bottom: 32px;">
+            <h1 style="color: #10b981; margin: 0; font-size: 28px; font-weight: 700;">Password Reset</h1>
+            <p style="color: #94a3b8; margin-top: 8px; font-size: 14px;">Swap Monitor</p>
+          </div>
+          
+          <div style="background: rgba(255,255,255,0.05); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+            <p style="color: #f1f5f9; font-size: 16px; margin: 0 0 16px 0;">
+              Hi <strong>${username}</strong>,
+            </p>
+            <p style="color: #94a3b8; font-size: 14px; margin: 0 0 24px 0;">
+              We received a request to reset your password. Click the button below to set a new password.
+            </p>
+            <div style="text-align: center; margin: 32px 0;">
+              <a href="${resetLink}" style="display: inline-block; background: #10b981; color: #ffffff; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-size: 16px; font-weight: 600;">
+                Reset Password
+              </a>
+            </div>
+            <p style="color: #64748b; font-size: 12px; margin: 0; text-align: center;">
+              This link will expire in 15 minutes.
+            </p>
+          </div>
+          
+          <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <p style="color: #f87171; font-size: 13px; margin: 0;">
+              <strong>Security Notice:</strong> If you didn't request this password reset, please ignore this email. Your password will remain unchanged.
+            </p>
+          </div>
+          
+          <p style="color: #64748b; font-size: 12px; text-align: center; margin: 0;">
+            If the button doesn't work, copy and paste this link into your browser:
+          </p>
+          <p style="color: #10b981; font-size: 11px; text-align: center; word-break: break-all; margin-top: 8px;">
+            ${resetLink}
+          </p>
+        </div>
+      `,
+    });
+
+    if (error) {
+      console.error("Failed to send password reset email:", error);
+      return false;
+    }
+
+    console.log("Password reset email sent successfully:", data?.id);
+    return true;
+  } catch (error) {
+    console.error("Error sending password reset email:", error);
+    return false;
+  }
+}

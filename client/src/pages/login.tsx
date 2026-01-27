@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Lock, User } from "lucide-react";
+import { Loader2, Lock, User, Mail, ArrowLeft } from "lucide-react";
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -19,9 +20,23 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetSent, setResetSent] = useState(false);
 
   const { data: needsSetup, isLoading: checkingSetup } = useQuery<{ needsSetup: boolean }>({
     queryKey: ["/api/auth/check-setup"],
+  });
+
+  const requestReset = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/auth/request-reset", { email: resetEmail }),
+    onSuccess: () => {
+      setResetSent(true);
+    },
+    onError: () => {
+      // Still show success to prevent email enumeration
+      setResetSent(true);
+    },
   });
 
   const login = useMutation({
@@ -145,16 +160,18 @@ export default function Login({ onLoginSuccess }: LoginProps) {
             )}
 
             {!isSetup && (
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id="remember"
-                  checked={rememberMe}
-                  onCheckedChange={(checked) => setRememberMe(checked === true)}
-                  data-testid="checkbox-remember-me"
-                />
-                <Label htmlFor="remember" className="text-sm font-normal cursor-pointer">
-                  Remember this device (30 days)
-                </Label>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="remember"
+                    checked={rememberMe}
+                    onCheckedChange={(checked) => setRememberMe(checked === true)}
+                    data-testid="checkbox-remember-me"
+                  />
+                  <Label htmlFor="remember" className="text-sm font-normal cursor-pointer">
+                    Remember this device (30 days)
+                  </Label>
+                </div>
               </div>
             )}
 
@@ -167,9 +184,94 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               {isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {isSetup ? "Create Account" : "Sign In"}
             </Button>
+
+            {!isSetup && (
+              <div className="text-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotPasswordOpen(true);
+                    setResetSent(false);
+                    setResetEmail("");
+                  }}
+                  className="text-sm text-muted-foreground hover:text-primary transition-colors"
+                  data-testid="link-forgot-password"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
           </form>
         </CardContent>
       </Card>
+
+      <Dialog open={forgotPasswordOpen} onOpenChange={setForgotPasswordOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{resetSent ? "Check Your Email" : "Reset Password"}</DialogTitle>
+            <DialogDescription>
+              {resetSent 
+                ? "If an account with that email exists, we've sent a password reset link."
+                : "Enter your recovery email to receive a password reset link."
+              }
+            </DialogDescription>
+          </DialogHeader>
+          
+          {resetSent ? (
+            <div className="space-y-4">
+              <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 text-center">
+                <Mail className="h-12 w-12 mx-auto text-primary mb-3" />
+                <p className="text-sm text-muted-foreground">
+                  Check your inbox and spam folder for the reset link. The link expires in 15 minutes.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  setForgotPasswordOpen(false);
+                  setResetSent(false);
+                }}
+                data-testid="button-back-to-login"
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Login
+              </Button>
+            </div>
+          ) : (
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              requestReset.mutate();
+            }} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="reset-email">Recovery Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="reset-email"
+                    type="email"
+                    placeholder="Enter your recovery email"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                    className="pl-10"
+                    required
+                    data-testid="input-reset-email"
+                  />
+                </div>
+              </div>
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={requestReset.isPending || !resetEmail}
+                data-testid="button-send-reset-link"
+              >
+                {requestReset.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Send Reset Link
+              </Button>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -225,6 +225,16 @@ export const aiChatMessages = pgTable("ai_chat_messages", {
   createdAt: integer("created_at").notNull(),
 });
 
+// Password reset tokens - time-limited, single-use tokens for secure password recovery
+export const passwordResetTokens = pgTable("password_reset_tokens", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  token: text("token").notNull().unique(),
+  expiresAt: integer("expires_at").notNull(),
+  used: boolean("used").default(false),
+  createdAt: integer("created_at").notNull(),
+});
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).omit({ id: true });
 export const insertMonitoredWalletSchema = createInsertSchema(monitoredWallets).omit({ id: true });
@@ -237,6 +247,7 @@ export const insertPendingBuySchema = createInsertSchema(pendingBuys).omit({ id:
 export const insertTradeConfigSchema = createInsertSchema(tradeConfig).omit({ id: true });
 export const insertTokenSnapshotSchema = createInsertSchema(tokenSnapshots).omit({ id: true });
 export const insertAiChatMessageSchema = createInsertSchema(aiChatMessages).omit({ id: true });
+export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({ id: true });
 
 // User types
 export type User = typeof users.$inferSelect;
