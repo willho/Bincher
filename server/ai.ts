@@ -454,14 +454,19 @@ Be helpful, concise, and data-driven. When refreshing scores, call the appropria
       const toolResults: string[] = [];
       
       for (const toolCall of message.tool_calls) {
-        const args = JSON.parse(toolCall.function.arguments);
-        
-        if (toolCall.function.name === "refresh_token_score") {
-          const result = await executeScoreRefresh(args.tokenIdentifier);
-          toolResults.push(result.message);
-        } else if (toolCall.function.name === "refresh_all_scores") {
-          const result = await executeBatchScoreRefresh(args.limit || 10);
-          toolResults.push(result.message);
+        try {
+          const args = JSON.parse(toolCall.function.arguments);
+          
+          if (toolCall.function.name === "refresh_token_score") {
+            const result = await executeScoreRefresh(args.tokenIdentifier);
+            toolResults.push(result.message);
+          } else if (toolCall.function.name === "refresh_all_scores") {
+            const result = await executeBatchScoreRefresh(args.limit || 10);
+            toolResults.push(result.message);
+          }
+        } catch (parseError) {
+          console.error("Failed to parse tool arguments:", parseError);
+          toolResults.push("Error: Failed to parse function arguments");
         }
       }
       
