@@ -49,6 +49,7 @@ export function CopyTrading() {
   const [exportPassword, setExportPassword] = useState("");
   const [exportedKey, setExportedKey] = useState<string | null>(null);
   const [exportingHoldingId, setExportingHoldingId] = useState<number | null>(null);
+  const [hideDeadDust, setHideDeadDust] = useState(true);
 
   const copyToClipboard = async (text: string, label: string = "Address") => {
     try {
@@ -703,10 +704,23 @@ export function CopyTrading() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <TrendingUp className="h-5 w-5" />
-                Holdings
-              </CardTitle>
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5" />
+                  Holdings
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="hide-dead-dust" className="text-xs text-muted-foreground cursor-pointer">
+                    Hide dead/dust
+                  </Label>
+                  <Switch
+                    id="hide-dead-dust"
+                    checked={hideDeadDust}
+                    onCheckedChange={setHideDeadDust}
+                    data-testid="switch-hide-dead-dust"
+                  />
+                </div>
+              </div>
               <CardDescription>
                 Tokens bought through copy trading
               </CardDescription>
@@ -718,9 +732,19 @@ export function CopyTrading() {
                     <Skeleton key={i} className="h-20 w-full" />
                   ))}
                 </div>
-              ) : holdings && holdings.length > 0 ? (
-                <div className="space-y-2">
-                  {holdings.map((holding) => {
+              ) : (() => {
+                const visibleHoldings = holdings?.filter((h) => !hideDeadDust || (!h.isDead && !h.isDust)) ?? [];
+                const hiddenCount = (holdings?.length ?? 0) - visibleHoldings.length;
+                
+                if (visibleHoldings.length > 0) {
+                  return (
+                    <div className="space-y-2">
+                      {hiddenCount > 0 && (
+                        <p className="text-xs text-muted-foreground text-center pb-2">
+                          {hiddenCount} dead/dust token{hiddenCount > 1 ? 's' : ''} hidden
+                        </p>
+                      )}
+                      {visibleHoldings.map((holding) => {
                     const multiplier = holding.lastPrice && holding.buyPrice 
                       ? (holding.lastPrice / holding.buyPrice)
                       : 1;
@@ -742,6 +766,12 @@ export function CopyTrading() {
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <p className="font-medium">{holding.tokenSymbol}</p>
+                                {holding.isDead && (
+                                  <Badge variant="destructive" className="text-xs">Dead</Badge>
+                                )}
+                                {holding.isDust && !holding.isDead && (
+                                  <Badge variant="secondary" className="text-xs">Dust</Badge>
+                                )}
                                 {reclaimedMilestones.length > 0 && reclaimedMilestones.map((m) => (
                                   <Badge key={m} variant={m === 4 ? "secondary" : "outline"} className="text-xs">
                                     {m}x
@@ -832,13 +862,27 @@ export function CopyTrading() {
                       </div>
                     );
                   })}
-                </div>
-              ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                  <TrendingUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p>No holdings yet</p>
-                </div>
-              )}
+                    </div>
+                  );
+                }
+                
+                if (holdings && holdings.length > 0 && hideDeadDust) {
+                  return (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <TrendingUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>All {holdings.length} holdings are dead or dust</p>
+                      <p className="text-xs mt-1">Toggle "Hide dead/dust" to view</p>
+                    </div>
+                  );
+                }
+                
+                return (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <TrendingUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No holdings yet</p>
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </>
