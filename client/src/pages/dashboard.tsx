@@ -20,16 +20,18 @@ import {
   ExternalLink, 
   Mail, 
   Play, 
+  Plus,
   Power, 
   RefreshCw, 
   Wallet,
+  X,
   Zap
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Swap, MonitoringStatus, NotificationSettings } from "@shared/schema";
 
 export default function Dashboard() {
-  const [email, setEmail] = useState("");
+  const [newEmail, setNewEmail] = useState("");
   const [minAmount, setMinAmount] = useState("");
   const { toast } = useToast();
 
@@ -71,12 +73,6 @@ export default function Dashboard() {
     queryKey: ["/api/settings"],
   });
 
-  // Pre-fill email when settings load
-  useEffect(() => {
-    if (settings?.email && !email) {
-      setEmail(settings.email);
-    }
-  }, [settings?.email]);
 
   const { data: wallet } = useQuery<{ address: string }>({
     queryKey: ["/api/wallet"],
@@ -106,11 +102,33 @@ export default function Dashboard() {
     },
   });
 
-  const handleSaveSettings = () => {
-    const updates: Partial<NotificationSettings> = {};
-    if (email) updates.email = email;
-    if (minAmount) updates.minSwapAmount = parseFloat(minAmount);
-    updateSettings.mutate(updates);
+  const handleAddEmail = () => {
+    if (!newEmail || !newEmail.includes("@")) {
+      toast({ description: "Please enter a valid email", variant: "destructive" });
+      return;
+    }
+    const currentEmails = settings?.emails || [];
+    if (currentEmails.includes(newEmail)) {
+      toast({ description: "Email already added", variant: "destructive" });
+      return;
+    }
+    updateSettings.mutate({ emails: [...currentEmails, newEmail] });
+    setNewEmail("");
+  };
+
+  const handleRemoveEmail = (emailToRemove: string) => {
+    const currentEmails = settings?.emails || [];
+    if (currentEmails.length <= 1) {
+      toast({ description: "At least one email is required", variant: "destructive" });
+      return;
+    }
+    updateSettings.mutate({ emails: currentEmails.filter(e => e !== emailToRemove) });
+  };
+
+  const handleSaveMinAmount = () => {
+    if (minAmount) {
+      updateSettings.mutate({ minSwapAmount: parseFloat(minAmount) });
+    }
   };
 
   const formatDate = (timestamp: number) => {
@@ -281,43 +299,69 @@ export default function Dashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="email">Notification Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="Enter email address"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  data-testid="input-email"
-                />
+            <div className="space-y-3">
+              <Label>Email Recipients</Label>
+              <div className="flex flex-wrap gap-2">
+                {settings?.emails?.map((emailAddr) => (
+                  <Badge 
+                    key={emailAddr} 
+                    variant="secondary" 
+                    className="pl-3 pr-1 py-1 text-sm flex items-center gap-1"
+                  >
+                    {emailAddr}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-5 w-5 hover:bg-destructive/20"
+                      onClick={() => handleRemoveEmail(emailAddr)}
+                      data-testid={`button-remove-email-${emailAddr}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </Badge>
+                ))}
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="minAmount">Min Swap Amount (optional)</Label>
+              <div className="flex gap-2">
+                <Input
+                  type="email"
+                  placeholder="Add email address"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddEmail()}
+                  data-testid="input-new-email"
+                  className="flex-1"
+                />
+                <Button 
+                  onClick={handleAddEmail}
+                  disabled={updateSettings.isPending || !newEmail}
+                  data-testid="button-add-email"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-2 pt-2">
+              <Label htmlFor="minAmount">Min Swap Amount (optional)</Label>
+              <div className="flex gap-2">
                 <Input
                   id="minAmount"
                   type="number"
-                  placeholder="0"
+                  placeholder={settings?.minSwapAmount?.toString() || "0"}
                   value={minAmount}
                   onChange={(e) => setMinAmount(e.target.value)}
                   data-testid="input-min-amount"
+                  className="flex-1"
                 />
+                <Button 
+                  onClick={handleSaveMinAmount}
+                  disabled={updateSettings.isPending || !minAmount}
+                  variant="outline"
+                  data-testid="button-save-min-amount"
+                >
+                  Save
+                </Button>
               </div>
-            </div>
-            <div className="flex items-center justify-end gap-4 pt-2">
-              <Button 
-                onClick={handleSaveSettings}
-                disabled={updateSettings.isPending || (email === settings?.email && !minAmount)}
-                data-testid="button-save-settings"
-              >
-                {updateSettings.isPending ? (
-                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
-                ) : (
-                  <CheckCircle2 className="h-4 w-4 mr-2" />
-                )}
-                Save Settings
-              </Button>
             </div>
           </CardContent>
         </Card>

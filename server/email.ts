@@ -25,7 +25,8 @@ function formatPriceChange(change: number | undefined): string {
   return `<span style="color: ${color}; font-weight: 600;">${sign}${change.toFixed(2)}%</span>`;
 }
 
-export async function sendSwapNotification(swap: Swap, toEmail: string): Promise<boolean> {
+export async function sendSwapNotification(swap: Swap, toEmails: string | string[]): Promise<boolean> {
+  const emailList = Array.isArray(toEmails) ? toEmails : [toEmails];
   try {
     const formattedDate = new Date(swap.timestamp).toLocaleString("en-US", {
       dateStyle: "medium",
@@ -76,7 +77,7 @@ export async function sendSwapNotification(swap: Swap, toEmail: string): Promise
 
     const { data, error } = await resend.emails.send({
       from: "Swap Monitor <onboarding@resend.dev>",
-      to: [toEmail],
+      to: emailList,
       subject: `Swap Detected: ${swap.fromTokenSymbol} → ${swap.toTokenSymbol}`,
       html: `
         <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-radius: 16px;">

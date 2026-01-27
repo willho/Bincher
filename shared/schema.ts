@@ -41,6 +41,7 @@ export type InsertSwap = Omit<Swap, "id" | "notificationSent">;
 // Notification settings schema
 export const notificationSettingsSchema = z.object({
   email: z.string().email(),
+  emails: z.array(z.string().email()).default([]),
   enabled: z.boolean().default(true),
   minSwapAmount: z.number().optional(),
 });

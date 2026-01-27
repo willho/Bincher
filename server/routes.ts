@@ -191,15 +191,16 @@ export async function registerRoutes(
         // Broadcast to WebSocket clients
         broadcastSwap(savedSwap);
 
-        // Send email notification
+        // Send email notification to all recipients
         const settings = await storage.getNotificationSettings();
         if (settings.enabled) {
           const minAmount = settings.minSwapAmount ?? 0;
           if (savedSwap.fromAmount >= minAmount) {
-            const sent = await sendSwapNotification(savedSwap, settings.email);
+            const allEmails = settings.emails?.length ? settings.emails : [settings.email];
+            const sent = await sendSwapNotification(savedSwap, allEmails);
             if (sent) {
               await storage.markSwapNotified(savedSwap.id);
-              console.log("Notification sent for swap:", savedSwap.id);
+              console.log("Notification sent for swap:", savedSwap.id, "to", allEmails.length, "recipients");
             }
           }
         }

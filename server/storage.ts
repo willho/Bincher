@@ -26,6 +26,7 @@ export class MemStorage implements IStorage {
     this.swaps = new Map();
     this.notificationSettings = {
       email: "will728@gmail.com",
+      emails: ["will728@gmail.com"],
       enabled: true,
       minSwapAmount: undefined,
     };
