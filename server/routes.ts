@@ -32,7 +32,7 @@ import { holdings, monitoredWallets } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
-import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots } from "./ai";
+import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences } from "./ai";
 
 let wss: WebSocketServer;
 
@@ -1587,6 +1587,63 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error clearing chat history:", error);
       res.status(500).json({ error: "Failed to clear chat history" });
+    }
+  });
+
+  // Get Pincher welcome message
+  app.get("/api/ai/welcome", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const message = getPincherWelcomeMessage();
+      res.json({ message });
+    } catch (error) {
+      console.error("Error getting welcome message:", error);
+      res.status(500).json({ error: "Failed to get welcome message" });
+    }
+  });
+
+  // Get token events with filtering
+  app.get("/api/ai/events", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { token, wallet, minValue, sinceMinutes, limit } = req.query;
+      const events = await getFilteredEventsForUser(req.userId!, {
+        tokenFilter: token as string | undefined,
+        walletFilter: wallet as string | undefined,
+        minValue: minValue ? parseFloat(minValue as string) : undefined,
+        sinceMinutes: sinceMinutes ? parseInt(sinceMinutes as string) : undefined,
+        limit: limit ? parseInt(limit as string) : 50,
+      });
+      res.json(events);
+    } catch (error) {
+      console.error("Error getting events:", error);
+      res.status(500).json({ error: "Failed to get events" });
+    }
+  });
+
+  // Get user event preferences
+  app.get("/api/ai/preferences", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const prefs = await getUserPreferences(req.userId!);
+      res.json(prefs || {
+        minValueThreshold: 0,
+        mutedTokens: [],
+        focusWallets: [],
+        summaryFocus: null,
+        pinchEmailsEnabled: true,
+      });
+    } catch (error) {
+      console.error("Error getting preferences:", error);
+      res.status(500).json({ error: "Failed to get preferences" });
+    }
+  });
+
+  // Update user event preferences
+  app.patch("/api/ai/preferences", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const result = await updateUserPreferences(req.userId!, req.body);
+      res.json(result);
+    } catch (error) {
+      console.error("Error updating preferences:", error);
+      res.status(500).json({ error: "Failed to update preferences" });
     }
   });
 

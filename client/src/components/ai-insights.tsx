@@ -7,29 +7,38 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Bot,
-  Brain,
+  Filter,
   MessageSquare,
   RefreshCw,
   Send,
   Sparkles,
-  Target,
-  Trash2,
+  TrendingDown,
   TrendingUp,
-  Twitter,
-  AlertCircle,
-  CheckCircle,
+  Trash2,
+  Waves,
+  Zap,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import type { TokenSnapshot } from "@shared/schema";
 
-interface AIInsights {
-  totalTokens: number;
-  tokensWithOutcomes: number;
-  averageScore: number;
-  topPatterns: string[];
-  winRate: number;
+interface TokenEvent {
+  id: number;
+  tokenMint: string;
+  tokenSymbol: string;
+  eventType: string;
+  priority: string;
+  title: string;
+  description?: string;
+  metadata?: Record<string, any>;
+  createdAt: number;
+  priceAtEvent?: number;
+  valueUsd?: number;
+  relatedWallet?: string;
 }
 
 interface ChatMessage {
@@ -37,22 +46,15 @@ interface ChatMessage {
   content: string;
 }
 
-interface ScoreResult {
-  score: number;
-  reasoning: string;
-  redFlags: string[];
-  greenFlags: string[];
+interface UserPreferences {
+  minValueThreshold: number;
+  mutedTokens: string[];
+  focusWallets: string[];
+  summaryFocus: string | null;
+  pinchEmailsEnabled: boolean;
 }
 
-function formatNumber(num: number | null | undefined): string {
-  if (num === null || num === undefined) return "N/A";
-  if (num >= 1_000_000) return `$${(num / 1_000_000).toFixed(2)}M`;
-  if (num >= 1_000) return `$${(num / 1_000).toFixed(2)}K`;
-  return `$${num.toFixed(2)}`;
-}
-
-function formatTimeAgo(timestamp: number | null | undefined): string {
-  if (!timestamp) return "N/A";
+function formatTimeAgo(timestamp: number): string {
   const now = Math.floor(Date.now() / 1000);
   const diff = now - timestamp;
   if (diff < 60) return "Just now";
@@ -61,31 +63,85 @@ function formatTimeAgo(timestamp: number | null | undefined): string {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-function getScoreColor(score: number | null | undefined): string {
-  if (score === null || score === undefined) return "bg-muted";
-  if (score >= 70) return "bg-green-500";
-  if (score >= 50) return "bg-yellow-500";
-  if (score >= 30) return "bg-orange-500";
-  return "bg-red-500";
+function formatValue(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
+  return `$${value.toFixed(2)}`;
+}
+
+function getEventIcon(eventType: string) {
+  switch (eventType) {
+    case "price_swing":
+      return <Waves className="h-4 w-4" />;
+    case "milestone":
+      return <Sparkles className="h-4 w-4" />;
+    case "lp_change":
+      return <TrendingDown className="h-4 w-4" />;
+    case "whale_move":
+      return <Zap className="h-4 w-4" />;
+    case "holder_change":
+      return <TrendingUp className="h-4 w-4" />;
+    default:
+      return <AlertTriangle className="h-4 w-4" />;
+  }
+}
+
+function getPriorityColor(priority: string): string {
+  switch (priority) {
+    case "critical":
+      return "bg-red-500 text-white";
+    case "high":
+      return "bg-orange-500 text-white";
+    case "normal":
+      return "bg-blue-500 text-white";
+    case "low":
+      return "bg-muted text-muted-foreground";
+    default:
+      return "bg-muted";
+  }
 }
 
 export function AIInsights() {
   const { toast } = useToast();
   const [chatInput, setChatInput] = useState("");
+  const [timeFilter, setTimeFilter] = useState("all");
+  const [tokenFilter, setTokenFilter] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const { data: insights, isLoading: insightsLoading } = useQuery<AIInsights>({
-    queryKey: ["/api/ai/insights"],
-    refetchInterval: 60000,
-  });
+  const buildEventsUrl = () => {
+    const params = new URLSearchParams();
+    if (timeFilter !== "all") {
+      params.set("sinceMinutes", timeFilter);
+    }
+    if (tokenFilter.trim()) {
+      params.set("token", tokenFilter.trim());
+    }
+    const queryString = params.toString();
+    return queryString ? `/api/ai/events?${queryString}` : "/api/ai/events";
+  };
 
-  const { data: snapshots, isLoading: snapshotsLoading } = useQuery<TokenSnapshot[]>({
-    queryKey: ["/api/ai/snapshots"],
+  const { data: events, isLoading: eventsLoading, refetch: refetchEvents } = useQuery<TokenEvent[]>({
+    queryKey: ["/api/ai/events", timeFilter, tokenFilter],
+    queryFn: async () => {
+      const response = await fetch(buildEventsUrl(), { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch events");
+      return response.json();
+    },
     refetchInterval: 30000,
   });
 
   const { data: chatHistory, isLoading: chatLoading } = useQuery<ChatMessage[]>({
     queryKey: ["/api/ai/chat"],
+  });
+
+  const { data: welcomeMessage } = useQuery<{ message: string }>({
+    queryKey: ["/api/ai/welcome"],
+    enabled: !chatLoading && (!chatHistory || chatHistory.length === 0),
+    staleTime: Infinity,
+  });
+
+  const { data: preferences } = useQuery<UserPreferences>({
+    queryKey: ["/api/ai/preferences"],
   });
 
   const sendMessage = useMutation({
@@ -103,19 +159,8 @@ export function AIInsights() {
     mutationFn: () => apiRequest("DELETE", "/api/ai/chat"),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/chat"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/welcome"] });
       toast({ description: "Chat history cleared" });
-    },
-  });
-
-  const refreshScore = useMutation({
-    mutationFn: (snapshotId: number) => 
-      apiRequest("POST", `/api/ai/snapshots/${snapshotId}/score`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ai/snapshots"] });
-      toast({ description: "Score refreshed" });
-    },
-    onError: () => {
-      toast({ description: "Failed to refresh score", variant: "destructive" });
     },
   });
 
@@ -136,291 +181,218 @@ export function AIInsights() {
     }
   };
 
+  const displayEvents = events || [];
+
   return (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card data-testid="card-stat-tokens-analyzed">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-            <CardTitle className="text-sm font-medium">Tokens Analyzed</CardTitle>
-            <Brain className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {insightsLoading ? (
-              <Skeleton className="h-8 w-24" />
-            ) : (
-              <div className="text-2xl font-bold" data-testid="text-total-tokens">{insights?.totalTokens ?? 0}</div>
-            )}
-            <p className="text-xs text-muted-foreground" data-testid="text-tokens-with-outcomes">
-              {insights?.tokensWithOutcomes ?? 0} with outcomes
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-stat-average-score">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-            <CardTitle className="text-sm font-medium">Average Score</CardTitle>
-            <Target className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {insightsLoading ? (
-              <Skeleton className="h-8 w-24" />
-            ) : (
-              <div className="text-2xl font-bold" data-testid="text-average-score">{insights?.averageScore ?? 0}/100</div>
-            )}
-            <p className="text-xs text-muted-foreground">AI confidence score</p>
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-stat-win-rate">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-            <CardTitle className="text-sm font-medium">Win Rate</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {insightsLoading ? (
-              <Skeleton className="h-8 w-24" />
-            ) : (
-              <div className="text-2xl font-bold" data-testid="text-win-rate">{insights?.winRate ?? 0}%</div>
-            )}
-            <p className="text-xs text-muted-foreground">Trades at 2x+</p>
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-stat-patterns">
-          <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-            <CardTitle className="text-sm font-medium">Patterns</CardTitle>
-            <Sparkles className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {insightsLoading ? (
-              <Skeleton className="h-8 w-24" />
-            ) : (
-              <div className="text-2xl font-bold" data-testid="text-patterns-count">{insights?.topPatterns?.length ?? 0}</div>
-            )}
-            <p className="text-xs text-muted-foreground">Discovered insights</p>
-          </CardContent>
-        </Card>
-      </div>
-
-      {insights?.topPatterns && insights.topPatterns.length > 0 && (
-        <Card data-testid="card-discovered-patterns">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Sparkles className="h-5 w-5" />
-              Discovered Patterns
+    <div className="h-[calc(100vh-180px)] flex flex-col lg:flex-row gap-4">
+      <Card className="flex-1 flex flex-col min-h-0 lg:max-w-md" data-testid="card-events-panel">
+        <CardHeader className="pb-3 flex-shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Zap className="h-4 w-4" />
+              Activity Feed
             </CardTitle>
-            <CardDescription>AI-detected correlations from trading data</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-2" data-testid="list-patterns">
-              {insights.topPatterns.map((pattern, index) => (
-                <li key={index} className="flex items-start gap-2 text-sm" data-testid={`text-pattern-${index}`}>
-                  <CheckCircle className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
-                  {pattern}
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="flex flex-col">
-          <CardHeader>
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="flex items-center gap-2">
-                <MessageSquare className="h-5 w-5" />
-                AI Chat
-              </CardTitle>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => clearChat.mutate()}
-                disabled={clearChat.isPending || !chatHistory?.length}
-                data-testid="button-clear-chat"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-            <CardDescription>Ask questions about token analysis and patterns</CardDescription>
-          </CardHeader>
-          <CardContent className="flex-1 flex flex-col gap-4">
-            <ScrollArea className="flex-1 h-[300px] pr-4">
-              <div className="space-y-4">
-                {chatLoading ? (
-                  <div className="space-y-2">
-                    <Skeleton className="h-12 w-3/4" />
-                    <Skeleton className="h-12 w-2/3 ml-auto" />
-                  </div>
-                ) : chatHistory?.length === 0 ? (
-                  <div className="text-center text-muted-foreground py-8" data-testid="text-chat-empty-state">
-                    <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                    <p>Start a conversation with the AI</p>
-                    <p className="text-xs mt-2">
-                      Try: "What patterns do you see?" or "Which tokens performed best?"
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    {chatHistory?.map((msg, index) => (
-                      <div
-                        key={index}
-                        className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                      >
-                        <div
-                          className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
-                            msg.role === "user"
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted"
-                          }`}
-                          data-testid={`text-chat-message-${index}`}
-                        >
-                          {msg.content}
-                        </div>
-                      </div>
-                    ))}
-                    <div ref={chatEndRef} />
-                  </>
-                )}
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => refetchEvents()}
+              data-testid="button-refresh-events"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="flex gap-2 pt-2">
+            <Select value={timeFilter} onValueChange={setTimeFilter}>
+              <SelectTrigger className="h-8 text-xs w-24" data-testid="select-time-filter">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All time</SelectItem>
+                <SelectItem value="60">1 hour</SelectItem>
+                <SelectItem value="360">6 hours</SelectItem>
+                <SelectItem value="1440">24 hours</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input
+              placeholder="Filter token..."
+              value={tokenFilter}
+              onChange={(e) => setTokenFilter(e.target.value)}
+              className="h-8 text-xs flex-1"
+              data-testid="input-token-filter"
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 min-h-0 pb-3">
+          <ScrollArea className="h-full pr-2">
+            {eventsLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <Skeleton key={i} className="h-16 w-full" />
+                ))}
               </div>
-            </ScrollArea>
-
-            <div className="flex gap-2">
-              <Input
-                placeholder="Ask about token patterns..."
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyPress={handleKeyPress}
-                disabled={sendMessage.isPending}
-                data-testid="input-chat-message"
-              />
-              <Button 
-                onClick={handleSendMessage} 
-                disabled={sendMessage.isPending || !chatInput.trim()}
-                data-testid="button-send-chat"
-              >
-                {sendMessage.isPending ? (
-                  <RefreshCw className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Brain className="h-5 w-5" />
-              Recent Token Analysis
-            </CardTitle>
-            <CardDescription>Latest analyzed tokens with AI scores</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea className="h-[380px]">
-              {snapshotsLoading ? (
-                <div className="space-y-4">
-                  {[1, 2, 3].map((i) => (
-                    <Skeleton key={i} className="h-20 w-full" />
-                  ))}
-                </div>
-              ) : !snapshots?.length ? (
-                <div className="text-center text-muted-foreground py-8" data-testid="text-snapshots-empty-state">
-                  <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No tokens analyzed yet</p>
-                  <p className="text-xs mt-2">Token data will appear when swaps are detected</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {snapshots.slice(0, 10).map((snapshot) => {
-                    let analysis: ScoreResult | null = null;
-                    try {
-                      if (snapshot.aiAnalysis) {
-                        analysis = JSON.parse(snapshot.aiAnalysis);
-                      }
-                    } catch {}
-
-                    return (
-                      <div
-                        key={snapshot.id}
-                        className="border rounded-lg p-3 space-y-2"
-                        data-testid={`card-token-snapshot-${snapshot.id}`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{snapshot.tokenSymbol}</span>
-                            {snapshot.hasTwitter && (
-                              <Twitter className="h-3 w-3 text-blue-400" />
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {snapshot.aiScore !== null && snapshot.aiScore !== undefined ? (
-                              <Badge className={`${getScoreColor(snapshot.aiScore)} text-white`} data-testid={`badge-score-${snapshot.id}`}>
-                                {snapshot.aiScore}/100
-                              </Badge>
-                            ) : (
-                              <Badge variant="secondary" data-testid={`badge-no-score-${snapshot.id}`}>No score</Badge>
-                            )}
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              className="h-6 w-6"
-                              onClick={() => refreshScore.mutate(snapshot.id)}
-                              disabled={refreshScore.isPending}
-                              data-testid={`button-refresh-score-${snapshot.id}`}
-                            >
-                              <RefreshCw className={`h-3 w-3 ${refreshScore.isPending ? 'animate-spin' : ''}`} />
-                            </Button>
-                          </div>
+            ) : displayEvents.length === 0 ? (
+              <div className="text-center text-muted-foreground py-12" data-testid="text-events-empty">
+                <Zap className="h-10 w-10 mx-auto mb-3 opacity-40" />
+                <p className="text-sm font-medium">No events yet</p>
+                <p className="text-xs mt-1">Activity will appear here as tokens move</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {displayEvents.map((event) => (
+                  <div
+                    key={event.id}
+                    className="border rounded-lg p-3 hover-elevate cursor-pointer"
+                    data-testid={`event-item-${event.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className={`p-1.5 rounded ${getPriorityColor(event.priority)}`}>
+                          {getEventIcon(event.eventType)}
                         </div>
-
-                        <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                          <span>MC: {formatNumber(snapshot.marketCap)}</span>
-                          <span>Liq: {formatNumber(snapshot.liquidity)}</span>
-                          {snapshot.tokenAgeMinutes && (
-                            <span>Age: {snapshot.tokenAgeMinutes}m</span>
-                          )}
-                          <span>{formatTimeAgo(snapshot.capturedAt)}</span>
-                        </div>
-
-                        {analysis && (
-                          <div className="space-y-1">
-                            <p className="text-xs text-muted-foreground" data-testid={`text-reasoning-${snapshot.id}`}>{analysis.reasoning}</p>
-                            <div className="flex flex-wrap gap-1">
-                              {analysis.greenFlags?.slice(0, 2).map((flag, i) => (
-                                <Badge key={i} variant="outline" className="text-xs text-green-500 border-green-500/30" data-testid={`badge-green-flag-${snapshot.id}-${i}`}>
-                                  <CheckCircle className="h-3 w-3 mr-1" />
-                                  {flag}
-                                </Badge>
-                              ))}
-                              {analysis.redFlags?.slice(0, 2).map((flag, i) => (
-                                <Badge key={i} variant="outline" className="text-xs text-red-500 border-red-500/30" data-testid={`badge-red-flag-${snapshot.id}-${i}`}>
-                                  <AlertCircle className="h-3 w-3 mr-1" />
-                                  {flag}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {snapshot.finalMultiplier !== null && snapshot.finalMultiplier !== undefined && (
-                          <div className="flex items-center gap-1 text-xs" data-testid={`text-outcome-${snapshot.id}`}>
-                            <TrendingUp className="h-3 w-3" />
-                            <span className={snapshot.finalMultiplier >= 2 ? "text-green-500" : "text-red-500"}>
-                              {snapshot.finalMultiplier.toFixed(2)}x outcome
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <Badge variant="outline" className="text-xs font-mono px-1.5">
+                              {event.tokenSymbol}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {formatTimeAgo(event.createdAt)}
                             </span>
                           </div>
-                        )}
+                          <p className="text-sm font-medium mt-0.5">{event.title}</p>
+                        </div>
                       </div>
-                    );
-                  })}
+                      {event.valueUsd && (
+                        <span className="text-xs font-medium text-muted-foreground">
+                          {formatValue(event.valueUsd)}
+                        </span>
+                      )}
+                    </div>
+                    {event.description && (
+                      <p className="text-xs text-muted-foreground mt-2 pl-9">
+                        {event.description}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </CardContent>
+      </Card>
+
+      <Card className="flex-[1.5] flex flex-col min-h-0" data-testid="card-chat-panel">
+        <CardHeader className="pb-3 flex-shrink-0">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Bot className="h-4 w-4" />
+                Miss Pincher
+              </CardTitle>
+              <CardDescription className="text-xs mt-0.5">
+                Your jaded trading advisor
+              </CardDescription>
+            </div>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => clearChat.mutate()}
+              disabled={clearChat.isPending || !chatHistory?.length}
+              data-testid="button-clear-chat"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="flex-1 flex flex-col gap-3 min-h-0 pb-3">
+          <ScrollArea className="flex-1 pr-3">
+            <div className="space-y-3">
+              {chatLoading ? (
+                <div className="space-y-2">
+                  <Skeleton className="h-12 w-3/4" />
+                  <Skeleton className="h-12 w-2/3 ml-auto" />
+                </div>
+              ) : chatHistory?.length === 0 && welcomeMessage ? (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted" data-testid="text-welcome-message">
+                    {welcomeMessage.message}
+                  </div>
+                </div>
+              ) : chatHistory?.length === 0 ? (
+                <div className="text-center text-muted-foreground py-8" data-testid="text-chat-empty-state">
+                  <Bot className="h-10 w-10 mx-auto mb-3 opacity-40" />
+                  <p className="text-sm">Loading Pincher...</p>
+                </div>
+              ) : (
+                <>
+                  {chatHistory?.map((msg, index) => (
+                    <div
+                      key={index}
+                      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
+                          msg.role === "user"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted"
+                        }`}
+                        data-testid={`text-chat-message-${index}`}
+                      >
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </>
+              )}
+              {sendMessage.isPending && (
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  </div>
                 </div>
               )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      </div>
+            </div>
+          </ScrollArea>
+
+          <div className="flex gap-2 flex-shrink-0">
+            <Input
+              placeholder="Ask Pincher about your tokens..."
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyPress={handleKeyPress}
+              disabled={sendMessage.isPending}
+              className="flex-1"
+              data-testid="input-chat-message"
+            />
+            <Button 
+              onClick={handleSendMessage} 
+              disabled={sendMessage.isPending || !chatInput.trim()}
+              data-testid="button-send-chat"
+            >
+              {sendMessage.isPending ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+
+          {preferences && (preferences.mutedTokens?.length > 0 || preferences.summaryFocus) && (
+            <div className="flex flex-wrap gap-1 text-xs text-muted-foreground flex-shrink-0">
+              {preferences.summaryFocus && (
+                <Badge variant="outline" className="text-xs">
+                  Focus: {preferences.summaryFocus}
+                </Badge>
+              )}
+              {preferences.mutedTokens?.map(token => (
+                <Badge key={token} variant="secondary" className="text-xs">
+                  Muted: {token}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

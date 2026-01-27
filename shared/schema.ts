@@ -124,6 +124,8 @@ export const holdings = pgTable("holdings", {
   sourceWalletSellCount: integer("source_wallet_sell_count"),
   sourceWalletMaxHeldPct: real("source_wallet_max_held_pct"),
   sourceWalletCurrentPct: real("source_wallet_current_pct"),
+  isDead: boolean("is_dead").default(false),
+  isDust: boolean("is_dust").default(false),
 });
 
 // Pending buys - tokens queued for purchase with delay
@@ -490,6 +492,43 @@ export const insertMessageReadStatusSchema = createInsertSchema(messageReadStatu
 
 export type MessageReadStatus = typeof messageReadStatus.$inferSelect;
 export type InsertMessageReadStatus = z.infer<typeof insertMessageReadStatusSchema>;
+
+// Token events table - shared across all users for activity tracking
+export const tokenEvents = pgTable("token_events", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol").notNull(),
+  eventType: text("event_type").notNull(), // price_swing, milestone, lp_change, whale_move, holder_change
+  priority: text("priority").default("normal"), // low, normal, high, critical
+  title: text("title").notNull(),
+  description: text("description"),
+  metadata: jsonb("metadata").$type<Record<string, any>>(),
+  createdAt: integer("created_at").notNull(),
+  priceAtEvent: real("price_at_event"),
+  valueUsd: real("value_usd"),
+  relatedWallet: text("related_wallet"),
+});
+
+export const insertTokenEventSchema = createInsertSchema(tokenEvents).omit({ id: true });
+export type TokenEvent = typeof tokenEvents.$inferSelect;
+export type InsertTokenEvent = z.infer<typeof insertTokenEventSchema>;
+
+// User event preferences - per-user filtering and summary settings
+export const userEventPreferences = pgTable("user_event_preferences", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  minValueThreshold: real("min_value_threshold").default(0),
+  mutedTokens: jsonb("muted_tokens").$type<string[]>().default([]),
+  focusWallets: jsonb("focus_wallets").$type<string[]>().default([]),
+  summaryFocus: text("summary_focus"), // free-text for Pincher summary customization
+  pinchEmailsEnabled: boolean("pinch_emails_enabled").default(true),
+  lastSummaryAt: integer("last_summary_at"),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const insertUserEventPreferencesSchema = createInsertSchema(userEventPreferences).omit({ id: true });
+export type UserEventPreferences = typeof userEventPreferences.$inferSelect;
+export type InsertUserEventPreferences = z.infer<typeof insertUserEventPreferencesSchema>;
 
 // Helius webhook payload types
 export interface HeliusWebhookPayload {
