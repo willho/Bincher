@@ -1,0 +1,208 @@
+import { Connection, PublicKey, Transaction, VersionedTransaction, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { getHotWalletKeypair, getHotWalletBalance } from "./wallet";
+
+const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
+const JUPITER_API = "https://quote-api.jup.ag/v6";
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
+const SLIPPAGE_BPS = 500;
+const PRIORITY_FEE_LAMPORTS = 100000;
+
+interface JupiterQuote {
+  inputMint: string;
+  inAmount: string;
+  outputMint: string;
+  outAmount: string;
+  otherAmountThreshold: string;
+  swapMode: string;
+  slippageBps: number;
+  platformFee: null;
+  priceImpactPct: string;
+  routePlan: any[];
+  contextSlot?: number;
+  timeTaken?: number;
+}
+
+interface SwapResult {
+  success: boolean;
+  signature?: string;
+  inputAmount?: number;
+  outputAmount?: number;
+  tokenMint?: string;
+  error?: string;
+}
+
+export async function getQuote(
+  inputMint: string,
+  outputMint: string,
+  amountInLamports: number
+): Promise<JupiterQuote | null> {
+  try {
+    const url = new URL(`${JUPITER_API}/quote`);
+    url.searchParams.append("inputMint", inputMint);
+    url.searchParams.append("outputMint", outputMint);
+    url.searchParams.append("amount", amountInLamports.toString());
+    url.searchParams.append("slippageBps", SLIPPAGE_BPS.toString());
+    url.searchParams.append("swapMode", "ExactIn");
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      console.error("Jupiter quote error:", await response.text());
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to get Jupiter quote:", error);
+    return null;
+  }
+}
+
+export async function executeSwap(
+  quote: JupiterQuote,
+  keypair: Keypair
+): Promise<SwapResult> {
+  try {
+    const swapBody = {
+      quoteResponse: quote,
+      userPublicKey: keypair.publicKey.toBase58(),
+      wrapAndUnwrapSol: true,
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: PRIORITY_FEE_LAMPORTS,
+    };
+
+    const swapResponse = await fetch(`${JUPITER_API}/swap`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(swapBody),
+    });
+
+    if (!swapResponse.ok) {
+      const errorText = await swapResponse.text();
+      console.error("Jupiter swap request failed:", errorText);
+      return { success: false, error: `Jupiter API error: ${errorText}` };
+    }
+
+    const swapData = await swapResponse.json();
+    const swapTransaction = swapData.swapTransaction;
+
+    if (!swapTransaction) {
+      return { success: false, error: "No transaction returned from Jupiter" };
+    }
+
+    const swapTransactionBuf = Buffer.from(swapTransaction, "base64");
+    const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+
+    transaction.sign([keypair]);
+
+    const connection = new Connection(HELIUS_RPC, "confirmed");
+    
+    const signature = await connection.sendTransaction(transaction, {
+      maxRetries: 3,
+      skipPreflight: true,
+    });
+
+    console.log("Swap transaction sent:", signature);
+
+    const confirmation = await connection.confirmTransaction(signature, "confirmed");
+    
+    if (confirmation.value.err) {
+      console.error("Transaction failed:", confirmation.value.err);
+      return { success: false, signature, error: "Transaction failed on-chain" };
+    }
+
+    console.log("Swap confirmed:", signature);
+
+    return {
+      success: true,
+      signature,
+      inputAmount: parseInt(quote.inAmount) / LAMPORTS_PER_SOL,
+      outputAmount: parseInt(quote.outAmount),
+      tokenMint: quote.outputMint,
+    };
+  } catch (error) {
+    console.error("Swap execution failed:", error);
+    return { success: false, error: String(error) };
+  }
+}
+
+export async function buyToken(
+  tokenMint: string,
+  solAmount: number
+): Promise<SwapResult> {
+  console.log(`Attempting to buy ${tokenMint} with ${solAmount} SOL`);
+
+  const keypair = await getHotWalletKeypair();
+  if (!keypair) {
+    return { success: false, error: "Hot wallet not found or decryption failed" };
+  }
+
+  const balance = await getHotWalletBalance();
+  if (balance < solAmount) {
+    return { 
+      success: false, 
+      error: `Insufficient balance: ${balance.toFixed(4)} SOL < ${solAmount.toFixed(4)} SOL` 
+    };
+  }
+
+  const amountInLamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
+  const quote = await getQuote(SOL_MINT, tokenMint, amountInLamports);
+  
+  if (!quote) {
+    return { success: false, error: "Failed to get quote from Jupiter" };
+  }
+
+  console.log(`Got quote: ${solAmount} SOL -> ${parseInt(quote.outAmount).toLocaleString()} tokens`);
+  console.log(`Price impact: ${quote.priceImpactPct}%`);
+
+  const priceImpact = parseFloat(quote.priceImpactPct);
+  if (priceImpact > 10) {
+    return { 
+      success: false, 
+      error: `Price impact too high: ${priceImpact.toFixed(2)}%` 
+    };
+  }
+
+  return executeSwap(quote, keypair);
+}
+
+export async function sellToken(
+  tokenMint: string,
+  tokenAmount: number
+): Promise<SwapResult> {
+  console.log(`Attempting to sell ${tokenAmount} tokens of ${tokenMint}`);
+
+  const keypair = await getHotWalletKeypair();
+  if (!keypair) {
+    return { success: false, error: "Hot wallet not found or decryption failed" };
+  }
+
+  const quote = await getQuote(tokenMint, SOL_MINT, Math.floor(tokenAmount));
+  
+  if (!quote) {
+    return { success: false, error: "Failed to get quote from Jupiter" };
+  }
+
+  console.log(`Got quote: ${tokenAmount.toLocaleString()} tokens -> ${parseInt(quote.outAmount) / LAMPORTS_PER_SOL} SOL`);
+
+  return executeSwap(quote, keypair);
+}
+
+export async function getTokenPrice(tokenMint: string): Promise<number | null> {
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
+    if (!response.ok) return null;
+    
+    const data = await response.json();
+    if (data.pairs && data.pairs.length > 0) {
+      const sortedPairs = data.pairs.sort((a: any, b: any) => 
+        (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
+      );
+      return parseFloat(sortedPairs[0].priceUsd);
+    }
+    return null;
+  } catch (error) {
+    console.error("Failed to get token price:", error);
+    return null;
+  }
+}

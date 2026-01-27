@@ -19,6 +19,8 @@ import {
   addPendingBuy,
   hasTokenBeenBought
 } from "./wallet";
+import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
+import { startPriceMonitor } from "./price-monitor";
 
 let wss: WebSocketServer;
 
@@ -369,6 +371,12 @@ export async function registerRoutes(
 
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
+  
+  // Start the trade processor to handle pending buys
+  startTradeProcessor();
+  
+  // Start the price monitor to check holdings and trigger reclaims
+  startPriceMonitor();
 
   return httpServer;
 }
