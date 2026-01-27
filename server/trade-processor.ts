@@ -37,6 +37,13 @@ export async function processPendingBuys(): Promise<void> {
       );
 
     for (const pending of readyBuys) {
+      if (pending.triggerReason?.startsWith("processing:")) {
+        console.log(`Recovering stuck pending buy for ${pending.tokenSymbol}...`);
+        await db.update(pendingBuys).set({
+          triggerReason: null,
+        }).where(eq(pendingBuys.id, pending.id));
+      }
+      
       console.log(`Processing pending buy for ${pending.tokenSymbol}...`);
       await executePendingBuy(pending.id, "timer_expired");
     }
@@ -74,8 +81,7 @@ export async function executePendingBuy(
     }
 
     await db.update(pendingBuys).set({
-      buyTriggered: true,
-      triggerReason,
+      triggerReason: `processing:${triggerReason}`,
     }).where(eq(pendingBuys.id, pendingId));
 
     const config = await getTradeConfig();
@@ -118,6 +124,11 @@ export async function executePendingBuy(
       highestMultiplier: 1,
       alertedMilestones: [],
     });
+
+    await db.update(pendingBuys).set({
+      buyTriggered: true,
+      triggerReason: `completed:${triggerReason}`,
+    }).where(eq(pendingBuys.id, pendingId));
 
     console.log(`Successfully bought ${buy.tokenSymbol}:`);
     console.log(`  Signature: ${result.signature}`);

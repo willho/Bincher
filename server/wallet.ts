@@ -5,23 +5,49 @@ import type { HotWallet, TradeConfig, Holding, PendingBuy } from "@shared/schema
 import { eq } from "drizzle-orm";
 import * as crypto from "crypto";
 
-const ENCRYPTION_KEY = process.env.SESSION_SECRET || "default-encryption-key-32chars!";
+if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+  console.error("CRITICAL: SESSION_SECRET must be set and at least 32 characters for secure key encryption");
+}
+
+const ENCRYPTION_KEY = process.env.SESSION_SECRET || "";
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 function encrypt(text: string): string {
-  const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+    throw new Error("SESSION_SECRET is required for wallet encryption");
+  }
+  const salt = crypto.randomBytes(16);
+  const key = crypto.scryptSync(ENCRYPTION_KEY, salt, 32);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
-  return iv.toString('hex') + ':' + encrypted;
+  const authTag = cipher.getAuthTag();
+  return salt.toString('hex') + ':' + iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
 }
 
 function decrypt(encrypted: string): string {
-  const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
-  const [ivHex, encryptedText] = encrypted.split(':');
+  if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+    throw new Error("SESSION_SECRET is required for wallet decryption");
+  }
+  const parts = encrypted.split(':');
+  if (parts.length === 2) {
+    const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
+    const [ivHex, encryptedText] = parts;
+    const iv = Buffer.from(ivHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  }
+  
+  const [saltHex, ivHex, authTagHex, encryptedText] = parts;
+  const salt = Buffer.from(saltHex, 'hex');
   const iv = Buffer.from(ivHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+  const authTag = Buffer.from(authTagHex, 'hex');
+  const key = crypto.scryptSync(ENCRYPTION_KEY, salt, 32);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
   let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
   decrypted += decipher.final('utf8');
   return decrypted;

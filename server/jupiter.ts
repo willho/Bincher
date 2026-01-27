@@ -8,6 +8,39 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 const SLIPPAGE_BPS = 500;
 const PRIORITY_FEE_LAMPORTS = 100000;
 
+const MIN_REQUEST_INTERVAL_MS = 500;
+const MAX_REQUESTS_PER_MINUTE = 30;
+let lastRequestTime = 0;
+let requestsInLastMinute = 0;
+let minuteStartTime = Date.now();
+
+async function rateLimitedFetch(url: string, options?: RequestInit): Promise<Response> {
+  const now = Date.now();
+  
+  if (now - minuteStartTime > 60000) {
+    minuteStartTime = now;
+    requestsInLastMinute = 0;
+  }
+  
+  if (requestsInLastMinute >= MAX_REQUESTS_PER_MINUTE) {
+    const waitTime = 60000 - (now - minuteStartTime);
+    console.log(`Rate limit reached, waiting ${waitTime}ms`);
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+    minuteStartTime = Date.now();
+    requestsInLastMinute = 0;
+  }
+  
+  const timeSinceLastRequest = now - lastRequestTime;
+  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL_MS) {
+    await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - timeSinceLastRequest));
+  }
+  
+  lastRequestTime = Date.now();
+  requestsInLastMinute++;
+  
+  return fetch(url, options);
+}
+
 interface JupiterQuote {
   inputMint: string;
   inAmount: string;
@@ -45,7 +78,7 @@ export async function getQuote(
     url.searchParams.append("slippageBps", SLIPPAGE_BPS.toString());
     url.searchParams.append("swapMode", "ExactIn");
 
-    const response = await fetch(url.toString());
+    const response = await rateLimitedFetch(url.toString());
     if (!response.ok) {
       console.error("Jupiter quote error:", await response.text());
       return null;
@@ -71,7 +104,7 @@ export async function executeSwap(
       prioritizationFeeLamports: PRIORITY_FEE_LAMPORTS,
     };
 
-    const swapResponse = await fetch(`${JUPITER_API}/swap`, {
+    const swapResponse = await rateLimitedFetch(`${JUPITER_API}/swap`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(swapBody),
@@ -190,7 +223,7 @@ export async function sellToken(
 
 export async function getTokenPrice(tokenMint: string): Promise<number | null> {
   try {
-    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
+    const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
     if (!response.ok) return null;
     
     const data = await response.json();
