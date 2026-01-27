@@ -7,7 +7,7 @@ const DEFAULT_EMAIL = "";
 
 export interface IStorage {
   getSwaps(userId: number): Promise<Swap[]>;
-  getSwapBySignature(signature: string): Promise<Swap | undefined>;
+  getSwapBySignature(signature: string, userId?: number): Promise<Swap | undefined>;
   addSwap(swap: InsertSwap): Promise<Swap>;
   markSwapNotified(id: string): Promise<void>;
   
@@ -55,12 +55,16 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
-  async getSwapBySignature(signature: string): Promise<Swap | undefined> {
-    const rows = await db.select().from(swaps).where(eq(swaps.signature, signature)).limit(1);
+  async getSwapBySignature(signature: string, userId?: number): Promise<Swap | undefined> {
+    const conditions = userId 
+      ? and(eq(swaps.signature, signature), eq(swaps.userId, userId))
+      : eq(swaps.signature, signature);
+    const rows = await db.select().from(swaps).where(conditions).limit(1);
     if (rows.length === 0) return undefined;
     const row = rows[0];
     return {
       id: String(row.id),
+      userId: row.userId ?? undefined,
       signature: row.signature,
       timestamp: row.timestamp,
       type: row.type,

@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress } from "./helius";
 import { sendSwapNotification } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
@@ -296,13 +296,6 @@ export async function registerRoutes(
           continue;
         }
 
-        // Check if we already processed this transaction
-        const existing = await storage.getSwapBySignature(payload.signature);
-        if (existing) {
-          console.log("Swap already processed:", payload.signature);
-          continue;
-        }
-
         // Extract wallet address that made the swap
         const swapWalletAddress = getSwapWalletAddress(payload);
         if (!swapWalletAddress) {
@@ -310,10 +303,17 @@ export async function registerRoutes(
           continue;
         }
 
-        // Look up which user is monitoring this wallet
+        // Look up which user is monitoring this wallet (only enabled wallets)
         const userId = await storage.getUserIdByWalletAddress(swapWalletAddress);
         if (!userId) {
           console.log("No user monitoring wallet:", swapWalletAddress);
+          continue;
+        }
+
+        // Check if we already processed this transaction for this user
+        const existing = await storage.getSwapBySignature(payload.signature, userId);
+        if (existing) {
+          console.log("Swap already processed for user:", userId, payload.signature);
           continue;
         }
 
@@ -424,9 +424,16 @@ export async function registerRoutes(
     }
   });
 
-  // Get wallet address
-  app.get("/api/wallet", (req, res) => {
-    res.json({ address: getWalletAddress() });
+  // Get user's monitored wallet addresses
+  app.get("/api/wallet", requireAuth, async (req: AuthenticatedRequest, res) => {
+    const userId = req.userId!;
+    const wallets = await storage.getMonitoredWallets(userId);
+    const addresses = wallets.map(w => w.walletAddress);
+    // Return first wallet for backward compatibility, plus full list
+    res.json({ 
+      address: addresses.length > 0 ? addresses[0] : null,
+      addresses: addresses
+    });
   });
 
   // ==================== Monitored Wallets Routes ====================
@@ -442,8 +449,11 @@ export async function registerRoutes(
       const allWallets = await storage.getAllMonitoredWallets();
       const walletAddresses = allWallets.map(w => w.walletAddress);
       
+      // If no wallets to monitor, deactivate monitoring
       if (walletAddresses.length === 0) {
-        return res.json({ success: true, message: "No wallets to monitor" });
+        await deleteWebhook(status.webhookId);
+        await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
+        return res.json({ success: true, message: "No wallets to monitor, monitoring deactivated" });
       }
       
       const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
