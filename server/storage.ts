@@ -258,6 +258,16 @@ export class DatabaseStorage implements IStorage {
     return rows.length > 0 ? rows[0].userId : null;
   }
 
+  async getMonitoredWalletByAddress(walletAddress: string): Promise<MonitoredWallet | null> {
+    const rows = await db.select().from(monitoredWallets)
+      .where(and(
+        eq(monitoredWallets.walletAddress, walletAddress), 
+        eq(monitoredWallets.enabled, true)
+      ))
+      .limit(1);
+    return rows.length > 0 ? rows[0] : null;
+  }
+
   async getAllEnabledMonitoredWallets(): Promise<MonitoredWallet[]> {
     return await db.select().from(monitoredWallets).where(eq(monitoredWallets.enabled, true));
   }

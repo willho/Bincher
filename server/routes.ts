@@ -483,13 +483,21 @@ export async function registerRoutes(
         if (tradeConf.enabled && swap.fromTokenSymbol === "SOL") {
           const alreadyBought = await hasTokenBeenBought(userId, swap.toToken);
           if (!alreadyBought) {
+            // Get the monitored wallet details for source tracking
+            const sourceWallet = await storage.getMonitoredWalletByAddress(swapWalletAddress);
+            
             const pendingBuy = await addPendingBuy(
               userId,
               swap.toToken,
               swap.toTokenSymbol,
               toTokenMetadata?.name,
               toTokenMetadata?.priceUsd,
-              toTokenMetadata?.liquidity
+              toTokenMetadata?.liquidity,
+              {
+                swapId: savedSwap.id,
+                walletAddress: swapWalletAddress,
+                walletLabel: sourceWallet?.label || undefined,
+              }
             );
             if (pendingBuy) {
               console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol, "for user:", userId);

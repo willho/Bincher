@@ -117,6 +117,13 @@ export const holdings = pgTable("holdings", {
   dumpAlertSent: boolean("dump_alert_sent").default(false),
   tokenWalletPublicKey: text("token_wallet_public_key"),
   tokenWalletEncryptedKey: text("token_wallet_encrypted_key"),
+  sourceSwapId: integer("source_swap_id"),
+  sourceWalletAddress: text("source_wallet_address"),
+  sourceWalletLabel: text("source_wallet_label"),
+  sourceWalletBuyCount: integer("source_wallet_buy_count"),
+  sourceWalletSellCount: integer("source_wallet_sell_count"),
+  sourceWalletMaxHeldPct: real("source_wallet_max_held_pct"),
+  sourceWalletCurrentPct: real("source_wallet_current_pct"),
 });
 
 // Pending buys - tokens queued for purchase with delay
@@ -145,6 +152,9 @@ export const pendingBuys = pgTable("pending_buys", {
   tokenWalletEncryptedKey: text("token_wallet_encrypted_key"),
   snapshotId: integer("snapshot_id"),
   aiScore: integer("ai_score"),
+  sourceSwapId: integer("source_swap_id"),
+  sourceWalletAddress: text("source_wallet_address"),
+  sourceWalletLabel: text("source_wallet_label"),
 });
 
 // Trade config - settings for copy trading

@@ -324,7 +324,8 @@ export async function addPendingBuy(
   tokenSymbol: string,
   tokenName: string | undefined,
   initialPrice: number | undefined,
-  liquidity: number | undefined
+  liquidity: number | undefined,
+  sourceWalletData?: { swapId?: number; walletAddress?: string; walletLabel?: string }
 ): Promise<PendingBuy | null> {
   const alreadyBought = await hasTokenBeenBought(userId, tokenMint);
   if (alreadyBought) {
@@ -414,6 +415,9 @@ export async function addPendingBuy(
       solAmount: segmentSol,
       tokenWalletPublicKey: tokenWallet.publicKey,
       tokenWalletEncryptedKey: tokenWallet.encryptedPrivateKey,
+      sourceSwapId: sourceWalletData?.swapId,
+      sourceWalletAddress: sourceWalletData?.walletAddress,
+      sourceWalletLabel: sourceWalletData?.walletLabel,
     }).returning();
     
     // First segment becomes the parent for subsequent segments

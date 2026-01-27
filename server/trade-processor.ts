@@ -243,6 +243,9 @@ export async function executePendingBuy(
         alertedMilestones: [],
         tokenWalletPublicKey: tokenWallet.publicKey,
         tokenWalletEncryptedKey: tokenWallet.encryptedPrivateKey,
+        sourceSwapId: buy.sourceSwapId,
+        sourceWalletAddress: buy.sourceWalletAddress,
+        sourceWalletLabel: buy.sourceWalletLabel,
       });
       
       console.log(`Created holding for ${buy.tokenSymbol}${segmentInfo}`);
