@@ -110,6 +110,8 @@ export function AIInsights() {
   const [tokenFilter, setTokenFilter] = useState("");
   const [cooldownUntil, setCooldownUntil] = useState(0);
   const [now, setNow] = useState(Date.now());
+  const [hasAutoSummarized, setHasAutoSummarized] = useState(false);
+  const [lastAutoSummarizeFilters, setLastAutoSummarizeFilters] = useState("");
   const chatEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
@@ -160,6 +162,9 @@ export function AIInsights() {
     queryKey: ["/api/ai/preferences"],
   });
 
+  const canSummarize = now >= cooldownUntil;
+  const cooldownRemaining = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
+
   const sendMessage = useMutation({
     mutationFn: (message: string) => apiRequest("POST", "/api/ai/chat", { message }),
     onSuccess: () => {
@@ -181,14 +186,14 @@ export function AIInsights() {
   });
 
   const summarizeEvents = useMutation({
-    mutationFn: () => {
+    mutationFn: (customPrompt?: string) => {
       const eventCount = events?.length ?? 0;
       const filterDesc = tokenFilter 
         ? `filtered for "${tokenFilter}"` 
         : timeFilter !== "all" 
           ? `from the last ${timeFilter === "60" ? "hour" : timeFilter === "360" ? "6 hours" : "24 hours"}`
           : "all";
-      const prompt = `Summarize the ${eventCount} events I'm seeing (${filterDesc}). What patterns do you notice? Any concerns or opportunities?`;
+      const prompt = customPrompt || `Summarize the ${eventCount} events I'm seeing (${filterDesc}). What patterns do you notice? Any concerns or opportunities?`;
       return apiRequest("POST", "/api/ai/chat", { message: prompt });
     },
     onSuccess: () => {
@@ -201,8 +206,37 @@ export function AIInsights() {
     },
   });
 
-  const canSummarize = now >= cooldownUntil;
-  const cooldownRemaining = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
+  const currentFilters = `${timeFilter}:${tokenFilter}`;
+  
+  useEffect(() => {
+    if (lastAutoSummarizeFilters !== currentFilters) {
+      setHasAutoSummarized(false);
+      setLastAutoSummarizeFilters(currentFilters);
+    }
+  }, [currentFilters, lastAutoSummarizeFilters]);
+
+  useEffect(() => {
+    if (
+      !hasAutoSummarized &&
+      !eventsLoading &&
+      !chatLoading &&
+      !summarizeEvents.isPending &&
+      canSummarize &&
+      events &&
+      chatHistory &&
+      chatHistory.length === 0
+    ) {
+      const highPriorityCount = events.filter(e => e.priority === "high" || e.priority === "critical").length;
+      const shouldSummarize = highPriorityCount > 0 || events.length >= 5;
+      
+      if (shouldSummarize) {
+        setHasAutoSummarized(true);
+        setLastAutoSummarizeFilters(currentFilters);
+        const prompt = `I just opened AI Insights and see ${events.length} events (${highPriorityCount} high priority). Give me a quick rundown of what's happening.`;
+        summarizeEvents.mutate(prompt);
+      }
+    }
+  }, [events, eventsLoading, chatHistory, chatLoading, canSummarize, hasAutoSummarized, summarizeEvents.isPending, currentFilters]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
