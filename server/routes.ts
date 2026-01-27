@@ -28,7 +28,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings } from "@shared/schema";
+import { holdings, monitoredWallets } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -592,6 +592,192 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Community Wallets Routes ====================
+
+  // Get community wallets (approved shared wallets from other users)
+  app.get("/api/community-wallets", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      // Get all approved shared wallets (excluding user's own)
+      const approvedWallets = await db.select()
+        .from(monitoredWallets)
+        .where(and(
+          eq(monitoredWallets.isShared, true),
+          eq(monitoredWallets.shareStatus, "approved")
+        ));
+
+      // Group by wallet address and aggregate scores
+      const walletMap = new Map<string, {
+        walletAddress: string;
+        label: string;
+        aiScore: number | null;
+        aiScoreDetails: string | null;
+        monitoredByCount: number;
+        isMonitoredByUser: boolean;
+      }>();
+
+      // Get user's own wallets to check if already monitoring
+      const userWallets = await db.select()
+        .from(monitoredWallets)
+        .where(eq(monitoredWallets.userId, req.userId!));
+      const userWalletAddresses = new Set(userWallets.map(w => w.walletAddress));
+
+      for (const wallet of approvedWallets) {
+        const existing = walletMap.get(wallet.walletAddress);
+        if (existing) {
+          existing.monitoredByCount++;
+          // Keep highest score
+          if (wallet.aiScore && (!existing.aiScore || wallet.aiScore > existing.aiScore)) {
+            existing.aiScore = wallet.aiScore;
+            existing.aiScoreDetails = wallet.aiScoreDetails;
+          }
+        } else {
+          walletMap.set(wallet.walletAddress, {
+            walletAddress: wallet.walletAddress,
+            label: wallet.label || wallet.walletAddress.slice(0, 8) + "...",
+            aiScore: wallet.aiScore,
+            aiScoreDetails: wallet.aiScoreDetails,
+            monitoredByCount: 1,
+            isMonitoredByUser: userWalletAddresses.has(wallet.walletAddress),
+          });
+        }
+      }
+
+      // Convert to array and sort by score
+      const communityWallets = Array.from(walletMap.values())
+        .filter(w => !w.isMonitoredByUser) // Exclude wallets user already monitors
+        .sort((a, b) => (b.aiScore || 0) - (a.aiScore || 0));
+
+      res.json(communityWallets);
+    } catch (error) {
+      console.error("Error fetching community wallets:", error);
+      res.status(500).json({ error: "Failed to fetch community wallets" });
+    }
+  });
+
+  // Submit wallet for community sharing (requires admin approval)
+  app.post("/api/monitored-wallets/:id/share", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      // Verify ownership
+      const wallet = await db.select()
+        .from(monitoredWallets)
+        .where(and(
+          eq(monitoredWallets.id, walletId),
+          eq(monitoredWallets.userId, req.userId!)
+        ))
+        .limit(1);
+
+      if (wallet.length === 0) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+
+      // Update to pending status
+      await db.update(monitoredWallets)
+        .set({ isShared: true, shareStatus: "pending" })
+        .where(eq(monitoredWallets.id, walletId));
+
+      // Score the wallet asynchronously
+      const { scoreWallet } = await import("./ai");
+      scoreWallet(wallet[0].walletAddress).then(async (score) => {
+        if (score) {
+          await db.update(monitoredWallets)
+            .set({
+              aiScore: score.score,
+              aiScoreDetails: JSON.stringify(score),
+              aiScoreUpdatedAt: Math.floor(Date.now() / 1000),
+            })
+            .where(eq(monitoredWallets.id, walletId));
+        }
+      }).catch(err => console.error("Error scoring wallet:", err));
+
+      res.json({ success: true, message: "Submitted for community sharing approval" });
+    } catch (error) {
+      console.error("Error submitting wallet for sharing:", error);
+      res.status(500).json({ error: "Failed to submit wallet for sharing" });
+    }
+  });
+
+  // Cancel community sharing request
+  app.post("/api/monitored-wallets/:id/unshare", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      // Verify ownership
+      const wallet = await db.select()
+        .from(monitoredWallets)
+        .where(and(
+          eq(monitoredWallets.id, walletId),
+          eq(monitoredWallets.userId, req.userId!)
+        ))
+        .limit(1);
+
+      if (wallet.length === 0) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+
+      await db.update(monitoredWallets)
+        .set({ isShared: false, shareStatus: "none" })
+        .where(eq(monitoredWallets.id, walletId));
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error unsharing wallet:", error);
+      res.status(500).json({ error: "Failed to unshare wallet" });
+    }
+  });
+
+  // Add a community wallet to user's monitored list
+  app.post("/api/community-wallets/add", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { walletAddress, label } = req.body;
+      
+      if (!walletAddress) {
+        return res.status(400).json({ error: "Wallet address is required" });
+      }
+
+      // Check if user already monitors this wallet
+      const existing = await db.select()
+        .from(monitoredWallets)
+        .where(and(
+          eq(monitoredWallets.userId, req.userId!),
+          eq(monitoredWallets.walletAddress, walletAddress)
+        ))
+        .limit(1);
+
+      if (existing.length > 0) {
+        return res.status(400).json({ error: "You are already monitoring this wallet" });
+      }
+
+      // Add to user's monitored wallets
+      const [newWallet] = await db.insert(monitoredWallets)
+        .values({
+          userId: req.userId!,
+          walletAddress,
+          label: label || walletAddress.slice(0, 8) + "...",
+          enabled: true,
+          createdAt: Math.floor(Date.now() / 1000),
+          isShared: false,
+          shareStatus: "none",
+        })
+        .returning();
+
+      // Sync webhook
+      const status = await storage.getMonitoringStatus();
+      if (status.isActive && status.webhookId) {
+        const allWallets = await storage.getAllMonitoredWallets();
+        const walletAddresses = allWallets.map(w => w.walletAddress);
+        const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
+        await updateWebhookUrl(status.webhookId, webhookUrl, walletAddresses);
+      }
+
+      res.json(newWallet);
+    } catch (error) {
+      console.error("Error adding community wallet:", error);
+      res.status(500).json({ error: "Failed to add wallet" });
+    }
+  });
+
   app.get("/api/monitored-wallets", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const wallets = await storage.getMonitoredWallets(req.userId!);
@@ -1114,6 +1300,103 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting stats:", error);
       res.status(500).json({ error: "Failed to get stats" });
+    }
+  });
+
+  // ==================== Admin Wallet Approval Routes ====================
+
+  // Get pending wallet submissions (admin only)
+  app.get("/api/admin/pending-wallets", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const pendingWallets = await db.select()
+        .from(monitoredWallets)
+        .where(and(
+          eq(monitoredWallets.isShared, true),
+          eq(monitoredWallets.shareStatus, "pending")
+        ));
+
+      // Get user info for each wallet
+      const walletsWithInfo = await Promise.all(pendingWallets.map(async (wallet) => {
+        const user = await storage.getUserById(wallet.userId);
+        return {
+          ...wallet,
+          username: user?.username || "Unknown",
+          aiScoreDetails: wallet.aiScoreDetails ? JSON.parse(wallet.aiScoreDetails) : null,
+        };
+      }));
+
+      res.json(walletsWithInfo);
+    } catch (error) {
+      console.error("Error getting pending wallets:", error);
+      res.status(500).json({ error: "Failed to get pending wallets" });
+    }
+  });
+
+  // Approve wallet for community sharing (admin only)
+  app.post("/api/admin/wallets/:id/approve", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      await db.update(monitoredWallets)
+        .set({ shareStatus: "approved" })
+        .where(eq(monitoredWallets.id, walletId));
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error approving wallet:", error);
+      res.status(500).json({ error: "Failed to approve wallet" });
+    }
+  });
+
+  // Reject wallet for community sharing (admin only)
+  app.post("/api/admin/wallets/:id/reject", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      await db.update(monitoredWallets)
+        .set({ shareStatus: "rejected" })
+        .where(eq(monitoredWallets.id, walletId));
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error rejecting wallet:", error);
+      res.status(500).json({ error: "Failed to reject wallet" });
+    }
+  });
+
+  // Refresh AI score for a wallet (admin only)
+  app.post("/api/admin/wallets/:id/rescore", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      const wallet = await db.select()
+        .from(monitoredWallets)
+        .where(eq(monitoredWallets.id, walletId))
+        .limit(1);
+
+      if (wallet.length === 0) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+
+      const { scoreWallet } = await import("./ai");
+      const score = await scoreWallet(wallet[0].walletAddress);
+
+      if (score) {
+        await db.update(monitoredWallets)
+          .set({
+            aiScore: score.score,
+            aiScoreDetails: JSON.stringify(score),
+            aiScoreUpdatedAt: Math.floor(Date.now() / 1000),
+          })
+          .where(eq(monitoredWallets.id, walletId));
+
+        res.json({ success: true, score });
+      } else {
+        res.status(500).json({ error: "Failed to score wallet" });
+      }
+    } catch (error) {
+      console.error("Error rescoring wallet:", error);
+      res.status(500).json({ error: "Failed to rescore wallet" });
     }
   });
 
