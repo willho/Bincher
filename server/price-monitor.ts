@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { holdings, pendingBuys, tradeConfig } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
-import { getTradeConfig } from "./wallet";
+import { getTradeConfig, getAllHoldings } from "./wallet";
 import { sellToken, getTokenPrice } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
@@ -23,24 +23,28 @@ export async function checkPricesAndReclaim(): Promise<void> {
   isPriceMonitorRunning = true;
   
   try {
-    const config = await getTradeConfig();
-    if (!config.enabled) {
-      return;
-    }
-
     const holdingsList = await db.select().from(holdings);
     
     for (const holding of holdingsList) {
-      const lastCheck = tokenCheckTimestamps.get(holding.tokenMint) || 0;
+      if (!holding.userId) {
+        continue;
+      }
+      
+      const config = await getTradeConfig(holding.userId);
+      if (!config.enabled) {
+        continue;
+      }
+      
+      const lastCheck = tokenCheckTimestamps.get(`${holding.userId}_${holding.tokenMint}`) || 0;
       const now = Date.now();
       
       if (now - lastCheck < MIN_CHECK_INTERVAL_PER_TOKEN_MS) {
         continue;
       }
       
-      tokenCheckTimestamps.set(holding.tokenMint, now);
+      tokenCheckTimestamps.set(`${holding.userId}_${holding.tokenMint}`, now);
       
-      await checkHoldingPrice(holding, config);
+      await checkHoldingPrice(holding, holding.userId, config);
     }
 
     const pendingBuysList = await db.select()
@@ -53,16 +57,16 @@ export async function checkPricesAndReclaim(): Promise<void> {
       );
     
     for (const pending of pendingBuysList) {
-      if (!pending.initialPrice) continue;
+      if (!pending.initialPrice || !pending.userId) continue;
       
-      const lastCheck = tokenCheckTimestamps.get(`pending_${pending.tokenMint}`) || 0;
+      const lastCheck = tokenCheckTimestamps.get(`pending_${pending.userId}_${pending.tokenMint}`) || 0;
       const now = Date.now();
       
       if (now - lastCheck < MIN_CHECK_INTERVAL_PER_TOKEN_MS) {
         continue;
       }
       
-      tokenCheckTimestamps.set(`pending_${pending.tokenMint}`, now);
+      tokenCheckTimestamps.set(`pending_${pending.userId}_${pending.tokenMint}`, now);
       
       const currentPrice = await getTokenPrice(pending.tokenMint);
       if (currentPrice) {
@@ -79,11 +83,11 @@ export async function checkPricesAndReclaim(): Promise<void> {
 
 async function checkHoldingPrice(
   holding: typeof holdings.$inferSelect,
+  userId: number,
   config: Awaited<ReturnType<typeof getTradeConfig>>
 ): Promise<void> {
   try {
     const currentPrice = await getTokenPrice(holding.tokenMint);
-    // Guard against invalid prices to prevent division errors
     if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
       return;
     }
@@ -109,7 +113,7 @@ async function checkHoldingPrice(
     for (const milestone of milestones) {
       if (multiplier >= milestone && !alertedMilestones.includes(milestone)) {
         console.log(`Milestone reached for ${holding.tokenSymbol}: ${milestone}x`);
-        await sendMilestoneAlert(holding, milestone, multiplier, currentPrice);
+        await sendMilestoneAlert(userId, holding, milestone, multiplier, currentPrice);
         
         const newAlerted = [...alertedMilestones, milestone];
         await db.update(holdings).set({
@@ -120,29 +124,27 @@ async function checkHoldingPrice(
 
     const reclaimedMilestones = (holding.reclaimedMilestones as number[]) || [];
     
-    // Check both reclaimed flag AND milestones array for 4x to prevent duplicates
     const has4xReclaim = holding.reclaimed || reclaimedMilestones.includes(4);
     
     if (!has4xReclaim && multiplier >= config.reclaimMultiplier) {
       console.log(`Reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${config.reclaimMultiplier}x`);
-      await executeReclaim(holding, currentPrice, config.reclaimMultiplier, "initial");
+      await executeReclaim(userId, holding, currentPrice, config.reclaimMultiplier, "initial");
     }
     
     const progressiveMilestones = [10, 100, 1000, 10000, 100000];
     for (const milestone of progressiveMilestones) {
       if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
         console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x`);
-        await executeProgressiveReclaim(holding, currentPrice, milestone);
+        await executeProgressiveReclaim(userId, holding, currentPrice, milestone);
         break;
       }
     }
     
-    // Check for dump alert (price dropped significantly from buy price)
     if (config.dumpAlertEnabled && !holding.dumpAlertSent) {
       const lossPercent = ((holding.buyPrice - currentPrice) / holding.buyPrice) * 100;
       if (lossPercent >= config.dumpAlertThreshold) {
         console.log(`Dump alert for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss`);
-        await sendDumpAlert(holding, multiplier, currentPrice, lossPercent);
+        await sendDumpAlert(userId, holding, multiplier, currentPrice, lossPercent);
         await db.update(holdings).set({
           dumpAlertSent: true,
         }).where(eq(holdings.id, holding.id));
@@ -155,13 +157,13 @@ async function checkHoldingPrice(
 }
 
 async function executeReclaim(
+  userId: number,
   holding: typeof holdings.$inferSelect,
   currentPrice: number,
   reclaimMultiplier: number,
   type: "initial" | "progressive"
 ): Promise<void> {
   try {
-    // Validate price is positive and finite
     if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
       console.log(`Invalid price for ${holding.tokenSymbol}: ${currentPrice}`);
       return;
@@ -169,7 +171,6 @@ async function executeReclaim(
     
     const tokensToSell = (holding.solSpent * 2 / currentPrice);
     
-    // Validate tokens to sell is positive and doesn't exceed available
     if (!isFinite(tokensToSell) || tokensToSell <= 0) {
       console.log(`Invalid tokens to sell for ${holding.tokenSymbol}: ${tokensToSell}`);
       return;
@@ -182,7 +183,7 @@ async function executeReclaim(
 
     console.log(`Executing initial reclaim for ${holding.tokenSymbol}: selling ${tokensToSell.toLocaleString()} tokens`);
 
-    const result = await sellToken(holding.tokenMint, tokensToSell);
+    const result = await sellToken(userId, holding.tokenMint, tokensToSell);
     
     if (!result.success) {
       console.error(`Reclaim failed for ${holding.tokenSymbol}:`, result.error);
@@ -209,7 +210,7 @@ async function executeReclaim(
     console.log(`  SOL received: ~${result.inputAmount} SOL`);
     console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
 
-    await sendReclaimNotification(holding, tokensToSell, result.inputAmount || 0, reclaimMultiplier, result.signature, "initial");
+    await sendReclaimNotification(userId, holding, tokensToSell, result.inputAmount || 0, reclaimMultiplier, result.signature, "initial");
 
   } catch (error) {
     console.error(`Error executing reclaim for ${holding.tokenSymbol}:`, error);
@@ -217,12 +218,12 @@ async function executeReclaim(
 }
 
 async function executeProgressiveReclaim(
+  userId: number,
   holding: typeof holdings.$inferSelect,
   currentPrice: number,
   milestone: number
 ): Promise<void> {
   try {
-    // Validate price and current amount
     if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
       console.log(`Invalid price for progressive reclaim ${holding.tokenSymbol}: ${currentPrice}`);
       return;
@@ -242,7 +243,7 @@ async function executeProgressiveReclaim(
 
     console.log(`Executing progressive reclaim for ${holding.tokenSymbol} at ${milestone}x: selling ${tokensToSell.toLocaleString()} tokens (10%)`);
 
-    const result = await sellToken(holding.tokenMint, tokensToSell);
+    const result = await sellToken(userId, holding.tokenMint, tokensToSell);
     
     if (!result.success) {
       console.error(`Progressive reclaim failed for ${holding.tokenSymbol}:`, result.error);
@@ -268,7 +269,7 @@ async function executeProgressiveReclaim(
     console.log(`  SOL received: ~${result.inputAmount} SOL`);
     console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
 
-    await sendReclaimNotification(holding, tokensToSell, result.inputAmount || 0, milestone, result.signature, "progressive");
+    await sendReclaimNotification(userId, holding, tokensToSell, result.inputAmount || 0, milestone, result.signature, "progressive");
 
   } catch (error) {
     console.error(`Error executing progressive reclaim for ${holding.tokenSymbol}:`, error);
@@ -276,12 +277,13 @@ async function executeProgressiveReclaim(
 }
 
 async function sendMilestoneAlert(
+  userId: number,
   holding: typeof holdings.$inferSelect,
   milestone: number,
   currentMultiplier: number,
   currentPrice: number
 ): Promise<void> {
-  const settings = await storage.getNotificationSettings();
+  const settings = await storage.getNotificationSettings(userId);
   if (!settings?.enabled || !settings.emails?.length) {
     return;
   }
@@ -348,6 +350,7 @@ async function sendMilestoneAlert(
 }
 
 async function sendReclaimNotification(
+  userId: number,
   holding: typeof holdings.$inferSelect,
   tokensSold: number,
   solReceived: number,
@@ -355,7 +358,7 @@ async function sendReclaimNotification(
   signature: string | undefined,
   type: "initial" | "progressive"
 ): Promise<void> {
-  const settings = await storage.getNotificationSettings();
+  const settings = await storage.getNotificationSettings(userId);
   if (!settings?.enabled || !settings.emails?.length) {
     return;
   }
@@ -423,12 +426,13 @@ async function sendReclaimNotification(
 }
 
 async function sendDumpAlert(
+  userId: number,
   holding: typeof holdings.$inferSelect,
   currentMultiplier: number,
   currentPrice: number,
   lossPercent: number
 ): Promise<void> {
-  const settings = await storage.getNotificationSettings();
+  const settings = await storage.getNotificationSettings(userId);
   if (!settings?.enabled || !settings.emails?.length) {
     return;
   }

@@ -160,17 +160,18 @@ export async function executeSwap(
 }
 
 export async function buyToken(
+  userId: number,
   tokenMint: string,
   solAmount: number
 ): Promise<SwapResult> {
-  console.log(`Attempting to buy ${tokenMint} with ${solAmount} SOL`);
+  console.log(`User ${userId}: Attempting to buy ${tokenMint} with ${solAmount} SOL`);
 
-  const keypair = await getHotWalletKeypair();
+  const keypair = await getHotWalletKeypair(userId);
   if (!keypair) {
     return { success: false, error: "Hot wallet not found or decryption failed" };
   }
 
-  const balance = await getHotWalletBalance();
+  const balance = await getHotWalletBalance(userId);
   if (balance < solAmount) {
     return { 
       success: false, 
@@ -200,12 +201,13 @@ export async function buyToken(
 }
 
 export async function sellToken(
+  userId: number,
   tokenMint: string,
   tokenAmount: number
 ): Promise<SwapResult> {
-  console.log(`Attempting to sell ${tokenAmount} tokens of ${tokenMint}`);
+  console.log(`User ${userId}: Attempting to sell ${tokenAmount} tokens of ${tokenMint}`);
 
-  const keypair = await getHotWalletKeypair();
+  const keypair = await getHotWalletKeypair(userId);
   if (!keypair) {
     return { success: false, error: "Hot wallet not found or decryption failed" };
   }

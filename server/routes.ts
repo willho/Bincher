@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress } from "./helius";
 import { sendSwapNotification } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
@@ -25,7 +25,7 @@ import {
 import { sellToken, buyToken, getTokenPrice, getTokenInfo } from "./jupiter";
 import { db } from "./db";
 import { holdings } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 
@@ -216,13 +216,24 @@ export async function registerRoutes(
     try {
       const status = await storage.getMonitoringStatus();
       
+      // Get all monitored wallet addresses from all users
+      const allWallets = await storage.getAllMonitoredWallets();
+      const walletAddresses = allWallets.map(w => w.walletAddress);
+      
+      if (walletAddresses.length === 0) {
+        return res.status(400).json({ error: "No wallets to monitor. Add a wallet first." });
+      }
+
       if (status.isActive && status.webhookId) {
+        // Update existing webhook with current wallet list
+        const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
+        await updateWebhookUrl(status.webhookId, webhookUrl, walletAddresses);
         return res.json({ success: true, status });
       }
 
       const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
-      console.log("Creating webhook with URL:", webhookUrl);
-      const webhookId = await createWebhook(webhookUrl);
+      console.log("Creating webhook with URL:", webhookUrl, "for", walletAddresses.length, "wallet(s)");
+      const webhookId = await createWebhook(webhookUrl, walletAddresses);
 
       if (!webhookId) {
         return res.status(500).json({ error: "Failed to create webhook" });
@@ -292,11 +303,28 @@ export async function registerRoutes(
           continue;
         }
 
+        // Extract wallet address that made the swap
+        const swapWalletAddress = getSwapWalletAddress(payload);
+        if (!swapWalletAddress) {
+          console.log("Could not extract wallet address from swap");
+          continue;
+        }
+
+        // Look up which user is monitoring this wallet
+        const userId = await storage.getUserIdByWalletAddress(swapWalletAddress);
+        if (!userId) {
+          console.log("No user monitoring wallet:", swapWalletAddress);
+          continue;
+        }
+
         const swap = parseSwapFromWebhook(payload);
         if (!swap) {
           console.log("Not a swap transaction:", payload.type);
           continue;
         }
+
+        // Associate swap with user
+        swap.userId = userId;
 
         // Fetch token metadata for the token being bought
         const toTokenMetadata = await fetchTokenMetadata(swap.toToken);
@@ -306,13 +334,13 @@ export async function registerRoutes(
         }
 
         const savedSwap = await storage.addSwap(swap);
-        console.log("Swap detected and saved:", savedSwap.id);
+        console.log("Swap detected and saved:", savedSwap.id, "for user:", userId);
 
         // Broadcast to WebSocket clients
         broadcastSwap(savedSwap);
 
-        // Send email notification to all recipients
-        const settings = await storage.getNotificationSettings();
+        // Send email notification to user's recipients
+        const settings = await storage.getNotificationSettings(userId);
         if (settings.enabled) {
           const minAmount = settings.minSwapAmount ?? 0;
           if (savedSwap.fromAmount >= minAmount) {
@@ -326,18 +354,19 @@ export async function registerRoutes(
         }
 
         // Copy trading: Queue pending buy if this is a BUY (SOL -> Token)
-        const tradeConf = await getTradeConfig();
+        const tradeConf = await getTradeConfig(userId);
         if (tradeConf.enabled && swap.fromTokenSymbol === "SOL") {
-          const alreadyBought = await hasTokenBeenBought(swap.toToken);
+          const alreadyBought = await hasTokenBeenBought(userId, swap.toToken);
           if (!alreadyBought) {
             const pendingBuy = await addPendingBuy(
+              userId,
               swap.toToken,
               swap.toTokenSymbol,
               toTokenMetadata?.name,
               toTokenMetadata?.priceUsd
             );
             if (pendingBuy) {
-              console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol);
+              console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol, "for user:", userId);
             }
           } else {
             console.log("Copy trade: Token already bought/pending, skipping", swap.toTokenSymbol);
@@ -357,9 +386,9 @@ export async function registerRoutes(
   });
 
   // Get all swaps
-  app.get("/api/swaps", async (req, res) => {
+  app.get("/api/swaps", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const swaps = await storage.getSwaps();
+      const swaps = await storage.getSwaps(req.userId!);
       res.json(swaps);
     } catch (error) {
       res.status(500).json({ error: "Failed to get swaps" });
@@ -367,9 +396,9 @@ export async function registerRoutes(
   });
 
   // Get notification settings
-  app.get("/api/settings", async (req, res) => {
+  app.get("/api/settings", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const settings = await storage.getNotificationSettings();
+      const settings = await storage.getNotificationSettings(req.userId!);
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to get settings" });
@@ -377,7 +406,7 @@ export async function registerRoutes(
   });
 
   // Update notification settings with validation
-  app.patch("/api/settings", async (req, res) => {
+  app.patch("/api/settings", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const parseResult = updateSettingsSchema.safeParse(req.body);
       if (!parseResult.success) {
@@ -387,7 +416,7 @@ export async function registerRoutes(
         });
       }
 
-      const settings = await storage.updateNotificationSettings(parseResult.data);
+      const settings = await storage.updateNotificationSettings(req.userId!, parseResult.data);
       res.json(settings);
     } catch (error) {
       console.error("Error updating settings:", error);
@@ -400,6 +429,92 @@ export async function registerRoutes(
     res.json({ address: getWalletAddress() });
   });
 
+  // ==================== Monitored Wallets Routes ====================
+
+  // Sync webhook with all monitored wallets
+  app.post("/api/monitored-wallets/sync", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const status = await storage.getMonitoringStatus();
+      if (!status.isActive || !status.webhookId) {
+        return res.json({ success: true, message: "Monitoring not active" });
+      }
+      
+      const allWallets = await storage.getAllMonitoredWallets();
+      const walletAddresses = allWallets.map(w => w.walletAddress);
+      
+      if (walletAddresses.length === 0) {
+        return res.json({ success: true, message: "No wallets to monitor" });
+      }
+      
+      const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
+      await updateWebhookUrl(status.webhookId, webhookUrl, walletAddresses);
+      
+      res.json({ success: true, walletCount: walletAddresses.length });
+    } catch (error) {
+      console.error("Error syncing wallets:", error);
+      res.status(500).json({ error: "Failed to sync wallets" });
+    }
+  });
+
+  app.get("/api/monitored-wallets", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const wallets = await storage.getMonitoredWallets(req.userId!);
+      res.json(wallets);
+    } catch (error) {
+      console.error("Error getting monitored wallets:", error);
+      res.status(500).json({ error: "Failed to get monitored wallets" });
+    }
+  });
+
+  app.post("/api/monitored-wallets", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { walletAddress, label } = req.body;
+      if (!walletAddress || typeof walletAddress !== 'string') {
+        return res.status(400).json({ error: "Wallet address is required" });
+      }
+      
+      if (walletAddress.length < 32 || walletAddress.length > 44) {
+        return res.status(400).json({ error: "Invalid Solana wallet address" });
+      }
+      
+      const wallet = await storage.addMonitoredWallet(req.userId!, walletAddress, label);
+      res.json(wallet);
+    } catch (error) {
+      console.error("Error adding monitored wallet:", error);
+      res.status(500).json({ error: "Failed to add monitored wallet" });
+    }
+  });
+
+  app.patch("/api/monitored-wallets/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      const { label, enabled } = req.body;
+      
+      const wallet = await storage.updateMonitoredWallet(req.userId!, walletId, { label, enabled });
+      if (!wallet) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      res.json(wallet);
+    } catch (error) {
+      console.error("Error updating monitored wallet:", error);
+      res.status(500).json({ error: "Failed to update monitored wallet" });
+    }
+  });
+
+  app.delete("/api/monitored-wallets/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      const deleted = await storage.deleteMonitoredWallet(req.userId!, walletId);
+      if (!deleted) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting monitored wallet:", error);
+      res.status(500).json({ error: "Failed to delete monitored wallet" });
+    }
+  });
+
   // Debug: list webhooks
   app.get("/api/webhooks", async (req, res) => {
     const webhooks = await getWebhooks();
@@ -409,13 +524,13 @@ export async function registerRoutes(
   // ==================== Copy Trading Routes ====================
 
   // Get or create hot wallet
-  app.get("/api/copy-trade/wallet", async (req, res) => {
+  app.get("/api/copy-trade/wallet", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const wallet = await getOrCreateHotWallet();
+      const wallet = await getOrCreateHotWallet(req.userId!);
       if (!wallet) {
         return res.json({ exists: false });
       }
-      const balance = await getHotWalletBalance();
+      const balance = await getHotWalletBalance(req.userId!);
       res.json({ exists: true, publicKey: wallet.publicKey, balance, createdAt: wallet.createdAt });
     } catch (error) {
       console.error("Error getting hot wallet:", error);
@@ -424,10 +539,10 @@ export async function registerRoutes(
   });
 
   // Create hot wallet
-  app.post("/api/copy-trade/wallet", async (req, res) => {
+  app.post("/api/copy-trade/wallet", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const wallet = await createHotWallet();
-      const balance = await getHotWalletBalance();
+      const wallet = await createHotWallet(req.userId!);
+      const balance = await getHotWalletBalance(req.userId!);
       res.json({ success: true, publicKey: wallet.publicKey, balance, createdAt: wallet.createdAt });
     } catch (error) {
       console.error("Error creating hot wallet:", error);
@@ -436,9 +551,9 @@ export async function registerRoutes(
   });
 
   // Get hot wallet balance
-  app.get("/api/copy-trade/balance", async (req, res) => {
+  app.get("/api/copy-trade/balance", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const balance = await getHotWalletBalance();
+      const balance = await getHotWalletBalance(req.userId!);
       res.json({ balance });
     } catch (error) {
       console.error("Error getting balance:", error);
@@ -447,9 +562,9 @@ export async function registerRoutes(
   });
 
   // Get trade config
-  app.get("/api/copy-trade/config", async (req, res) => {
+  app.get("/api/copy-trade/config", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const config = await getTradeConfig();
+      const config = await getTradeConfig(req.userId!);
       res.json(config);
     } catch (error) {
       console.error("Error getting trade config:", error);
@@ -458,9 +573,9 @@ export async function registerRoutes(
   });
 
   // Update trade config
-  app.patch("/api/copy-trade/config", async (req, res) => {
+  app.patch("/api/copy-trade/config", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const config = await updateTradeConfig(req.body);
+      const config = await updateTradeConfig(req.userId!, req.body);
       res.json(config);
     } catch (error) {
       console.error("Error updating trade config:", error);
@@ -469,9 +584,9 @@ export async function registerRoutes(
   });
 
   // Get holdings
-  app.get("/api/copy-trade/holdings", async (req, res) => {
+  app.get("/api/copy-trade/holdings", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const holdingsList = await getHoldings();
+      const holdingsList = await getHoldings(req.userId!);
       res.json(holdingsList);
     } catch (error) {
       console.error("Error getting holdings:", error);
@@ -480,9 +595,9 @@ export async function registerRoutes(
   });
 
   // Get pending buys
-  app.get("/api/copy-trade/pending", async (req, res) => {
+  app.get("/api/copy-trade/pending", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const pending = await getPendingBuys();
+      const pending = await getPendingBuys(req.userId!);
       res.json(pending);
     } catch (error) {
       console.error("Error getting pending buys:", error);
@@ -496,7 +611,7 @@ export async function registerRoutes(
     amount: z.number().positive().finite(),
   });
   
-  app.post("/api/copy-trade/withdraw", async (req, res) => {
+  app.post("/api/copy-trade/withdraw", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const parsed = withdrawSchema.safeParse(req.body);
       
@@ -506,7 +621,7 @@ export async function registerRoutes(
       
       const { destination, amount } = parsed.data;
       
-      const result = await withdrawSol(destination, amount);
+      const result = await withdrawSol(req.userId!, destination, amount);
       
       if (!result.success) {
         return res.status(400).json({ error: result.error });
@@ -528,7 +643,7 @@ export async function registerRoutes(
     percentage: z.number().min(1).max(100).optional().default(100),
   });
   
-  app.post("/api/copy-trade/sell/:holdingId", async (req, res) => {
+  app.post("/api/copy-trade/sell/:holdingId", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const holdingId = parseInt(req.params.holdingId);
       if (isNaN(holdingId)) {
@@ -542,7 +657,9 @@ export async function registerRoutes(
       
       const sellPercentage = parsed.data.percentage;
       
-      const holdingRows = await db.select().from(holdings).where(eq(holdings.id, holdingId));
+      const holdingRows = await db.select().from(holdings).where(
+        and(eq(holdings.id, holdingId), eq(holdings.userId, req.userId!))
+      );
       
       if (holdingRows.length === 0) {
         return res.status(404).json({ error: "Holding not found" });
@@ -557,7 +674,7 @@ export async function registerRoutes(
       
       console.log(`Manual sell: ${tokensToSell.toLocaleString()} tokens of ${holding.tokenSymbol} (${sellPercentage}%)`);
       
-      const result = await sellToken(holding.tokenMint, tokensToSell);
+      const result = await sellToken(req.userId!, holding.tokenMint, tokensToSell);
       
       if (!result.success) {
         return res.status(400).json({ error: result.error });
@@ -588,7 +705,7 @@ export async function registerRoutes(
     solAmount: z.number().positive().finite().max(100),
   });
   
-  app.post("/api/copy-trade/manual-buy", async (req, res) => {
+  app.post("/api/copy-trade/manual-buy", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const parsed = manualBuySchema.safeParse(req.body);
       
@@ -599,13 +716,15 @@ export async function registerRoutes(
       const { tokenMint, solAmount } = parsed.data;
       
       // Check if we already have a holding for this token
-      const existingHolding = await db.select().from(holdings).where(eq(holdings.tokenMint, tokenMint)).limit(1);
+      const existingHolding = await db.select().from(holdings).where(
+        and(eq(holdings.tokenMint, tokenMint), eq(holdings.userId, req.userId!))
+      ).limit(1);
       if (existingHolding.length > 0) {
         return res.status(400).json({ error: "Already holding this token" });
       }
       
       // Check hot wallet balance
-      const balance = await getHotWalletBalance();
+      const balance = await getHotWalletBalance(req.userId!);
       if (balance < solAmount + 0.005) {
         return res.status(400).json({ error: `Insufficient balance. Have ${balance.toFixed(4)} SOL, need ${(solAmount + 0.005).toFixed(4)} SOL` });
       }
@@ -621,7 +740,7 @@ export async function registerRoutes(
       
       console.log(`Manual buy: ${solAmount} SOL for token ${tokenMint} at price ${tokenPrice}`);
       
-      const result = await buyToken(tokenMint, solAmount);
+      const result = await buyToken(req.userId!, tokenMint, solAmount);
       
       if (!result.success) {
         return res.status(400).json({ error: result.error });
@@ -631,6 +750,7 @@ export async function registerRoutes(
       
       // Create holding record
       await db.insert(holdings).values({
+        userId: req.userId!,
         tokenMint: tokenMint,
         tokenSymbol: tokenInfo?.symbol || "UNKNOWN",
         tokenName: tokenInfo?.name || "Unknown Token",
@@ -681,11 +801,31 @@ async function restoreMonitoring() {
       const currentUrl = getWebhookUrl();
       console.log("Monitoring was active, updating webhook URL to:", currentUrl);
       
-      const updated = await updateWebhookUrl(status.webhookId, `${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`);
+      // Get all enabled monitored wallets
+      const allWallets = await storage.getAllMonitoredWallets();
+      const walletAddresses = allWallets.map(w => w.walletAddress);
+      console.log("Found", walletAddresses.length, "enabled monitored wallet(s)");
+      
+      // If no wallets to monitor, deactivate monitoring
+      if (walletAddresses.length === 0) {
+        console.log("No enabled wallets to monitor, deactivating monitoring");
+        await deleteWebhook(status.webhookId);
+        await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
+        return;
+      }
+      
+      const updated = await updateWebhookUrl(
+        status.webhookId, 
+        `${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`,
+        walletAddresses
+      );
       
       if (!updated) {
         console.log("Failed to update webhook, recreating...");
-        const newWebhookId = await createWebhook(`${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`);
+        const newWebhookId = await createWebhook(
+          `${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`,
+          walletAddresses
+        );
         
         if (newWebhookId) {
           await storage.updateMonitoringStatus({ webhookId: newWebhookId });

@@ -1,19 +1,18 @@
-import { type Swap, type InsertSwap, type NotificationSettings, type MonitoringStatus } from "@shared/schema";
-import { swaps, settings, monitoringState } from "@shared/schema";
+import { type Swap, type InsertSwap, type NotificationSettings, type MonitoringStatus, type MonitoredWallet, type InsertMonitoredWallet } from "@shared/schema";
+import { swaps, settings, monitoringState, monitoredWallets } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 
-const WALLET_ADDRESS = "C92nBXrrANmWpgJKhBdbnqtUuCcoEZ7kQJoyScZ5sQak";
-const DEFAULT_EMAIL = "will728@gmail.com";
+const DEFAULT_EMAIL = "";
 
 export interface IStorage {
-  getSwaps(): Promise<Swap[]>;
+  getSwaps(userId: number): Promise<Swap[]>;
   getSwapBySignature(signature: string): Promise<Swap | undefined>;
   addSwap(swap: InsertSwap): Promise<Swap>;
   markSwapNotified(id: string): Promise<void>;
   
-  getNotificationSettings(): Promise<NotificationSettings>;
-  updateNotificationSettings(settings: Partial<NotificationSettings>): Promise<NotificationSettings>;
+  getNotificationSettings(userId: number): Promise<NotificationSettings>;
+  updateNotificationSettings(userId: number, settings: Partial<NotificationSettings>): Promise<NotificationSettings>;
   
   getMonitoringStatus(): Promise<MonitoringStatus>;
   updateMonitoringStatus(status: Partial<MonitoringStatus>): Promise<MonitoringStatus>;
@@ -23,20 +22,10 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   async initialize(): Promise<void> {
-    const existingSettings = await db.select().from(settings).limit(1);
-    if (existingSettings.length === 0) {
-      await db.insert(settings).values({
-        email: DEFAULT_EMAIL,
-        emails: [DEFAULT_EMAIL],
-        enabled: true,
-        minSwapAmount: null,
-      });
-    }
-    
     const existingState = await db.select().from(monitoringState).limit(1);
     if (existingState.length === 0) {
       await db.insert(monitoringState).values({
-        walletAddress: WALLET_ADDRESS,
+        walletAddress: "",
         isActive: false,
         webhookId: null,
         lastUpdated: Math.floor(Date.now() / 1000),
@@ -45,8 +34,8 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getSwaps(): Promise<Swap[]> {
-    const rows = await db.select().from(swaps).orderBy(desc(swaps.timestamp));
+  async getSwaps(userId: number): Promise<Swap[]> {
+    const rows = await db.select().from(swaps).where(eq(swaps.userId, userId)).orderBy(desc(swaps.timestamp));
     return rows.map(row => ({
       id: String(row.id),
       signature: row.signature,
@@ -91,6 +80,7 @@ export class DatabaseStorage implements IStorage {
 
   async addSwap(swap: InsertSwap): Promise<Swap> {
     const [row] = await db.insert(swaps).values({
+      userId: swap.userId ?? null,
       signature: swap.signature,
       timestamp: swap.timestamp,
       type: swap.type,
@@ -133,28 +123,39 @@ export class DatabaseStorage implements IStorage {
     await db.update(swaps).set({ notificationSent: true }).where(eq(swaps.id, parseInt(id)));
   }
 
-  async getNotificationSettings(): Promise<NotificationSettings> {
-    const rows = await db.select().from(settings).limit(1);
+  async getNotificationSettings(userId: number): Promise<NotificationSettings> {
+    const rows = await db.select().from(settings).where(eq(settings.userId, userId)).limit(1);
     if (rows.length === 0) {
-      return { email: DEFAULT_EMAIL, emails: [DEFAULT_EMAIL], enabled: true };
+      const result = await db.insert(settings).values({
+        userId: userId,
+        email: DEFAULT_EMAIL,
+        emails: [],
+        enabled: true,
+        minSwapAmount: null,
+      }).returning();
+      return {
+        email: result[0].email,
+        emails: [],
+        enabled: true,
+      };
     }
     const row = rows[0];
     return {
       email: row.email,
-      emails: (row.emails as string[]) ?? [row.email],
+      emails: (row.emails as string[]) ?? [],
       enabled: row.enabled ?? true,
       minSwapAmount: row.minSwapAmount ?? undefined,
     };
   }
 
-  async updateNotificationSettings(updates: Partial<NotificationSettings>): Promise<NotificationSettings> {
-    const rows = await db.select().from(settings).limit(1);
+  async updateNotificationSettings(userId: number, updates: Partial<NotificationSettings>): Promise<NotificationSettings> {
+    const rows = await db.select().from(settings).where(eq(settings.userId, userId)).limit(1);
     if (rows.length === 0) {
-      await this.initialize();
+      await this.getNotificationSettings(userId);
     }
-    const currentRow = rows[0] || (await db.select().from(settings).limit(1))[0];
+    const currentRow = rows[0] || (await db.select().from(settings).where(eq(settings.userId, userId)).limit(1))[0];
     
-    const current = await this.getNotificationSettings();
+    const current = await this.getNotificationSettings(userId);
     const updated = { ...current, ...updates };
     
     await db.update(settings).set({
@@ -171,7 +172,7 @@ export class DatabaseStorage implements IStorage {
     const rows = await db.select().from(monitoringState).limit(1);
     if (rows.length === 0) {
       return {
-        walletAddress: WALLET_ADDRESS,
+        walletAddress: "",
         isActive: false,
         lastUpdated: Date.now(),
         totalSwapsDetected: 0,
@@ -206,6 +207,55 @@ export class DatabaseStorage implements IStorage {
     }).where(eq(monitoringState.id, currentRow.id));
     
     return updated;
+  }
+
+  async getMonitoredWallets(userId: number): Promise<MonitoredWallet[]> {
+    return await db.select().from(monitoredWallets).where(eq(monitoredWallets.userId, userId));
+  }
+
+  async addMonitoredWallet(userId: number, walletAddress: string, label?: string): Promise<MonitoredWallet> {
+    const now = Math.floor(Date.now() / 1000);
+    const rows = await db.insert(monitoredWallets).values({
+      userId,
+      walletAddress,
+      label: label || null,
+      enabled: true,
+      createdAt: now,
+    }).returning();
+    return rows[0];
+  }
+
+  async updateMonitoredWallet(userId: number, walletId: number, updates: { label?: string; enabled?: boolean }): Promise<MonitoredWallet | null> {
+    const rows = await db.update(monitoredWallets)
+      .set(updates)
+      .where(and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, userId)))
+      .returning();
+    return rows[0] || null;
+  }
+
+  async deleteMonitoredWallet(userId: number, walletId: number): Promise<boolean> {
+    const rows = await db.delete(monitoredWallets)
+      .where(and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, userId)))
+      .returning();
+    return rows.length > 0;
+  }
+
+  async getAllMonitoredWallets(): Promise<MonitoredWallet[]> {
+    return await db.select().from(monitoredWallets).where(eq(monitoredWallets.enabled, true));
+  }
+
+  async getUserIdByWalletAddress(walletAddress: string): Promise<number | null> {
+    const rows = await db.select().from(monitoredWallets)
+      .where(and(
+        eq(monitoredWallets.walletAddress, walletAddress), 
+        eq(monitoredWallets.enabled, true)
+      ))
+      .limit(1);
+    return rows.length > 0 ? rows[0].userId : null;
+  }
+
+  async getAllEnabledMonitoredWallets(): Promise<MonitoredWallet[]> {
+    return await db.select().from(monitoredWallets).where(eq(monitoredWallets.enabled, true));
   }
 }
 

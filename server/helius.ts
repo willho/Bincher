@@ -78,6 +78,19 @@ export function getTokenSymbol(mint: string): string {
   return TOKEN_SYMBOLS[mint] || mint.slice(0, 6) + "...";
 }
 
+export function getSwapWalletAddress(payload: HeliusWebhookPayload): string | null {
+  const swapEvent = payload.events?.swap;
+  if (!swapEvent) return null;
+  
+  if (swapEvent.nativeInput?.account) {
+    return swapEvent.nativeInput.account;
+  }
+  if (swapEvent.tokenInputs && swapEvent.tokenInputs.length > 0) {
+    return swapEvent.tokenInputs[0].userAccount;
+  }
+  return null;
+}
+
 export function parseSwapFromWebhook(payload: HeliusWebhookPayload): InsertSwap | null {
   // Check if this is a swap transaction
   if (!payload.events?.swap && payload.type !== "SWAP") {
@@ -139,11 +152,18 @@ export function parseSwapFromWebhook(payload: HeliusWebhookPayload): InsertSwap 
   };
 }
 
-export async function createWebhook(webhookUrl: string): Promise<string | null> {
+export async function createWebhook(webhookUrl: string, walletAddresses: string[]): Promise<string | null> {
   if (!HELIUS_API_KEY) {
     console.error("HELIUS_API_KEY not found");
     return null;
   }
+
+  if (walletAddresses.length === 0) {
+    console.error("No wallet addresses provided for webhook");
+    return null;
+  }
+
+  const addresses = walletAddresses;
 
   try {
     const response = await fetch(`https://api.helius.xyz/v0/webhooks?api-key=${HELIUS_API_KEY}`, {
@@ -152,7 +172,7 @@ export async function createWebhook(webhookUrl: string): Promise<string | null> 
       body: JSON.stringify({
         webhookURL: webhookUrl,
         transactionTypes: ["SWAP"],
-        accountAddresses: [WALLET_ADDRESS],
+        accountAddresses: addresses,
         webhookType: "enhanced",
       }),
     });
@@ -164,7 +184,7 @@ export async function createWebhook(webhookUrl: string): Promise<string | null> 
     }
 
     const data = await response.json();
-    console.log("Webhook created:", data.webhookID);
+    console.log("Webhook created for", addresses.length, "wallet(s):", data.webhookID);
     return data.webhookID;
   } catch (error) {
     console.error("Error creating webhook:", error);
@@ -199,8 +219,15 @@ export async function getWebhooks(): Promise<any[]> {
   }
 }
 
-export async function updateWebhookUrl(webhookId: string, newUrl: string): Promise<boolean> {
+export async function updateWebhookUrl(webhookId: string, newUrl: string, walletAddresses: string[]): Promise<boolean> {
   if (!HELIUS_API_KEY) return false;
+  
+  if (walletAddresses.length === 0) {
+    console.log("No wallet addresses to monitor");
+    return true;
+  }
+  
+  const addresses = walletAddresses;
   
   try {
     const response = await fetch(`https://api.helius.xyz/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
@@ -209,7 +236,7 @@ export async function updateWebhookUrl(webhookId: string, newUrl: string): Promi
       body: JSON.stringify({
         webhookURL: newUrl,
         transactionTypes: ["SWAP"],
-        accountAddresses: [WALLET_ADDRESS],
+        accountAddresses: addresses,
         webhookType: "enhanced",
       }),
     });
@@ -219,7 +246,7 @@ export async function updateWebhookUrl(webhookId: string, newUrl: string): Promi
       return false;
     }
     
-    console.log("Webhook URL updated to:", newUrl);
+    console.log("Webhook URL updated to:", newUrl, "monitoring", addresses.length, "wallet(s)");
     return true;
   } catch (error) {
     console.error("Error updating webhook:", error);

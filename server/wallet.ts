@@ -2,7 +2,7 @@ import { Keypair, Connection, PublicKey, LAMPORTS_PER_SOL, SystemProgram, Transa
 import { db } from "./db";
 import { hotWallet, tradeConfig, holdings, pendingBuys } from "@shared/schema";
 import type { HotWallet, TradeConfig, Holding, PendingBuy } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import * as crypto from "crypto";
 
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
@@ -53,27 +53,29 @@ function decrypt(encrypted: string): string {
   return decrypted;
 }
 
-export async function getOrCreateHotWallet(): Promise<HotWallet | null> {
-  const rows = await db.select().from(hotWallet).limit(1);
+export async function getOrCreateHotWallet(userId: number): Promise<HotWallet | null> {
+  const rows = await db.select().from(hotWallet).where(eq(hotWallet.userId, userId)).limit(1);
   
   if (rows.length > 0) {
     return {
       id: rows[0].id,
       publicKey: rows[0].publicKey,
       createdAt: rows[0].createdAt,
+      userId: rows[0].userId ?? undefined,
     };
   }
   
   return null;
 }
 
-export async function createHotWallet(): Promise<HotWallet> {
-  const existingRows = await db.select().from(hotWallet).limit(1);
+export async function createHotWallet(userId: number): Promise<HotWallet> {
+  const existingRows = await db.select().from(hotWallet).where(eq(hotWallet.userId, userId)).limit(1);
   if (existingRows.length > 0) {
     return {
       id: existingRows[0].id,
       publicKey: existingRows[0].publicKey,
       createdAt: existingRows[0].createdAt,
+      userId: existingRows[0].userId ?? undefined,
     };
   }
   
@@ -86,19 +88,21 @@ export async function createHotWallet(): Promise<HotWallet> {
     publicKey: publicKeyStr,
     encryptedPrivateKey: encryptedPrivateKey,
     createdAt: Math.floor(Date.now() / 1000),
+    userId: userId,
   }).returning();
   
-  console.log("Hot wallet created:", publicKeyStr);
+  console.log("Hot wallet created for user", userId, ":", publicKeyStr);
   
   return {
     id: result[0].id,
     publicKey: result[0].publicKey,
     createdAt: result[0].createdAt,
+    userId: result[0].userId ?? undefined,
   };
 }
 
-export async function getHotWalletKeypair(): Promise<Keypair | null> {
-  const rows = await db.select().from(hotWallet).limit(1);
+export async function getHotWalletKeypair(userId: number): Promise<Keypair | null> {
+  const rows = await db.select().from(hotWallet).where(eq(hotWallet.userId, userId)).limit(1);
   if (rows.length === 0) return null;
   
   try {
@@ -111,8 +115,8 @@ export async function getHotWalletKeypair(): Promise<Keypair | null> {
   }
 }
 
-export async function getHotWalletBalance(): Promise<number> {
-  const wallet = await getOrCreateHotWallet();
+export async function getHotWalletBalance(userId: number): Promise<number> {
+  const wallet = await getOrCreateHotWallet(userId);
   if (!wallet) return 0;
   
   try {
@@ -126,11 +130,12 @@ export async function getHotWalletBalance(): Promise<number> {
   }
 }
 
-export async function getTradeConfig(): Promise<TradeConfig> {
-  const rows = await db.select().from(tradeConfig).limit(1);
+export async function getTradeConfig(userId: number): Promise<TradeConfig> {
+  const rows = await db.select().from(tradeConfig).where(eq(tradeConfig.userId, userId)).limit(1);
   
   if (rows.length === 0) {
     const result = await db.insert(tradeConfig).values({
+      userId: userId,
       enabled: false,
       buyPercentage: 10,
       minDelayMinutes: 20,
@@ -143,6 +148,7 @@ export async function getTradeConfig(): Promise<TradeConfig> {
     
     return {
       id: result[0].id,
+      userId: result[0].userId ?? undefined,
       enabled: result[0].enabled ?? false,
       buyPercentage: result[0].buyPercentage ?? 10,
       minDelayMinutes: result[0].minDelayMinutes ?? 20,
@@ -156,6 +162,7 @@ export async function getTradeConfig(): Promise<TradeConfig> {
   
   return {
     id: rows[0].id,
+    userId: rows[0].userId ?? undefined,
     enabled: rows[0].enabled ?? false,
     buyPercentage: rows[0].buyPercentage ?? 10,
     minDelayMinutes: rows[0].minDelayMinutes ?? 20,
@@ -167,8 +174,8 @@ export async function getTradeConfig(): Promise<TradeConfig> {
   };
 }
 
-export async function updateTradeConfig(updates: Partial<TradeConfig>): Promise<TradeConfig> {
-  const current = await getTradeConfig();
+export async function updateTradeConfig(userId: number, updates: Partial<TradeConfig>): Promise<TradeConfig> {
+  const current = await getTradeConfig(userId);
   
   await db.update(tradeConfig).set({
     enabled: updates.enabled ?? current.enabled,
@@ -184,10 +191,11 @@ export async function updateTradeConfig(updates: Partial<TradeConfig>): Promise<
   return { ...current, ...updates };
 }
 
-export async function getHoldings(): Promise<Holding[]> {
-  const rows = await db.select().from(holdings);
+export async function getHoldings(userId: number): Promise<Holding[]> {
+  const rows = await db.select().from(holdings).where(eq(holdings.userId, userId));
   return rows.map(row => ({
     id: row.id,
+    userId: row.userId ?? undefined,
     tokenMint: row.tokenMint,
     tokenSymbol: row.tokenSymbol,
     tokenName: row.tokenName ?? undefined,
@@ -208,10 +216,13 @@ export async function getHoldings(): Promise<Holding[]> {
   }));
 }
 
-export async function getPendingBuys(): Promise<PendingBuy[]> {
-  const rows = await db.select().from(pendingBuys).where(eq(pendingBuys.cancelled, false));
+export async function getPendingBuys(userId: number): Promise<PendingBuy[]> {
+  const rows = await db.select().from(pendingBuys).where(
+    and(eq(pendingBuys.userId, userId), eq(pendingBuys.cancelled, false))
+  );
   return rows.map(row => ({
     id: row.id,
+    userId: row.userId ?? undefined,
     tokenMint: row.tokenMint,
     tokenSymbol: row.tokenSymbol,
     tokenName: row.tokenName ?? undefined,
@@ -225,37 +236,41 @@ export async function getPendingBuys(): Promise<PendingBuy[]> {
   }));
 }
 
-export async function hasTokenBeenBought(tokenMint: string): Promise<boolean> {
-  const existingHolding = await db.select().from(holdings).where(eq(holdings.tokenMint, tokenMint)).limit(1);
+export async function hasTokenBeenBought(userId: number, tokenMint: string): Promise<boolean> {
+  const existingHolding = await db.select().from(holdings).where(
+    and(eq(holdings.userId, userId), eq(holdings.tokenMint, tokenMint))
+  ).limit(1);
   if (existingHolding.length > 0) return true;
   
-  const existingPending = await db.select().from(pendingBuys)
-    .where(eq(pendingBuys.tokenMint, tokenMint))
-    .limit(1);
+  const existingPending = await db.select().from(pendingBuys).where(
+    and(eq(pendingBuys.userId, userId), eq(pendingBuys.tokenMint, tokenMint))
+  ).limit(1);
   if (existingPending.length > 0) return true;
   
   return false;
 }
 
 export async function addPendingBuy(
+  userId: number,
   tokenMint: string,
   tokenSymbol: string,
   tokenName: string | undefined,
   initialPrice: number | undefined
 ): Promise<PendingBuy | null> {
-  const alreadyBought = await hasTokenBeenBought(tokenMint);
+  const alreadyBought = await hasTokenBeenBought(userId, tokenMint);
   if (alreadyBought) {
-    console.log(`Token ${tokenSymbol} already bought or pending, skipping`);
+    console.log(`Token ${tokenSymbol} already bought or pending for user ${userId}, skipping`);
     return null;
   }
   
-  const config = await getTradeConfig();
+  const config = await getTradeConfig(userId);
   const now = Math.floor(Date.now() / 1000);
   const delayMinutes = config.minDelayMinutes + 
     Math.random() * (config.maxDelayMinutes - config.minDelayMinutes);
   const scheduledBuyAt = now + Math.floor(delayMinutes * 60);
   
   const result = await db.insert(pendingBuys).values({
+    userId: userId,
     tokenMint,
     tokenSymbol,
     tokenName,
@@ -267,10 +282,11 @@ export async function addPendingBuy(
     cancelled: false,
   }).returning();
   
-  console.log(`Added pending buy for ${tokenSymbol}, scheduled for ${new Date(scheduledBuyAt * 1000).toISOString()}`);
+  console.log(`Added pending buy for ${tokenSymbol} for user ${userId}, scheduled for ${new Date(scheduledBuyAt * 1000).toISOString()}`);
   
   return {
     id: result[0].id,
+    userId: result[0].userId ?? undefined,
     tokenMint: result[0].tokenMint,
     tokenSymbol: result[0].tokenSymbol,
     tokenName: result[0].tokenName ?? undefined,
@@ -292,16 +308,17 @@ export interface WithdrawResult {
 }
 
 export async function withdrawSol(
+  userId: number,
   destinationAddress: string,
   amountSol: number
 ): Promise<WithdrawResult> {
   try {
-    const keypair = await getHotWalletKeypair();
+    const keypair = await getHotWalletKeypair(userId);
     if (!keypair) {
       return { success: false, error: "Hot wallet not found or decryption failed" };
     }
 
-    const balance = await getHotWalletBalance();
+    const balance = await getHotWalletBalance(userId);
     const reserveForFees = 0.005;
     
     if (amountSol > balance - reserveForFees) {
@@ -329,7 +346,7 @@ export async function withdrawSol(
       })
     );
 
-    console.log(`Withdrawing ${amountSol} SOL to ${destinationAddress}`);
+    console.log(`User ${userId} withdrawing ${amountSol} SOL to ${destinationAddress}`);
     
     const signature = await sendAndConfirmTransaction(connection, transaction, [keypair]);
     
@@ -344,4 +361,47 @@ export async function withdrawSol(
     console.error("Withdrawal failed:", error);
     return { success: false, error: String(error) };
   }
+}
+
+export async function getAllPendingBuys(): Promise<(PendingBuy & { userId: number })[]> {
+  const rows = await db.select().from(pendingBuys).where(eq(pendingBuys.cancelled, false));
+  return rows.filter(row => row.userId !== null).map(row => ({
+    id: row.id,
+    userId: row.userId!,
+    tokenMint: row.tokenMint,
+    tokenSymbol: row.tokenSymbol,
+    tokenName: row.tokenName ?? undefined,
+    detectedAt: row.detectedAt,
+    scheduledBuyAt: row.scheduledBuyAt,
+    initialPrice: row.initialPrice ?? undefined,
+    buyTriggered: row.buyTriggered ?? false,
+    triggerReason: row.triggerReason ?? undefined,
+    buyCount: row.buyCount ?? 0,
+    cancelled: row.cancelled ?? false,
+  }));
+}
+
+export async function getAllHoldings(): Promise<(Holding & { userId: number })[]> {
+  const rows = await db.select().from(holdings);
+  return rows.filter(row => row.userId !== null).map(row => ({
+    id: row.id,
+    userId: row.userId!,
+    tokenMint: row.tokenMint,
+    tokenSymbol: row.tokenSymbol,
+    tokenName: row.tokenName ?? undefined,
+    amountBought: row.amountBought,
+    solSpent: row.solSpent,
+    buyPrice: row.buyPrice,
+    buyTimestamp: row.buyTimestamp,
+    buySignature: row.buySignature,
+    currentAmount: row.currentAmount,
+    reclaimed: row.reclaimed ?? false,
+    reclaimTimestamp: row.reclaimTimestamp ?? undefined,
+    reclaimSignature: row.reclaimSignature ?? undefined,
+    lastPriceCheck: row.lastPriceCheck ?? undefined,
+    lastPrice: row.lastPrice ?? undefined,
+    highestMultiplier: row.highestMultiplier ?? 1,
+    alertedMilestones: (row.alertedMilestones as number[]) ?? [],
+    reclaimedMilestones: (row.reclaimedMilestones as number[]) ?? [],
+  }));
 }

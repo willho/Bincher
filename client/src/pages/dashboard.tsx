@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyTrading } from "@/components/copy-trading";
+import { MonitoredWallets } from "@/components/monitored-wallets";
 import { 
   Activity, 
   ArrowRightLeft, 
@@ -379,6 +380,9 @@ export default function Dashboard() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Monitored Wallets */}
+        <MonitoredWallets />
 
         {/* Swap History */}
         <Card>

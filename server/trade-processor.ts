@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { pendingBuys, holdings, tradeConfig } from "@shared/schema";
 import { eq, and, lte } from "drizzle-orm";
-import { getTradeConfig, getHotWalletBalance } from "./wallet";
+import { getTradeConfig, getHotWalletBalance, getAllPendingBuys } from "./wallet";
 import { buyToken, getTokenPrice } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
@@ -19,11 +19,6 @@ export async function processPendingBuys(): Promise<void> {
   isProcessorRunning = true;
   
   try {
-    const config = await getTradeConfig();
-    if (!config.enabled) {
-      return;
-    }
-
     const now = Math.floor(Date.now() / 1000);
     
     const readyBuys = await db.select()
@@ -37,6 +32,16 @@ export async function processPendingBuys(): Promise<void> {
       );
 
     for (const pending of readyBuys) {
+      if (!pending.userId) {
+        console.log(`Skipping pending buy ${pending.id} with no userId`);
+        continue;
+      }
+      
+      const config = await getTradeConfig(pending.userId);
+      if (!config.enabled) {
+        continue;
+      }
+
       if (pending.triggerReason?.startsWith("processing:")) {
         console.log(`Recovering stuck pending buy for ${pending.tokenSymbol}...`);
         await db.update(pendingBuys).set({
@@ -44,8 +49,8 @@ export async function processPendingBuys(): Promise<void> {
         }).where(eq(pendingBuys.id, pending.id));
       }
       
-      console.log(`Processing pending buy for ${pending.tokenSymbol}...`);
-      await executePendingBuy(pending.id, "timer_expired");
+      console.log(`Processing pending buy for ${pending.tokenSymbol} (user ${pending.userId})...`);
+      await executePendingBuy(pending.id, pending.userId, "timer_expired");
     }
   } catch (error) {
     console.error("Error processing pending buys:", error);
@@ -56,14 +61,16 @@ export async function processPendingBuys(): Promise<void> {
 
 export async function triggerEarlyBuy(
   pendingId: number,
+  userId: number,
   reason: "high_volume" | "price_rise"
 ): Promise<void> {
-  console.log(`Triggering early buy for pending ${pendingId}: ${reason}`);
-  await executePendingBuy(pendingId, reason);
+  console.log(`Triggering early buy for pending ${pendingId} (user ${userId}): ${reason}`);
+  await executePendingBuy(pendingId, userId, reason);
 }
 
 export async function executePendingBuy(
   pendingId: number,
+  userId: number,
   triggerReason: string
 ): Promise<boolean> {
   try {
@@ -86,8 +93,10 @@ export async function executePendingBuy(
 
     const buy = updateResult[0];
     
-    // Check if we already have a holding for this token (prevent duplicates)
-    const existingHolding = await db.select().from(holdings).where(eq(holdings.tokenMint, buy.tokenMint)).limit(1);
+    // Check if we already have a holding for this token for this user (prevent duplicates)
+    const existingHolding = await db.select().from(holdings).where(
+      and(eq(holdings.tokenMint, buy.tokenMint), eq(holdings.userId, userId))
+    ).limit(1);
     if (existingHolding.length > 0) {
       console.log(`Already have holding for ${buy.tokenSymbol}, skipping buy`);
       await db.update(pendingBuys).set({
@@ -97,8 +106,8 @@ export async function executePendingBuy(
       return false;
     }
 
-    const config = await getTradeConfig();
-    const balance = await getHotWalletBalance();
+    const config = await getTradeConfig(userId);
+    const balance = await getHotWalletBalance(userId);
     
     if (balance < 0.01) {
       console.error("Hot wallet balance too low:", balance);
@@ -110,7 +119,7 @@ export async function executePendingBuy(
     
     console.log(`Buying ${buy.tokenSymbol} with ${solAmount.toFixed(4)} SOL (${config.buyPercentage}% of ${balance.toFixed(4)} SOL)`);
 
-    const result = await buyToken(buy.tokenMint, solAmount);
+    const result = await buyToken(userId, buy.tokenMint, solAmount);
 
     if (!result.success) {
       console.error("Buy failed:", result.error);
@@ -122,6 +131,7 @@ export async function executePendingBuy(
     const now = Math.floor(Date.now() / 1000);
 
     await db.insert(holdings).values({
+      userId: userId,
       tokenMint: buy.tokenMint,
       tokenSymbol: buy.tokenSymbol,
       tokenName: buy.tokenName,
@@ -148,7 +158,7 @@ export async function executePendingBuy(
     console.log(`  Amount: ${result.outputAmount?.toLocaleString()} tokens`);
     console.log(`  Spent: ${result.inputAmount?.toFixed(4)} SOL`);
 
-    await sendBuyNotification(buy.tokenSymbol, result.inputAmount || solAmount, result.outputAmount || 0, currentPrice, result.signature);
+    await sendBuyNotification(userId, buy.tokenSymbol, result.inputAmount || solAmount, result.outputAmount || 0, currentPrice, result.signature);
 
     return true;
   } catch (error) {
@@ -167,13 +177,14 @@ async function cancelPendingBuy(pendingId: number, reason: string): Promise<void
 }
 
 async function sendBuyNotification(
+  userId: number,
   tokenSymbol: string,
   solSpent: number,
   tokenAmount: number,
   price: number | null,
   signature: string | undefined
 ): Promise<void> {
-  const settings = await storage.getNotificationSettings();
+  const settings = await storage.getNotificationSettings(userId);
   if (!settings?.enabled || !settings.emails?.length) {
     return;
   }
@@ -254,20 +265,21 @@ export async function updateBuyCount(tokenMint: string): Promise<void> {
         eq(pendingBuys.buyTriggered, false),
         eq(pendingBuys.cancelled, false)
       )
-    )
-    .limit(1);
+    );
 
-  if (pending.length === 0) return;
+  for (const p of pending) {
+    if (!p.userId) continue;
+    
+    const newCount = (p.buyCount || 0) + 1;
+    await db.update(pendingBuys)
+      .set({ buyCount: newCount })
+      .where(eq(pendingBuys.id, p.id));
 
-  const newCount = (pending[0].buyCount || 0) + 1;
-  await db.update(pendingBuys)
-    .set({ buyCount: newCount })
-    .where(eq(pendingBuys.id, pending[0].id));
-
-  const config = await getTradeConfig();
-  if (newCount >= config.highVolumeBuyCount) {
-    console.log(`High volume detected for ${pending[0].tokenSymbol}: ${newCount} buys`);
-    await triggerEarlyBuy(pending[0].id, "high_volume");
+    const config = await getTradeConfig(p.userId);
+    if (newCount >= config.highVolumeBuyCount) {
+      console.log(`High volume detected for ${p.tokenSymbol}: ${newCount} buys`);
+      await triggerEarlyBuy(p.id, p.userId, "high_volume");
+    }
   }
 }
 
@@ -279,16 +291,17 @@ export async function checkPriceRiseTrigger(tokenMint: string, currentPrice: num
         eq(pendingBuys.buyTriggered, false),
         eq(pendingBuys.cancelled, false)
       )
-    )
-    .limit(1);
+    );
 
-  if (pending.length === 0 || !pending[0].initialPrice) return;
+  for (const p of pending) {
+    if (!p.userId || !p.initialPrice) continue;
 
-  const priceRise = ((currentPrice - pending[0].initialPrice) / pending[0].initialPrice) * 100;
-  
-  const config = await getTradeConfig();
-  if (priceRise >= config.priceRiseTriggerPercent) {
-    console.log(`Price rise trigger for ${pending[0].tokenSymbol}: ${priceRise.toFixed(1)}% rise`);
-    await triggerEarlyBuy(pending[0].id, "price_rise");
+    const priceRise = ((currentPrice - p.initialPrice) / p.initialPrice) * 100;
+    
+    const config = await getTradeConfig(p.userId);
+    if (priceRise >= config.priceRiseTriggerPercent) {
+      console.log(`Price rise trigger for ${p.tokenSymbol}: ${priceRise.toFixed(1)}% rise`);
+      await triggerEarlyBuy(p.id, p.userId, "price_rise");
+    }
   }
 }
