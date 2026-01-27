@@ -101,12 +101,28 @@ function getPriorityColor(priority: string): string {
   }
 }
 
+const SUMMARY_COOLDOWN_MS = 60000;
+
 export function AIInsights() {
   const { toast } = useToast();
   const [chatInput, setChatInput] = useState("");
   const [timeFilter, setTimeFilter] = useState("all");
   const [tokenFilter, setTokenFilter] = useState("");
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(Date.now());
   const chatEndRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    if (cooldownUntil > Date.now()) {
+      const interval = setInterval(() => {
+        setNow(Date.now());
+        if (Date.now() >= cooldownUntil) {
+          clearInterval(interval);
+        }
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [cooldownUntil]);
 
   const buildEventsUrl = () => {
     const params = new URLSearchParams();
@@ -164,6 +180,30 @@ export function AIInsights() {
     },
   });
 
+  const summarizeEvents = useMutation({
+    mutationFn: () => {
+      const eventCount = events?.length ?? 0;
+      const filterDesc = tokenFilter 
+        ? `filtered for "${tokenFilter}"` 
+        : timeFilter !== "all" 
+          ? `from the last ${timeFilter === "60" ? "hour" : timeFilter === "360" ? "6 hours" : "24 hours"}`
+          : "all";
+      const prompt = `Summarize the ${eventCount} events I'm seeing (${filterDesc}). What patterns do you notice? Any concerns or opportunities?`;
+      return apiRequest("POST", "/api/ai/chat", { message: prompt });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/chat"] });
+      setCooldownUntil(Date.now() + SUMMARY_COOLDOWN_MS);
+      toast({ description: "Pincher is analyzing..." });
+    },
+    onError: () => {
+      toast({ description: "Failed to summarize", variant: "destructive" });
+    },
+  });
+
+  const canSummarize = now >= cooldownUntil;
+  const cooldownRemaining = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory]);
@@ -192,14 +232,31 @@ export function AIInsights() {
               <Zap className="h-4 w-4" />
               Activity Feed
             </CardTitle>
-            <Button
-              size="icon"
-              variant="ghost"
-              onClick={() => refetchEvents()}
-              data-testid="button-refresh-events"
-            >
-              <RefreshCw className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => summarizeEvents.mutate()}
+                disabled={summarizeEvents.isPending || !canSummarize || eventsLoading || !events?.length}
+                title={!canSummarize ? `Wait ${cooldownRemaining}s` : "Ask Pincher to summarize"}
+                data-testid="button-summarize-events"
+              >
+                {summarizeEvents.isPending ? (
+                  <RefreshCw className="h-3 w-3 animate-spin mr-1" />
+                ) : (
+                  <Sparkles className="h-3 w-3 mr-1" />
+                )}
+                Summarize
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={() => refetchEvents()}
+                data-testid="button-refresh-events"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
           <div className="flex gap-2 pt-2">
             <Select value={timeFilter} onValueChange={setTimeFilter}>
