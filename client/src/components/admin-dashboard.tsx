@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2 } from "lucide-react";
+import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 
 interface AdminUser {
@@ -47,6 +48,24 @@ interface AdminMessage {
   expiresAt: number | null;
 }
 
+interface PendingWallet {
+  id: number;
+  userId: number;
+  username: string;
+  walletAddress: string;
+  label: string | null;
+  aiScore: number | null;
+  aiScoreDetails: {
+    score: number;
+    hitRate: number;
+    avgMultiplier: number;
+    totalTrades: number;
+    realizedPnL: number;
+    analysis: string;
+  } | null;
+  createdAt: number;
+}
+
 export function AdminDashboard() {
   const { toast } = useToast();
   const [messageTitle, setMessageTitle] = useState("");
@@ -69,6 +88,55 @@ export function AdminDashboard() {
   const { data: adminMessages, isLoading: messagesLoading } = useQuery<AdminMessage[]>({
     queryKey: ["/api/admin/messages"],
   });
+
+  const { data: pendingWallets, isLoading: pendingLoading } = useQuery<PendingWallet[]>({
+    queryKey: ["/api/admin/pending-wallets"],
+  });
+
+  const approveWallet = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/admin/wallets/${id}/approve`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/pending-wallets"] });
+      toast({ description: "Wallet approved for community sharing" });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to approve wallet", variant: "destructive" });
+    },
+  });
+
+  const rejectWallet = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/admin/wallets/${id}/reject`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/pending-wallets"] });
+      toast({ description: "Wallet rejected" });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to reject wallet", variant: "destructive" });
+    },
+  });
+
+  const rescoreWallet = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/admin/wallets/${id}/rescore`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/pending-wallets"] });
+      toast({ description: "Wallet rescored successfully" });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to rescore wallet", variant: "destructive" });
+    },
+  });
+
+  const getScoreColor = (score: number) => {
+    if (score >= 70) return "text-green-500 border-green-500/50";
+    if (score >= 40) return "text-yellow-500 border-yellow-500/50";
+    return "text-red-500 border-red-500/50";
+  };
+
+  const getScoreBgColor = (score: number) => {
+    if (score >= 70) return "bg-green-500/10";
+    if (score >= 40) return "bg-yellow-500/10";
+    return "bg-red-500/10";
+  };
 
   const createMessage = useMutation({
     mutationFn: (data: { title: string; content: string; priority: string; targetUserId: number | null }) =>
@@ -207,6 +275,131 @@ export function AdminDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Wallet className="h-5 w-5" />
+            Pending Wallet Approvals
+            {pendingWallets && pendingWallets.length > 0 && (
+              <Badge variant="secondary" className="ml-2">{pendingWallets.length}</Badge>
+            )}
+          </CardTitle>
+          <CardDescription>Review wallet submissions for community sharing</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {pendingLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          ) : pendingWallets && pendingWallets.length > 0 ? (
+            <div className="space-y-3">
+              {pendingWallets.map((wallet) => (
+                <div
+                  key={wallet.id}
+                  data-testid={`pending-wallet-${wallet.id}`}
+                  className={`p-4 rounded-lg border ${wallet.aiScore ? getScoreBgColor(wallet.aiScore) : "bg-muted/50"}`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium">{wallet.label || "Unnamed Wallet"}</span>
+                        <Badge variant="outline" className="text-xs">by {wallet.username}</Badge>
+                        {wallet.aiScore !== null && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Badge variant="outline" className={`gap-1 ${getScoreColor(wallet.aiScore)}`}>
+                                <Brain className="h-3 w-3" />
+                                {wallet.aiScore}
+                              </Badge>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              <div className="space-y-1">
+                                <p className="font-medium">AI Trading Score</p>
+                                {wallet.aiScoreDetails && (
+                                  <div className="text-xs space-y-0.5">
+                                    <p>Hit Rate: {(wallet.aiScoreDetails.hitRate * 100).toFixed(0)}%</p>
+                                    <p>Avg Multiplier: {wallet.aiScoreDetails.avgMultiplier.toFixed(2)}x</p>
+                                    <p>Total Trades: {wallet.aiScoreDetails.totalTrades}</p>
+                                    <p>Realized PnL: ${wallet.aiScoreDetails.realizedPnL.toFixed(2)}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+                      </div>
+                      <span className="text-xs text-muted-foreground font-mono block">
+                        {wallet.walletAddress.slice(0, 8)}...{wallet.walletAddress.slice(-6)}
+                      </span>
+                      {wallet.aiScoreDetails && (
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1">
+                            <Target className="h-3 w-3" />
+                            {(wallet.aiScoreDetails.hitRate * 100).toFixed(0)}% wins
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <TrendingUp className="h-3 w-3" />
+                            {wallet.aiScoreDetails.avgMultiplier.toFixed(1)}x avg
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Activity className="h-3 w-3" />
+                            {wallet.aiScoreDetails.totalTrades} trades
+                          </span>
+                        </div>
+                      )}
+                      {wallet.aiScoreDetails?.analysis && (
+                        <p className="text-xs text-muted-foreground italic">
+                          "{wallet.aiScoreDetails.analysis}"
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => rescoreWallet.mutate(wallet.id)}
+                        disabled={rescoreWallet.isPending}
+                        title="Rescore"
+                        data-testid={`button-rescore-wallet-${wallet.id}`}
+                      >
+                        <RefreshCw className={`h-4 w-4 ${rescoreWallet.isPending ? "animate-spin" : ""}`} />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-green-500 hover:text-green-600"
+                        onClick={() => approveWallet.mutate(wallet.id)}
+                        disabled={approveWallet.isPending}
+                        title="Approve"
+                        data-testid={`button-approve-wallet-${wallet.id}`}
+                      >
+                        <CheckCircle className="h-5 w-5" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="text-red-500 hover:text-red-600"
+                        onClick={() => rejectWallet.mutate(wallet.id)}
+                        disabled={rejectWallet.isPending}
+                        title="Reject"
+                        data-testid={`button-reject-wallet-${wallet.id}`}
+                      >
+                        <XCircle className="h-5 w-5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-center text-muted-foreground py-6">
+              No pending wallet submissions
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
