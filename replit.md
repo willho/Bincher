@@ -130,9 +130,18 @@ A multi-user, real-time monitoring application that tracks swap transactions for
   - On sells, keeps 4x gas reserve and sends profits to main wallet
 - **Dynamic Priority Fees**: Uses Helius RPC to estimate current network fees
 - **Automatic Buys**: Queues token purchases when monitored wallet buys SOL → Token
-- **Random Delay**: 20-40 minute random delay before executing buy (configurable)
+- **Split Buy System**: Large purchases are broken into smaller chunks for stealth
+  - Random buy percentage: 10-15% of hot wallet balance (randomized per trade)
+  - Purchases over $400 USD split into $350-400 chunks (randomized per segment)
+  - Token wallet created at queue time and shared across all segments
+  - Initial segment: 10-20 minute random delay
+  - Subsequent segments: 25-35 minute random delay after previous segment
+  - Any segment can execute early on price trigger (10% rise)
+  - Holdings aggregate correctly regardless of segment execution order
+  - UI shows segment progress (e.g., "2/3")
+- **Random Delay**: 10-20 minute random delay for first segment (configurable)
 - **Early Triggers**: Buy immediately if 10+ buys detected OR 10% price rise from queue time
-- **Buy Size**: Uses 10% of hot wallet SOL balance per trade (configurable)
+- **Buy Size**: Uses 10-15% of hot wallet SOL balance per trade (randomized)
 - **Auto-Reclaim at 4x**: Automatically sells 2x initial investment when tokens hit 4x multiplier
 - **Progressive Take-Profit**: Sells 10% of remaining holdings at 10x, 100x, 1000x+ milestones
 - **Milestone Tracking**: Each reclaim milestone tracked per token (4x, 10x, 100x, etc.)
