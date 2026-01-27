@@ -154,26 +154,15 @@ export default function Dashboard() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => wallet?.address && copyToClipboard(wallet.address, "Wallet address")}
-                  data-testid="button-copy-wallet"
-                >
-                  <Copy className="h-3 w-3 mr-1" />
-                  Copy
-                </Button>
-                <a
-                  href={`https://solscan.io/account/${wallet?.address}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary text-sm flex items-center gap-1 hover:underline"
-                  data-testid="link-solscan"
-                >
-                  View on Solscan <ExternalLink className="h-3 w-3" />
-                </a>
-              </div>
+              <a
+                href={`https://solscan.io/account/${wallet?.address}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary text-sm flex items-center gap-1 hover:underline"
+                data-testid="link-solscan"
+              >
+                View on Solscan <ExternalLink className="h-3 w-3" />
+              </a>
             </div>
           </CardContent>
         </Card>
