@@ -1459,6 +1459,61 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== API Budget Routes (Admin Only) ====================
+  
+  // Get all API budget statuses
+  app.get("/api/admin/api-budget", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getAllBudgetStatuses } = await import("./api-budget");
+      const statuses = await getAllBudgetStatuses();
+      res.json(statuses);
+    } catch (error) {
+      console.error("Error getting API budget statuses:", error);
+      res.status(500).json({ error: "Failed to get API budget statuses" });
+    }
+  });
+
+  // Get budget status for specific service
+  app.get("/api/admin/api-budget/:service", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getBudgetStatus } = await import("./api-budget");
+      const service = req.params.service as "helius" | "dexscreener" | "openai";
+      const status = await getBudgetStatus(service);
+      res.json(status);
+    } catch (error) {
+      console.error("Error getting API budget status:", error);
+      res.status(500).json({ error: "Failed to get API budget status" });
+    }
+  });
+
+  // Update budget config for a service
+  app.patch("/api/admin/api-budget/:service", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { updateBudgetConfig, getBudgetStatus } = await import("./api-budget");
+      const service = req.params.service as "helius" | "dexscreener" | "openai";
+      await updateBudgetConfig(service, req.body);
+      const status = await getBudgetStatus(service);
+      res.json(status);
+    } catch (error) {
+      console.error("Error updating API budget config:", error);
+      res.status(500).json({ error: "Failed to update API budget config" });
+    }
+  });
+
+  // Get usage history for a service
+  app.get("/api/admin/api-budget/:service/history", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getUsageHistory } = await import("./api-budget");
+      const service = req.params.service as "helius" | "dexscreener" | "openai";
+      const days = parseInt(req.query.days as string) || 7;
+      const history = await getUsageHistory(service, days);
+      res.json(history);
+    } catch (error) {
+      console.error("Error getting API usage history:", error);
+      res.status(500).json({ error: "Failed to get API usage history" });
+    }
+  });
+
   // Get messages for current user (includes unread count)
   app.get("/api/messages", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {

@@ -4,6 +4,7 @@ import { db } from "./db";
 import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
+import { trackApiCall, shouldAllowApiCall } from "./api-budget";
 
 const scoreResultSchema = z.object({
   score: z.number().int().min(0).max(100),
@@ -210,6 +211,12 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
   const historicalData = await getSnapshotsWithOutcomes();
   const prompt = buildScoringPrompt(snapshot, historicalData);
 
+  const budgetCheck = await shouldAllowApiCall("openai");
+  if (!budgetCheck.allowed) {
+    console.warn(`OpenAI API blocked: ${budgetCheck.reason}`);
+    return { score: 50, reasoning: "AI scoring unavailable due to budget limits", redFlags: [], greenFlags: [] };
+  }
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -223,6 +230,7 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
       max_completion_tokens: 500,
       temperature: 0.3,
     });
+    await trackApiCall("openai", "scoreToken"); // Track after successful response
 
     const content = response.choices[0]?.message?.content || "";
     
@@ -604,6 +612,11 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
     })),
   ];
 
+  const budgetCheck = await shouldAllowApiCall("openai");
+  if (!budgetCheck.allowed) {
+    return `*sighs* Look, my API budget's been throttled. Can't analyze anything right now. Try again later when the purse strings loosen up. ${budgetCheck.reason}`;
+  }
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -613,6 +626,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
       max_completion_tokens: 1000,
       temperature: 0.7,
     });
+    await trackApiCall("openai", "chat"); // Track after successful response
 
     const message = response.choices[0]?.message;
     
@@ -651,12 +665,26 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
         }))
       ];
       
+      // Check budget again before follow-up call (mid-flow protection)
+      const followUpBudgetCheck = await shouldAllowApiCall("openai");
+      if (!followUpBudgetCheck.allowed) {
+        const assistantMessage = `*sighs* Well, I started answering but my budget got cut mid-sentence. Here's what I got done: ${toolResults.join(", ")}. Ask me again later.`;
+        await db.insert(aiChatMessages).values({
+          userId,
+          role: "assistant",
+          content: assistantMessage,
+          createdAt: Math.floor(Date.now() / 1000),
+        });
+        return assistantMessage;
+      }
+      
       const followUp = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: followUpMessages,
         max_completion_tokens: 500,
         temperature: 0.7,
       });
+      await trackApiCall("openai", "chat_followup"); // Track after successful response
       
       const assistantMessage = followUp.choices[0]?.message?.content || toolResults.join("\n");
       
@@ -1044,6 +1072,12 @@ Provide analysis in JSON format:
   "additionalGreenFlags": ["any positives not in metrics"]
 }`;
 
+  const budgetCheck = await shouldAllowApiCall("openai");
+  if (!budgetCheck.allowed) {
+    console.warn(`OpenAI API blocked: ${budgetCheck.reason}`);
+    return null;
+  }
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -1057,6 +1091,7 @@ Provide analysis in JSON format:
       max_completion_tokens: 300,
       temperature: 0.3,
     });
+    await trackApiCall("openai", "analyzeWallet"); // Track after successful response
 
     const content = response.choices[0]?.message?.content || "";
     const jsonMatch = content.match(/\{[\s\S]*\}/);

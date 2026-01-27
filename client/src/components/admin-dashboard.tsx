@@ -66,6 +66,21 @@ interface PendingWallet {
   createdAt: number;
 }
 
+interface ApiBudgetStatus {
+  service: string;
+  dailyUsage: number;
+  monthlyUsage: number;
+  dailyLimit: number;
+  monthlyLimit: number;
+  dailyPercent: number;
+  monthlyPercent: number;
+  warningThreshold: number;
+  pauseThreshold: number;
+  isPaused: boolean;
+  isWarning: boolean;
+  shouldPause: boolean;
+}
+
 export function AdminDashboard() {
   const { toast } = useToast();
   const [messageTitle, setMessageTitle] = useState("");
@@ -91,6 +106,10 @@ export function AdminDashboard() {
 
   const { data: pendingWallets, isLoading: pendingLoading } = useQuery<PendingWallet[]>({
     queryKey: ["/api/admin/pending-wallets"],
+  });
+
+  const { data: apiBudgets, isLoading: budgetsLoading } = useQuery<ApiBudgetStatus[]>({
+    queryKey: ["/api/admin/api-budget"],
   });
 
   const approveWallet = useMutation({
@@ -275,6 +294,82 @@ export function AdminDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5" />
+            API Budget
+          </CardTitle>
+          <CardDescription>Monitor API usage and budget limits</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {budgetsLoading ? (
+            <div className="grid gap-4 md:grid-cols-3">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+            </div>
+          ) : apiBudgets && apiBudgets.length > 0 ? (
+            <div className="grid gap-4 md:grid-cols-3">
+              {apiBudgets.map((budget) => (
+                <div
+                  key={budget.service}
+                  data-testid={`api-budget-${budget.service}`}
+                  className={`p-4 rounded-lg border ${
+                    budget.isPaused ? "border-destructive bg-destructive/10" :
+                    budget.isWarning ? "border-yellow-500 bg-yellow-500/10" :
+                    "bg-muted/50"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-medium capitalize">{budget.service}</span>
+                    {budget.isPaused ? (
+                      <Badge variant="destructive">Paused</Badge>
+                    ) : budget.isWarning ? (
+                      <Badge variant="outline" className="border-yellow-500 text-yellow-600">Warning</Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-green-600">Active</Badge>
+                    )}
+                  </div>
+                  <div className="space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Daily</span>
+                      <span>{budget.dailyUsage.toLocaleString()} / {budget.dailyLimit.toLocaleString()} ({budget.dailyPercent}%)</span>
+                    </div>
+                    <div className="w-full bg-muted rounded-full h-2">
+                      <div 
+                        className={`h-2 rounded-full ${
+                          budget.dailyPercent >= budget.pauseThreshold ? "bg-destructive" :
+                          budget.dailyPercent >= budget.warningThreshold ? "bg-yellow-500" :
+                          "bg-green-500"
+                        }`}
+                        style={{ width: `${Math.min(budget.dailyPercent, 100)}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between mt-2">
+                      <span className="text-muted-foreground">Monthly</span>
+                      <span>{budget.monthlyUsage.toLocaleString()} / {budget.monthlyLimit.toLocaleString()} ({budget.monthlyPercent}%)</span>
+                    </div>
+                    <div className="w-full bg-muted rounded-full h-2">
+                      <div 
+                        className={`h-2 rounded-full ${
+                          budget.monthlyPercent >= budget.pauseThreshold ? "bg-destructive" :
+                          budget.monthlyPercent >= budget.warningThreshold ? "bg-yellow-500" :
+                          "bg-green-500"
+                        }`}
+                        style={{ width: `${Math.min(budget.monthlyPercent, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-center py-4">No API usage data available yet</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

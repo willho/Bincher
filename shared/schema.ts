@@ -576,3 +576,34 @@ export interface HeliusWebhookPayload {
     };
   };
 }
+
+// API usage tracking table for budget management
+export const apiUsage = pgTable("api_usage", {
+  id: serial("id").primaryKey(),
+  service: text("service").notNull(), // helius, dexscreener, openai
+  endpoint: text("endpoint"), // optional endpoint detail
+  callCount: integer("call_count").notNull().default(1),
+  timestamp: integer("timestamp").notNull(), // unix timestamp
+  date: text("date").notNull(), // YYYY-MM-DD for daily aggregation
+  month: text("month").notNull(), // YYYY-MM for monthly aggregation
+});
+
+export const insertApiUsageSchema = createInsertSchema(apiUsage).omit({ id: true });
+export type ApiUsage = typeof apiUsage.$inferSelect;
+export type InsertApiUsage = z.infer<typeof insertApiUsageSchema>;
+
+// API budget configuration
+export const apiBudgetConfig = pgTable("api_budget_config", {
+  id: serial("id").primaryKey(),
+  service: text("service").notNull().unique(), // helius, dexscreener, openai
+  monthlyLimit: integer("monthly_limit").notNull().default(10000),
+  dailyLimit: integer("daily_limit").notNull().default(500),
+  warningThreshold: integer("warning_threshold").notNull().default(80), // percent
+  pauseThreshold: integer("pause_threshold").notNull().default(95), // percent
+  isPaused: boolean("is_paused").notNull().default(false),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertApiBudgetConfigSchema = createInsertSchema(apiBudgetConfig).omit({ id: true });
+export type ApiBudgetConfig = typeof apiBudgetConfig.$inferSelect;
+export type InsertApiBudgetConfig = z.infer<typeof insertApiBudgetConfigSchema>;

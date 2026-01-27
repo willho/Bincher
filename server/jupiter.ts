@@ -1,5 +1,6 @@
 import { Connection, PublicKey, Transaction, VersionedTransaction, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getHotWalletKeypair, getHotWalletBalance, getTokenWalletBalance } from "./wallet";
+import { trackApiCall, shouldAllowApiCall } from "./api-budget";
 
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 const JUPITER_API = "https://quote-api.jup.ag/v6";
@@ -107,6 +108,12 @@ export async function getSolPriceUsd(): Promise<number> {
     return cachedSolPrice.price;
   }
   
+  const budgetCheck = await shouldAllowApiCall("dexscreener");
+  if (!budgetCheck.allowed) {
+    console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
+    return cachedSolPrice?.price || 150; // Fallback to cached or default
+  }
+  
   try {
     // Use wrapped SOL address for DexScreener lookup
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${SOL_MINT}`);
@@ -116,6 +123,7 @@ export async function getSolPriceUsd(): Promise<number> {
     }
     
     const data = await response.json();
+    await trackApiCall("dexscreener", "getSolPriceUsd"); // Track after successful response
     if (data.pairs && data.pairs.length > 0) {
       // Get price from the highest liquidity pair
       const sortedPairs = data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
@@ -330,11 +338,18 @@ export async function sellToken(
 }
 
 export async function getTokenPrice(tokenMint: string): Promise<number | null> {
+  const budgetCheck = await shouldAllowApiCall("dexscreener");
+  if (!budgetCheck.allowed) {
+    console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
+    return null;
+  }
+  
   try {
     const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
     if (!response.ok) return null;
     
     const data = await response.json();
+    await trackApiCall("dexscreener", "getTokenPrice"); // Track after successful response
     if (data.pairs && data.pairs.length > 0) {
       const sortedPairs = data.pairs.sort((a: any, b: any) => 
         (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
@@ -361,6 +376,13 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
   if (tokenMints.length === 0) {
     return results;
   }
+  
+  const budgetCheck = await shouldAllowApiCall("dexscreener");
+  if (!budgetCheck.allowed) {
+    console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
+    tokenMints.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+    return results;
+  }
 
   const BATCH_SIZE = 30;
   const batches: string[][] = [];
@@ -370,6 +392,14 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
   }
 
   for (const batch of batches) {
+    // Per-batch budget check
+    const batchBudgetCheck = await shouldAllowApiCall("dexscreener");
+    if (!batchBudgetCheck.allowed) {
+      console.warn(`DexScreener API blocked mid-batch: ${batchBudgetCheck.reason}`);
+      batch.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+      break; // Stop processing remaining batches
+    }
+    
     try {
       const addresses = batch.join(",");
       const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${addresses}`);
@@ -380,6 +410,7 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
       }
       
       const data = await response.json();
+      await trackApiCall("dexscreener", "getBatchTokenPrices"); // Track after successful response
       
       batch.forEach(mint => {
         results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null });
@@ -426,11 +457,18 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
 }
 
 export async function getTokenInfo(tokenMint: string): Promise<{ name: string; symbol: string } | null> {
+  const budgetCheck = await shouldAllowApiCall("dexscreener");
+  if (!budgetCheck.allowed) {
+    console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
+    return null;
+  }
+  
   try {
     const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
     if (!response.ok) return null;
     
     const data = await response.json();
+    await trackApiCall("dexscreener", "getTokenInfo"); // Track after successful response
     if (data.pairs && data.pairs.length > 0) {
       const sortedPairs = data.pairs.sort((a: any, b: any) => 
         (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)

@@ -1,4 +1,7 @@
 import type { HeliusWebhookPayload, InsertSwap, TokenMetadata } from "@shared/schema";
+import { trackApiCall, shouldAllowApiCall } from "./api-budget";
+
+// Import for DexScreener budget tracking (fetchTokenMetadata uses DexScreener)
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const WALLET_ADDRESS = "C92nBXrrANmWpgJKhBdbnqtUuCcoEZ7kQJoyScZ5sQak";
@@ -31,11 +34,18 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
     return undefined;
   }
   
+  const budgetCheck = await shouldAllowApiCall("dexscreener");
+  if (!budgetCheck.allowed) {
+    console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
+    return undefined;
+  }
+  
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`);
     if (!response.ok) return undefined;
     
     const data = await response.json();
+    await trackApiCall("dexscreener", "fetchTokenMetadata"); // Track after successful response
     if (!data.pairs || data.pairs.length === 0) return undefined;
     
     // Get the pair with highest liquidity
@@ -75,6 +85,12 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
     return [];
   }
 
+  const budgetCheck = await shouldAllowApiCall("helius");
+  if (!budgetCheck.allowed) {
+    console.warn(`Helius API blocked: ${budgetCheck.reason}`);
+    return [];
+  }
+
   try {
     const [holdersResponse, supplyResponse] = await Promise.all([
       fetch(
@@ -111,6 +127,7 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
     }
 
     const holdersData = await holdersResponse.json();
+    await trackApiCall("helius", "getTokenLargestAccounts", 1); // Track holders call only
     if (!holdersData.result?.value) {
       return [];
     }
@@ -118,6 +135,7 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
     let totalSupply = 0;
     if (supplyResponse.ok) {
       const supplyData = await supplyResponse.json();
+      await trackApiCall("helius", "getTokenSupply", 1); // Track supply call separately on success
       if (supplyData.result?.value?.amount) {
         totalSupply = parseFloat(supplyData.result.value.amount);
       }
