@@ -63,6 +63,92 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
   }
 }
 
+export interface TopHolderInfo {
+  address: string;
+  percent: number;
+  isLP?: boolean;
+}
+
+export async function fetchTopHolders(mintAddress: string, limit: number = 100): Promise<TopHolderInfo[]> {
+  if (!HELIUS_API_KEY) {
+    console.warn("No Helius API key - skipping top holders fetch");
+    return [];
+  }
+
+  try {
+    const [holdersResponse, supplyResponse] = await Promise.all([
+      fetch(
+        `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: "top-holders",
+            method: "getTokenLargestAccounts",
+            params: [mintAddress],
+          }),
+        }
+      ),
+      fetch(
+        `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: "token-supply",
+            method: "getTokenSupply",
+            params: [mintAddress],
+          }),
+        }
+      ),
+    ]);
+
+    if (!holdersResponse.ok) {
+      console.error("Helius API error (holders):", holdersResponse.status);
+      return [];
+    }
+
+    const holdersData = await holdersResponse.json();
+    if (!holdersData.result?.value) {
+      return [];
+    }
+
+    let totalSupply = 0;
+    if (supplyResponse.ok) {
+      const supplyData = await supplyResponse.json();
+      if (supplyData.result?.value?.amount) {
+        totalSupply = parseFloat(supplyData.result.value.amount);
+      }
+    }
+    
+    if (totalSupply === 0) {
+      totalSupply = holdersData.result.value.reduce(
+        (sum: number, h: any) => sum + parseFloat(h.amount || "0"),
+        0
+      );
+    }
+
+    if (totalSupply === 0) return [];
+
+    const holders: TopHolderInfo[] = [];
+    for (const holder of holdersData.result.value.slice(0, limit)) {
+      const amount = parseFloat(holder.amount || "0");
+      const percent = (amount / totalSupply) * 100;
+      holders.push({
+        address: holder.address,
+        percent: Math.round(percent * 100) / 100,
+      });
+    }
+
+    return holders;
+  } catch (error) {
+    console.error("Error fetching top holders:", error);
+    return [];
+  }
+}
+
 // Token mint to symbol mapping for common Solana tokens
 const TOKEN_SYMBOLS: Record<string, string> = {
   "So11111111111111111111111111111111111111112": "SOL",

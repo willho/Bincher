@@ -207,6 +207,7 @@ export const tokenSnapshots = pgTable("token_snapshots", {
   holders: integer("holders"),
   topHolderPercent: real("top_holder_percent"),
   devWalletPercent: real("dev_wallet_percent"),
+  topHolders: jsonb("top_holders").$type<{ address: string; percent: number; isLP?: boolean }[]>(),
   
   // LP info
   lpBurned: boolean("lp_burned"),

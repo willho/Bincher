@@ -17,6 +17,12 @@ const openai = new OpenAI({
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || "https://api.openai.com/v1",
 });
 
+export interface TopHolder {
+  address: string;
+  percent: number;
+  isLP?: boolean;
+}
+
 export interface SnapshotData {
   tokenMint: string;
   tokenSymbol: string;
@@ -35,6 +41,7 @@ export interface SnapshotData {
   holders?: number;
   topHolderPercent?: number;
   devWalletPercent?: number;
+  topHolders?: TopHolder[];
   lpBurned?: boolean;
   lpLockedPercent?: number;
   sourceWallets?: string[];
@@ -72,6 +79,7 @@ export async function createSnapshot(data: SnapshotData): Promise<number> {
     holders: data.holders,
     topHolderPercent: data.topHolderPercent,
     devWalletPercent: data.devWalletPercent,
+    topHolders: data.topHolders || null,
     lpBurned: data.lpBurned,
     lpLockedPercent: data.lpLockedPercent,
     sourceWallets: data.sourceWallets || [],

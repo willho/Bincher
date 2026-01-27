@@ -4,6 +4,8 @@ import { hotWallet, tradeConfig, holdings, pendingBuys } from "@shared/schema";
 import type { HotWallet, TradeConfig, Holding, PendingBuy } from "@shared/schema";
 import { eq, and, or } from "drizzle-orm";
 import * as crypto from "crypto";
+import { fetchTopHolders } from "./helius";
+import { createSnapshot, getSnapshotByToken } from "./ai";
 
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
   console.error("CRITICAL: SESSION_SECRET must be set and at least 32 characters for secure key encryption");
@@ -451,6 +453,31 @@ export async function addPendingBuy(
     if (i < segments.length - 1) {
       const segmentDelayMinutes = 25 + Math.random() * 10;
       scheduledBuyAt += Math.floor(segmentDelayMinutes * 60);
+    }
+  }
+  
+  // Create token snapshot if not exists (shared across all users)
+  const existingSnapshot = await getSnapshotByToken(tokenMint);
+  if (!existingSnapshot) {
+    try {
+      console.log(`Creating snapshot for ${tokenSymbol}...`);
+      const topHolders = await fetchTopHolders(tokenMint, 100);
+      const topHolderPercent = topHolders.length > 0 ? topHolders[0].percent : undefined;
+      
+      await createSnapshot({
+        tokenMint,
+        tokenSymbol,
+        tokenName,
+        priceUsd: initialPrice,
+        liquidity,
+        holders: undefined,
+        topHolderPercent,
+        topHolders: topHolders.length > 0 ? topHolders : undefined,
+        sourceWallets: sourceWalletData?.walletAddress ? [sourceWalletData.walletAddress] : undefined,
+      });
+      console.log(`Snapshot created for ${tokenSymbol} with ${topHolders.length} top holders`);
+    } catch (error) {
+      console.error(`Failed to create snapshot for ${tokenSymbol}:`, error);
     }
   }
   

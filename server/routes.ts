@@ -1647,6 +1647,30 @@ export async function registerRoutes(
     }
   });
 
+  // Get token heat scores
+  app.get("/api/ai/heat-scores", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getHotTokens } = await import("./heat-score");
+      const heatScores = await getHotTokens();
+      res.json(heatScores);
+    } catch (error) {
+      console.error("Error getting heat scores:", error);
+      res.status(500).json({ error: "Failed to get heat scores" });
+    }
+  });
+
+  // Get heat score for a specific token
+  app.get("/api/ai/heat-scores/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { calculateTokenHeat } = await import("./heat-score");
+      const heat = await calculateTokenHeat(req.params.tokenMint);
+      res.json(heat);
+    } catch (error) {
+      console.error("Error getting token heat:", error);
+      res.status(500).json({ error: "Failed to get token heat" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
   

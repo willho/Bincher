@@ -348,6 +348,83 @@ export async function getTokenPrice(tokenMint: string): Promise<number | null> {
   }
 }
 
+export interface BatchPriceResult {
+  tokenMint: string;
+  price: number | null;
+  liquidity: number | null;
+  priceChange24h: number | null;
+}
+
+export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<string, BatchPriceResult>> {
+  const results = new Map<string, BatchPriceResult>();
+  
+  if (tokenMints.length === 0) {
+    return results;
+  }
+
+  const BATCH_SIZE = 30;
+  const batches: string[][] = [];
+  
+  for (let i = 0; i < tokenMints.length; i += BATCH_SIZE) {
+    batches.push(tokenMints.slice(i, i + BATCH_SIZE));
+  }
+
+  for (const batch of batches) {
+    try {
+      const addresses = batch.join(",");
+      const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${addresses}`);
+      
+      if (!response.ok) {
+        batch.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+        continue;
+      }
+      
+      const data = await response.json();
+      
+      batch.forEach(mint => {
+        results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null });
+      });
+      
+      if (data.pairs && data.pairs.length > 0) {
+        const pairsByToken = new Map<string, any[]>();
+        
+        for (const pair of data.pairs) {
+          const baseMint = pair.baseToken?.address;
+          if (baseMint) {
+            if (!pairsByToken.has(baseMint)) {
+              pairsByToken.set(baseMint, []);
+            }
+            pairsByToken.get(baseMint)!.push(pair);
+          }
+        }
+        
+        for (const [mint, pairs] of pairsByToken) {
+          const sortedPairs = pairs.sort((a: any, b: any) => 
+            (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
+          );
+          const bestPair = sortedPairs[0];
+          
+          results.set(mint, {
+            tokenMint: mint,
+            price: parseFloat(bestPair.priceUsd) || null,
+            liquidity: bestPair.liquidity?.usd || null,
+            priceChange24h: bestPair.priceChange?.h24 || null,
+          });
+        }
+      }
+      
+      if (batches.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    } catch (error) {
+      console.error("Failed to get batch token prices:", error);
+      batch.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+    }
+  }
+
+  return results;
+}
+
 export async function getTokenInfo(tokenMint: string): Promise<{ name: string; symbol: string } | null> {
   try {
     const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
