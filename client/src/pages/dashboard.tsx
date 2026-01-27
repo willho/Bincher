@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useWebSocket } from "@/hooks/use-websocket";
@@ -71,6 +71,13 @@ export default function Dashboard() {
     queryKey: ["/api/settings"],
   });
 
+  // Pre-fill email when settings load
+  useEffect(() => {
+    if (settings?.email && !email) {
+      setEmail(settings.email);
+    }
+  }, [settings?.email]);
+
   const { data: wallet } = useQuery<{ address: string }>({
     queryKey: ["/api/wallet"],
   });
@@ -95,6 +102,7 @@ export default function Dashboard() {
       apiRequest("PATCH", "/api/settings", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      toast({ description: "Settings saved successfully" });
     },
   });
 
@@ -275,11 +283,11 @@ export default function Dashboard() {
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
+                <Label htmlFor="email">Notification Email</Label>
                 <Input
                   id="email"
                   type="email"
-                  placeholder={settings?.email || "Enter email"}
+                  placeholder="Enter email address"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   data-testid="input-email"
@@ -297,13 +305,10 @@ export default function Dashboard() {
                 />
               </div>
             </div>
-            <div className="flex items-center justify-between gap-4 pt-2">
-              <p className="text-sm text-muted-foreground">
-                Current: <span className="font-medium text-foreground">{settings?.email}</span>
-              </p>
+            <div className="flex items-center justify-end gap-4 pt-2">
               <Button 
                 onClick={handleSaveSettings}
-                disabled={updateSettings.isPending || (!email && !minAmount)}
+                disabled={updateSettings.isPending || (email === settings?.email && !minAmount)}
                 data-testid="button-save-settings"
               >
                 {updateSettings.isPending ? (
