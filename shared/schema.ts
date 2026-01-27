@@ -18,9 +18,29 @@ export const tokenMetadataSchema = z.object({
 
 export type TokenMetadata = z.infer<typeof tokenMetadataSchema>;
 
+// Users table for authentication
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  createdAt: integer("created_at").notNull(),
+  lastLoginAt: integer("last_login_at"),
+});
+
+// Monitored wallets - multiple wallet addresses per user
+export const monitoredWallets = pgTable("monitored_wallets", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  walletAddress: text("wallet_address").notNull(),
+  label: text("label"),
+  enabled: boolean("enabled").default(true),
+  createdAt: integer("created_at").notNull(),
+});
+
 // Database tables
 export const swaps = pgTable("swaps", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   signature: text("signature").notNull().unique(),
   timestamp: integer("timestamp").notNull(),
   type: text("type").notNull(),
@@ -39,6 +59,7 @@ export const swaps = pgTable("swaps", {
 
 export const settings = pgTable("settings", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   email: text("email").notNull(),
   emails: jsonb("emails").$type<string[]>().default([]),
   enabled: boolean("enabled").default(true),
@@ -59,6 +80,7 @@ export const monitoringState = pgTable("monitoring_state", {
 // Hot wallet for automated trading (encrypted private key stored securely)
 export const hotWallet = pgTable("hot_wallet", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   publicKey: text("public_key").notNull(),
   encryptedPrivateKey: text("encrypted_private_key").notNull(),
   createdAt: integer("created_at").notNull(),
@@ -67,7 +89,8 @@ export const hotWallet = pgTable("hot_wallet", {
 // Holdings - tokens owned by the hot wallet from copy trades
 export const holdings = pgTable("holdings", {
   id: serial("id").primaryKey(),
-  tokenMint: text("token_mint").notNull().unique(),
+  userId: integer("user_id"),
+  tokenMint: text("token_mint").notNull(),
   tokenSymbol: text("token_symbol").notNull(),
   tokenName: text("token_name"),
   amountBought: real("amount_bought").notNull(),
@@ -90,7 +113,8 @@ export const holdings = pgTable("holdings", {
 // Pending buys - tokens queued for purchase with delay
 export const pendingBuys = pgTable("pending_buys", {
   id: serial("id").primaryKey(),
-  tokenMint: text("token_mint").notNull().unique(),
+  userId: integer("user_id"),
+  tokenMint: text("token_mint").notNull(),
   tokenSymbol: text("token_symbol").notNull(),
   tokenName: text("token_name"),
   detectedAt: integer("detected_at").notNull(),
@@ -105,6 +129,7 @@ export const pendingBuys = pgTable("pending_buys", {
 // Trade config - settings for copy trading
 export const tradeConfig = pgTable("trade_config", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id"),
   enabled: boolean("enabled").default(false),
   buyPercentage: real("buy_percentage").default(10),
   minDelayMinutes: integer("min_delay_minutes").default(20),
@@ -118,6 +143,8 @@ export const tradeConfig = pgTable("trade_config", {
 });
 
 // Insert schemas
+export const insertUserSchema = createInsertSchema(users).omit({ id: true });
+export const insertMonitoredWalletSchema = createInsertSchema(monitoredWallets).omit({ id: true });
 export const insertSwapSchema = createInsertSchema(swaps).omit({ id: true });
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
 export const insertMonitoringStateSchema = createInsertSchema(monitoringState).omit({ id: true });
@@ -125,6 +152,14 @@ export const insertHotWalletSchema = createInsertSchema(hotWallet).omit({ id: tr
 export const insertHoldingSchema = createInsertSchema(holdings).omit({ id: true });
 export const insertPendingBuySchema = createInsertSchema(pendingBuys).omit({ id: true });
 export const insertTradeConfigSchema = createInsertSchema(tradeConfig).omit({ id: true });
+
+// User types
+export type User = typeof users.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
+
+// Monitored wallet types
+export type MonitoredWallet = typeof monitoredWallets.$inferSelect;
+export type InsertMonitoredWallet = z.infer<typeof insertMonitoredWalletSchema>;
 
 // Types for API use
 export const swapSchema = z.object({

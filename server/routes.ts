@@ -1,6 +1,7 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
+import cookieParser from "cookie-parser";
 import { storage } from "./storage";
 import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl } from "./helius";
 import { sendSwapNotification } from "./email";
@@ -8,6 +9,7 @@ import type { HeliusWebhookPayload } from "@shared/schema";
 import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
+import { createUser, authenticateUser, createSession, getSession, destroySession, getUserCount } from "./auth";
 import { 
   getOrCreateHotWallet, 
   createHotWallet, 
@@ -83,6 +85,120 @@ export async function registerRoutes(
     ws.on("close", () => {
       console.log("WebSocket client disconnected");
     });
+  });
+
+  // Cookie parser middleware
+  app.use(cookieParser());
+
+  // Extend Express Request type
+  interface AuthenticatedRequest extends Request {
+    userId?: number;
+    username?: string;
+  }
+
+  // Auth middleware - extracts user from session cookie
+  const authMiddleware = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    const token = req.cookies?.session;
+    if (token) {
+      const session = getSession(token);
+      if (session) {
+        req.userId = session.userId;
+        req.username = session.username;
+      }
+    }
+    next();
+  };
+
+  // Require auth middleware - blocks unauthenticated requests
+  const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.userId) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  };
+
+  // Apply auth middleware to all routes
+  app.use(authMiddleware);
+
+  // Auth routes (public - no auth required)
+  app.get("/api/auth/check-setup", async (req, res) => {
+    try {
+      const userCount = await getUserCount();
+      res.json({ needsSetup: userCount === 0 });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to check setup" });
+    }
+  });
+
+  app.get("/api/auth/session", (req: AuthenticatedRequest, res) => {
+    if (req.userId && req.username) {
+      res.json({ authenticated: true, username: req.username, userId: req.userId });
+    } else {
+      res.json({ authenticated: false });
+    }
+  });
+
+  app.post("/api/auth/register", async (req, res) => {
+    try {
+      const { username, password } = req.body;
+      
+      if (!username || !password) {
+        return res.status(400).json({ error: "Username and password required" });
+      }
+      
+      if (password.length < 8) {
+        return res.status(400).json({ error: "Password must be at least 8 characters" });
+      }
+
+      const result = await createUser(username, password);
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Registration error:", error);
+      res.status(500).json({ error: "Registration failed" });
+    }
+  });
+
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const { username, password, rememberMe } = req.body;
+      
+      if (!username || !password) {
+        return res.status(400).json({ error: "Username and password required" });
+      }
+
+      const result = await authenticateUser(username, password);
+      if (!result.success || !result.userId) {
+        return res.status(401).json({ error: result.error || "Invalid credentials" });
+      }
+
+      const token = createSession(result.userId, username, rememberMe === true);
+      
+      const maxAge = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+      res.cookie("session", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge,
+      });
+
+      res.json({ success: true, username });
+    } catch (error) {
+      console.error("Login error:", error);
+      res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    const token = req.cookies?.session;
+    if (token) {
+      destroySession(token);
+    }
+    res.clearCookie("session");
+    res.json({ success: true });
   });
 
   // Get monitoring status
