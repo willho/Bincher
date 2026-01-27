@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { holdings, pendingBuys, tradeConfig } from "@shared/schema";
+import { holdings, pendingBuys, tradeConfig, tokenEvents } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import { 
   getTradeConfig, 
@@ -16,10 +16,19 @@ import { checkPriceRiseTrigger } from "./trade-processor";
 const PRICE_CHECK_INTERVAL_MS = 30000;
 const MIN_CHECK_INTERVAL_PER_TOKEN_MS = 30000;
 
+const SWING_THRESHOLD_PERCENT = 10;
+const SWING_5MIN_THRESHOLD_PERCENT = 5;
+const SWING_VALUE_WEIGHTED_THRESHOLD_PERCENT = 3;
+const SWING_VALUE_WEIGHTED_MIN_USD = 1000;
+const SWING_COOLDOWN_MS = 180000;
+const PRICE_HISTORY_WINDOW_MS = 300000;
+
 let isPriceMonitorRunning = false;
 let priceMonitorInterval: NodeJS.Timeout | null = null;
 
 const tokenCheckTimestamps: Map<string, number> = new Map();
+const swingEventCooldowns: Map<string, number> = new Map();
+const priceHistory: Map<string, Array<{ price: number; timestamp: number }>> = new Map();
 
 export async function checkPricesAndReclaim(): Promise<void> {
   if (isPriceMonitorRunning) {
@@ -96,6 +105,148 @@ export async function checkPricesAndReclaim(): Promise<void> {
   }
 }
 
+function updatePriceHistory(tokenMint: string, price: number): void {
+  const now = Date.now();
+  const history = priceHistory.get(tokenMint) || [];
+  
+  history.push({ price, timestamp: now });
+  
+  const cutoff = now - PRICE_HISTORY_WINDOW_MS;
+  const filtered = history.filter(h => h.timestamp > cutoff);
+  
+  priceHistory.set(tokenMint, filtered);
+}
+
+function getPriceChangeIn5Min(tokenMint: string, currentPrice: number): number | null {
+  const history = priceHistory.get(tokenMint);
+  if (!history || history.length < 2) return null;
+  
+  const now = Date.now();
+  const targetTime = now - PRICE_HISTORY_WINDOW_MS;
+  
+  let closestSample = history[0];
+  let closestDiff = Math.abs(history[0].timestamp - targetTime);
+  
+  for (const sample of history) {
+    const diff = Math.abs(sample.timestamp - targetTime);
+    if (diff < closestDiff) {
+      closestDiff = diff;
+      closestSample = sample;
+    }
+  }
+  
+  if (now - closestSample.timestamp < 60000) return null;
+  
+  return ((currentPrice - closestSample.price) / closestSample.price) * 100;
+}
+
+interface SwingDetectionResult {
+  isSwing: boolean;
+  changePercent: number;
+  triggerType: "instant" | "5min" | "value_weighted" | null;
+  direction: "up" | "down" | null;
+}
+
+function detectSwing(
+  tokenMint: string,
+  currentPrice: number,
+  lastPrice: number | null,
+  valueUsd: number
+): SwingDetectionResult {
+  const result: SwingDetectionResult = {
+    isSwing: false,
+    changePercent: 0,
+    triggerType: null,
+    direction: null,
+  };
+  
+  const change5Min = getPriceChangeIn5Min(tokenMint, currentPrice);
+  if (change5Min !== null && Math.abs(change5Min) >= SWING_5MIN_THRESHOLD_PERCENT) {
+    result.isSwing = true;
+    result.triggerType = "5min";
+    result.changePercent = change5Min;
+    result.direction = change5Min >= 0 ? "up" : "down";
+    return result;
+  }
+  
+  if (!lastPrice || lastPrice <= 0) return result;
+  
+  const instantChange = ((currentPrice - lastPrice) / lastPrice) * 100;
+  result.changePercent = instantChange;
+  result.direction = instantChange >= 0 ? "up" : "down";
+  
+  if (Math.abs(instantChange) >= SWING_THRESHOLD_PERCENT) {
+    result.isSwing = true;
+    result.triggerType = "instant";
+    return result;
+  }
+  
+  if (valueUsd >= SWING_VALUE_WEIGHTED_MIN_USD && Math.abs(instantChange) >= SWING_VALUE_WEIGHTED_THRESHOLD_PERCENT) {
+    result.isSwing = true;
+    result.triggerType = "value_weighted";
+    return result;
+  }
+  
+  return result;
+}
+
+function canTriggerSwingEvent(tokenMint: string): boolean {
+  const lastSwing = swingEventCooldowns.get(tokenMint);
+  if (!lastSwing) return true;
+  return Date.now() - lastSwing >= SWING_COOLDOWN_MS;
+}
+
+async function createSwingEvent(
+  holding: typeof holdings.$inferSelect,
+  currentPrice: number,
+  swing: SwingDetectionResult,
+  valueUsd: number
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const direction = swing.direction === "up" ? "+" : "";
+  const changeStr = `${direction}${swing.changePercent.toFixed(1)}%`;
+  
+  let triggerDesc = "";
+  switch (swing.triggerType) {
+    case "instant":
+      triggerDesc = "sudden move";
+      break;
+    case "5min":
+      triggerDesc = "5-min trend";
+      break;
+    case "value_weighted":
+      triggerDesc = "significant bag";
+      break;
+  }
+  
+  const priority = Math.abs(swing.changePercent) >= 20 ? "high" : 
+                   Math.abs(swing.changePercent) >= 10 ? "normal" : "low";
+  
+  await db.insert(tokenEvents).values({
+    tokenMint: holding.tokenMint,
+    tokenSymbol: holding.tokenSymbol,
+    eventType: "price_swing",
+    priority,
+    title: `${holding.tokenSymbol} ${changeStr} (${triggerDesc})`,
+    description: `${swing.direction === "up" ? "Pumping" : "Dumping"} - ${changeStr} detected via ${triggerDesc}`,
+    metadata: {
+      changePercent: swing.changePercent,
+      triggerType: swing.triggerType,
+      direction: swing.direction,
+      valueUsd,
+      buyPrice: holding.buyPrice,
+      currentPrice,
+    },
+    createdAt: now,
+    priceAtEvent: currentPrice,
+    valueUsd,
+    relatedWallet: holding.sourceWalletAddress,
+  });
+  
+  swingEventCooldowns.set(holding.tokenMint, Date.now());
+  console.log(`Swing event: ${holding.tokenSymbol} ${changeStr} (${triggerDesc})`);
+}
+
 async function checkHoldingPriceWithBatch(
   holding: typeof holdings.$inferSelect,
   userId: number,
@@ -113,6 +264,21 @@ async function checkHoldingPriceWithBatch(
 
     const multiplier = currentPrice / holding.buyPrice;
     const now = Math.floor(Date.now() / 1000);
+    const valueUsd = holding.currentAmount * currentPrice;
+
+    updatePriceHistory(holding.tokenMint, currentPrice);
+
+    if (canTriggerSwingEvent(holding.tokenMint)) {
+      const swing = detectSwing(
+        holding.tokenMint,
+        currentPrice,
+        holding.lastPrice,
+        valueUsd
+      );
+      if (swing.isSwing) {
+        await createSwingEvent(holding, currentPrice, swing, valueUsd);
+      }
+    }
 
     await db.update(holdings).set({
       lastPriceCheck: now,
