@@ -30,6 +30,7 @@ import { holdings } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
+import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots } from "./ai";
 
 let wss: WebSocketServer;
 
@@ -947,6 +948,103 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting stats:", error);
       res.status(500).json({ error: "Failed to get stats" });
+    }
+  });
+
+  // ==================== AI Insights Routes ====================
+
+  // Get AI insights summary
+  app.get("/api/ai/insights", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const insights = await getAIInsights();
+      res.json(insights);
+    } catch (error) {
+      console.error("Error getting AI insights:", error);
+      res.status(500).json({ error: "Failed to get AI insights" });
+    }
+  });
+
+  // Get all token snapshots
+  app.get("/api/ai/snapshots", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const snapshots = await getAllSnapshots();
+      res.json(snapshots);
+    } catch (error) {
+      console.error("Error getting snapshots:", error);
+      res.status(500).json({ error: "Failed to get snapshots" });
+    }
+  });
+
+  // Get single snapshot
+  app.get("/api/ai/snapshots/:snapshotId", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const snapshotId = parseInt(req.params.snapshotId);
+      if (isNaN(snapshotId)) {
+        return res.status(400).json({ error: "Invalid snapshot ID" });
+      }
+      const snapshot = await getSnapshot(snapshotId);
+      if (!snapshot) {
+        return res.status(404).json({ error: "Snapshot not found" });
+      }
+      res.json(snapshot);
+    } catch (error) {
+      console.error("Error getting snapshot:", error);
+      res.status(500).json({ error: "Failed to get snapshot" });
+    }
+  });
+
+  // Refresh AI score for a snapshot
+  app.post("/api/ai/snapshots/:snapshotId/score", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const snapshotId = parseInt(req.params.snapshotId);
+      if (isNaN(snapshotId)) {
+        return res.status(400).json({ error: "Invalid snapshot ID" });
+      }
+      const result = await refreshScore(snapshotId);
+      if (!result) {
+        return res.status(500).json({ error: "Failed to score token" });
+      }
+      res.json(result);
+    } catch (error) {
+      console.error("Error scoring token:", error);
+      res.status(500).json({ error: "Failed to score token" });
+    }
+  });
+
+  // Chat with AI
+  app.post("/api/ai/chat", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { message } = req.body;
+      if (!message || typeof message !== 'string') {
+        return res.status(400).json({ error: "Message is required" });
+      }
+      const response = await chatWithAI(req.userId!, message);
+      res.json({ response });
+    } catch (error) {
+      console.error("Error in AI chat:", error);
+      res.status(500).json({ error: "Failed to get AI response" });
+    }
+  });
+
+  // Get chat history
+  app.get("/api/ai/chat", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const history = await getChatHistory(req.userId!);
+      res.json(history);
+    } catch (error) {
+      console.error("Error getting chat history:", error);
+      res.status(500).json({ error: "Failed to get chat history" });
+    }
+  });
+
+  // Clear chat history
+  app.delete("/api/ai/chat", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      await clearChatHistory(req.userId!);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error clearing chat history:", error);
+      res.status(500).json({ error: "Failed to clear chat history" });
     }
   });
 

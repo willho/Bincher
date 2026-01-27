@@ -14,11 +14,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyTrading } from "@/components/copy-trading";
 import { MonitoredWallets } from "@/components/monitored-wallets";
 import { AdminDashboard } from "@/components/admin-dashboard";
+import { AIInsights } from "@/components/ai-insights";
 import { 
   Activity, 
   ArrowRightLeft, 
   Bell, 
   Bot,
+  Brain,
   Copy,
   ExternalLink, 
   Mail, 
@@ -183,7 +185,7 @@ export default function Dashboard() {
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         <Tabs defaultValue="monitor" className="w-full">
-          <TabsList className={`grid w-full mb-6 ${isAdmin ? 'grid-cols-3' : 'grid-cols-2'}`}>
+          <TabsList className={`grid w-full mb-6 ${isAdmin ? 'grid-cols-4' : 'grid-cols-3'}`}>
             <TabsTrigger value="monitor" className="flex items-center gap-2" data-testid="tab-monitor">
               <Activity className="h-4 w-4" />
               Monitor
@@ -191,6 +193,10 @@ export default function Dashboard() {
             <TabsTrigger value="copy-trade" className="flex items-center gap-2" data-testid="tab-copy-trade">
               <Bot className="h-4 w-4" />
               Copy Trade
+            </TabsTrigger>
+            <TabsTrigger value="ai-insights" className="flex items-center gap-2" data-testid="tab-ai-insights">
+              <Brain className="h-4 w-4" />
+              AI Insights
             </TabsTrigger>
             {isAdmin && (
               <TabsTrigger value="admin" className="flex items-center gap-2" data-testid="tab-admin">
@@ -516,6 +522,10 @@ export default function Dashboard() {
           
           <TabsContent value="copy-trade">
             <CopyTrading />
+          </TabsContent>
+
+          <TabsContent value="ai-insights">
+            <AIInsights />
           </TabsContent>
 
           {isAdmin && (

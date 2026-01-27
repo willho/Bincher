@@ -137,6 +137,8 @@ export const pendingBuys = pgTable("pending_buys", {
   solAmount: real("sol_amount"),
   tokenWalletPublicKey: text("token_wallet_public_key"),
   tokenWalletEncryptedKey: text("token_wallet_encrypted_key"),
+  snapshotId: integer("snapshot_id"),
+  aiScore: integer("ai_score"),
 });
 
 // Trade config - settings for copy trading
@@ -153,6 +155,74 @@ export const tradeConfig = pgTable("trade_config", {
   milestonesToAlert: jsonb("milestones_to_alert").$type<number[]>().default([2, 4, 10]),
   dumpAlertEnabled: boolean("dump_alert_enabled").default(true),
   dumpAlertThreshold: real("dump_alert_threshold").default(50),
+  minBuyScore: integer("min_buy_score"),
+});
+
+// Token snapshots - SHARED across all users for AI learning
+// Captures comprehensive data at queue time for AI analysis
+export const tokenSnapshots = pgTable("token_snapshots", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol").notNull(),
+  tokenName: text("token_name"),
+  capturedAt: integer("captured_at").notNull(),
+  
+  // Market data
+  priceUsd: real("price_usd"),
+  marketCap: real("market_cap"),
+  fdv: real("fdv"),
+  liquidity: real("liquidity"),
+  volume24h: real("volume_24h"),
+  priceChange24h: real("price_change_24h"),
+  
+  // Token age and launch info
+  pairCreatedAt: integer("pair_created_at"),
+  tokenAgeMinutes: integer("token_age_minutes"),
+  
+  // Buy/sell pressure
+  buys24h: integer("buys_24h"),
+  sells24h: integer("sells_24h"),
+  buyVolume24h: real("buy_volume_24h"),
+  sellVolume24h: real("sell_volume_24h"),
+  
+  // Holder analysis
+  holders: integer("holders"),
+  topHolderPercent: real("top_holder_percent"),
+  devWalletPercent: real("dev_wallet_percent"),
+  
+  // LP info
+  lpBurned: boolean("lp_burned"),
+  lpLockedPercent: real("lp_locked_percent"),
+  
+  // Source wallet analysis (who bought before us)
+  sourceWallets: jsonb("source_wallets").$type<string[]>().default([]),
+  knownWhalesBuying: integer("known_whales_buying").default(0),
+  
+  // Social presence
+  hasTwitter: boolean("has_twitter").default(false),
+  hasTelegram: boolean("has_telegram").default(false),
+  hasWebsite: boolean("has_website").default(false),
+  twitterHandle: text("twitter_handle"),
+  socialSearchResult: text("social_search_result"),
+  
+  // AI analysis
+  aiScore: integer("ai_score"),
+  aiAnalysis: text("ai_analysis"),
+  aiScoredAt: integer("ai_scored_at"),
+  
+  // Trade outcome tracking (updated after sells)
+  finalMultiplier: real("final_multiplier"),
+  holdTimeMinutes: integer("hold_time_minutes"),
+  outcomeUpdatedAt: integer("outcome_updated_at"),
+});
+
+// AI chat messages - for conversational insights
+export const aiChatMessages = pgTable("ai_chat_messages", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  createdAt: integer("created_at").notNull(),
 });
 
 // Insert schemas
@@ -165,6 +235,8 @@ export const insertHotWalletSchema = createInsertSchema(hotWallet).omit({ id: tr
 export const insertHoldingSchema = createInsertSchema(holdings).omit({ id: true });
 export const insertPendingBuySchema = createInsertSchema(pendingBuys).omit({ id: true });
 export const insertTradeConfigSchema = createInsertSchema(tradeConfig).omit({ id: true });
+export const insertTokenSnapshotSchema = createInsertSchema(tokenSnapshots).omit({ id: true });
+export const insertAiChatMessageSchema = createInsertSchema(aiChatMessages).omit({ id: true });
 
 // User types
 export type User = typeof users.$inferSelect;
@@ -270,6 +342,8 @@ export const pendingBuySchema = z.object({
   parentBuyId: z.number().optional(),
   solAmount: z.number().optional(),
   tokenWalletPublicKey: z.string().optional(),
+  snapshotId: z.number().optional(),
+  aiScore: z.number().optional(),
 });
 
 export type PendingBuy = z.infer<typeof pendingBuySchema>;
@@ -286,9 +360,64 @@ export const tradeConfigSchema = z.object({
   milestonesToAlert: z.array(z.number()).default([2, 4, 10]),
   dumpAlertEnabled: z.boolean().default(true),
   dumpAlertThreshold: z.number().default(50),
+  minBuyScore: z.number().optional(),
 });
 
 export type TradeConfig = z.infer<typeof tradeConfigSchema>;
+
+// Token snapshot schema for AI analysis
+export const tokenSnapshotSchema = z.object({
+  id: z.number(),
+  tokenMint: z.string(),
+  tokenSymbol: z.string(),
+  tokenName: z.string().optional(),
+  capturedAt: z.number(),
+  priceUsd: z.number().optional(),
+  marketCap: z.number().optional(),
+  fdv: z.number().optional(),
+  liquidity: z.number().optional(),
+  volume24h: z.number().optional(),
+  priceChange24h: z.number().optional(),
+  pairCreatedAt: z.number().optional(),
+  tokenAgeMinutes: z.number().optional(),
+  buys24h: z.number().optional(),
+  sells24h: z.number().optional(),
+  buyVolume24h: z.number().optional(),
+  sellVolume24h: z.number().optional(),
+  holders: z.number().optional(),
+  topHolderPercent: z.number().optional(),
+  devWalletPercent: z.number().optional(),
+  lpBurned: z.boolean().optional(),
+  lpLockedPercent: z.number().optional(),
+  sourceWallets: z.array(z.string()).default([]),
+  knownWhalesBuying: z.number().default(0),
+  hasTwitter: z.boolean().default(false),
+  hasTelegram: z.boolean().default(false),
+  hasWebsite: z.boolean().default(false),
+  twitterHandle: z.string().optional(),
+  socialSearchResult: z.string().optional(),
+  aiScore: z.number().optional(),
+  aiAnalysis: z.string().optional(),
+  aiScoredAt: z.number().optional(),
+  finalMultiplier: z.number().optional(),
+  holdTimeMinutes: z.number().optional(),
+  outcomeUpdatedAt: z.number().optional(),
+});
+
+export type TokenSnapshot = z.infer<typeof tokenSnapshotSchema>;
+export type InsertTokenSnapshot = z.infer<typeof insertTokenSnapshotSchema>;
+
+// AI chat message schema
+export const aiChatMessageSchema = z.object({
+  id: z.number(),
+  userId: z.number(),
+  role: z.string(),
+  content: z.string(),
+  createdAt: z.number(),
+});
+
+export type AiChatMessage = z.infer<typeof aiChatMessageSchema>;
+export type InsertAiChatMessage = z.infer<typeof insertAiChatMessageSchema>;
 
 // Helius webhook payload types
 export interface HeliusWebhookPayload {

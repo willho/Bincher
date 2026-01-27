@@ -40,6 +40,8 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `holdings` - Stores tokens bought through copy trading per user
 - `pending_buys` - Queue of tokens waiting to be bought per user
 - `trade_config` - Copy trading configuration settings per user
+- `token_snapshots` - SHARED across all users, captures comprehensive token data for AI analysis
+- `ai_chat_messages` - Per-user AI chat conversation history
 
 ### Key Components
 - `/server/db.ts` - Database connection using Drizzle ORM
@@ -52,11 +54,13 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `/server/trade-processor.ts` - Pending buy queue processor
 - `/server/price-monitor.ts` - Price monitoring and auto-reclaim logic
 - `/server/routes.ts` - API endpoints, webhook handler, and startup restoration
+- `/server/ai.ts` - AI scoring service with token analysis, chat interface, and insights
 - `/client/src/pages/dashboard.tsx` - Main dashboard UI
 - `/client/src/pages/login.tsx` - Login and registration page
 - `/client/src/components/copy-trading.tsx` - Copy trading UI component
 - `/client/src/components/monitored-wallets.tsx` - Monitored wallets management UI
 - `/client/src/components/admin-dashboard.tsx` - Admin dashboard UI (admin only)
+- `/client/src/components/ai-insights.tsx` - AI Insights tab with chat and analysis
 - `/shared/schema.ts` - Database schema and Zod types
 
 ## Configuration
@@ -112,6 +116,15 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `GET /api/admin/wallets` - Get all monitored wallets across all users
 - `GET /api/admin/stats` - Get system-wide statistics
 
+### AI Insights
+- `GET /api/ai/insights` - Get aggregated AI insights (patterns, win rate, etc.)
+- `GET /api/ai/snapshots` - Get all token snapshots
+- `GET /api/ai/snapshots/:snapshotId` - Get single snapshot
+- `POST /api/ai/snapshots/:snapshotId/score` - Refresh AI score for a snapshot
+- `POST /api/ai/chat` - Send a message to AI chat
+- `GET /api/ai/chat` - Get chat history
+- `DELETE /api/ai/chat` - Clear chat history
+
 ## Features
 
 ### Swap Monitoring
@@ -153,6 +166,17 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **Pending Buy States**: active (waiting), paused (insufficient funds), cancelled, completed
 - **Auto-Pause**: Pending buys are automatically paused when hot wallet balance is too low
 - **Manual Control**: Users can pause, resume, or cancel pending buys via UI
+
+### AI Token Analysis
+- **Token Snapshots**: Comprehensive data captured at queue time (market cap, liquidity, volume, buy/sell pressure, LP info, holder distribution, social presence)
+- **Shared Learning**: Token snapshots are shared across all users for collective AI learning
+- **AI Scoring**: GPT-4o-mini analyzes tokens and assigns 0-100 quality score
+- **Score at Queue Time**: Score calculated once when token is queued, with manual refresh option
+- **Optional Score Threshold**: Can set minimum AI score for automated buys in trade config
+- **Pattern Discovery**: AI identifies correlations from historical trading data (e.g., Twitter presence vs win rate)
+- **Chat Interface**: Interactive AI chat for asking questions about tokens and patterns
+- **Outcome Tracking**: Links trade outcomes (final multiplier, hold time) to snapshots for learning
+- **Cost Efficient**: Uses gpt-4o-mini via Replit AI Integrations (<$1/month typical usage)
 
 ## Security
 - User passwords hashed with PBKDF2 (10,000 iterations, random salt per user)
