@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { pgTable, text, boolean, integer, real, jsonb, serial } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
 
 // Token metadata schema (from DexScreener)
 export const tokenMetadataSchema = z.object({
@@ -16,7 +18,48 @@ export const tokenMetadataSchema = z.object({
 
 export type TokenMetadata = z.infer<typeof tokenMetadataSchema>;
 
-// Swap transaction schema
+// Database tables
+export const swaps = pgTable("swaps", {
+  id: serial("id").primaryKey(),
+  signature: text("signature").notNull().unique(),
+  timestamp: integer("timestamp").notNull(),
+  type: text("type").notNull(),
+  source: text("source").notNull(),
+  fromToken: text("from_token").notNull(),
+  fromTokenSymbol: text("from_token_symbol").notNull(),
+  fromAmount: real("from_amount").notNull(),
+  toToken: text("to_token").notNull(),
+  toTokenSymbol: text("to_token_symbol").notNull(),
+  toAmount: real("to_amount").notNull(),
+  fee: real("fee"),
+  slot: integer("slot").notNull(),
+  notificationSent: boolean("notification_sent").default(false),
+  toTokenMetadata: jsonb("to_token_metadata"),
+});
+
+export const settings = pgTable("settings", {
+  id: serial("id").primaryKey(),
+  email: text("email").notNull(),
+  emails: jsonb("emails").$type<string[]>().default([]),
+  enabled: boolean("enabled").default(true),
+  minSwapAmount: real("min_swap_amount"),
+});
+
+export const monitoringState = pgTable("monitoring_state", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull(),
+  isActive: boolean("is_active").default(false),
+  webhookId: text("webhook_id"),
+  lastUpdated: integer("last_updated").notNull(),
+  totalSwapsDetected: integer("total_swaps_detected").default(0),
+});
+
+// Insert schemas
+export const insertSwapSchema = createInsertSchema(swaps).omit({ id: true });
+export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
+export const insertMonitoringStateSchema = createInsertSchema(monitoringState).omit({ id: true });
+
+// Types for API use
 export const swapSchema = z.object({
   id: z.string(),
   signature: z.string(),

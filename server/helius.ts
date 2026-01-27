@@ -3,6 +3,20 @@ import type { HeliusWebhookPayload, InsertSwap, TokenMetadata } from "@shared/sc
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const WALLET_ADDRESS = "C92nBXrrANmWpgJKhBdbnqtUuCcoEZ7kQJoyScZ5sQak";
 
+export function getWebhookUrl(): string {
+  if (process.env.REPLIT_DEPLOYMENT) {
+    const slug = process.env.REPL_SLUG || "app";
+    const owner = process.env.REPL_OWNER || "user";
+    return `https://${slug}-${owner.toLowerCase()}.replit.app/api/webhook/helius`;
+  }
+  
+  if (process.env.REPLIT_DEV_DOMAIN) {
+    return `https://${process.env.REPLIT_DEV_DOMAIN}/api/webhook/helius`;
+  }
+  
+  return `https://${process.env.REPL_ID || 'app'}.worf.replit.dev/api/webhook/helius`;
+}
+
 export function getWalletAddress(): string {
   return WALLET_ADDRESS;
 }
@@ -178,5 +192,33 @@ export async function getWebhooks(): Promise<any[]> {
   } catch (error) {
     console.error("Error fetching webhooks:", error);
     return [];
+  }
+}
+
+export async function updateWebhookUrl(webhookId: string, newUrl: string): Promise<boolean> {
+  if (!HELIUS_API_KEY) return false;
+  
+  try {
+    const response = await fetch(`https://api.helius.xyz/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        webhookURL: newUrl,
+        transactionTypes: ["SWAP"],
+        accountAddresses: [WALLET_ADDRESS],
+        webhookType: "enhanced",
+      }),
+    });
+    
+    if (!response.ok) {
+      console.error("Failed to update webhook URL:", await response.text());
+      return false;
+    }
+    
+    console.log("Webhook URL updated to:", newUrl);
+    return true;
+  } catch (error) {
+    console.error("Error updating webhook:", error);
+    return false;
   }
 }

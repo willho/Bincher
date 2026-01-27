@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, getWalletAddress, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl } from "./helius";
 import { sendSwapNotification } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import { notificationSettingsSchema } from "@shared/schema";
@@ -86,21 +86,7 @@ export async function registerRoutes(
         return res.json({ success: true, status });
       }
 
-      // Get the webhook URL - use explicit REPL_SLUG for Replit or fallback to headers
-      const replSlug = process.env.REPL_SLUG;
-      const replOwner = process.env.REPL_OWNER;
-      
-      let webhookUrl: string;
-      if (replSlug && replOwner) {
-        // Replit deployment URL
-        webhookUrl = `https://${replSlug}.${replOwner}.repl.co/api/webhook/helius?secret=${WEBHOOK_SECRET}`;
-      } else {
-        // Fallback to request headers
-        const protocol = req.headers["x-forwarded-proto"] || "https";
-        const host = req.headers["x-forwarded-host"] || req.headers.host;
-        webhookUrl = `${protocol}://${host}/api/webhook/helius?secret=${WEBHOOK_SECRET}`;
-      }
-
+      const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
       console.log("Creating webhook with URL:", webhookUrl);
       const webhookId = await createWebhook(webhookUrl);
 
@@ -267,5 +253,39 @@ export async function registerRoutes(
     res.json(webhooks);
   });
 
+  // Restore monitoring on startup if it was active
+  await restoreMonitoring();
+
   return httpServer;
+}
+
+async function restoreMonitoring() {
+  try {
+    const status = await storage.getMonitoringStatus();
+    console.log("Checking monitoring status on startup:", status.isActive ? "ACTIVE" : "INACTIVE", "webhookId:", status.webhookId || "none");
+    
+    if (status.isActive && status.webhookId) {
+      const currentUrl = getWebhookUrl();
+      console.log("Monitoring was active, updating webhook URL to:", currentUrl);
+      
+      const updated = await updateWebhookUrl(status.webhookId, `${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`);
+      
+      if (!updated) {
+        console.log("Failed to update webhook, recreating...");
+        const newWebhookId = await createWebhook(`${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`);
+        
+        if (newWebhookId) {
+          await storage.updateMonitoringStatus({ webhookId: newWebhookId });
+          console.log("New webhook created:", newWebhookId);
+        } else {
+          console.error("Failed to recreate webhook on startup");
+          await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
+        }
+      } else {
+        console.log("Webhook URL updated successfully");
+      }
+    }
+  } catch (error) {
+    console.error("Error restoring monitoring:", error);
+  }
 }
