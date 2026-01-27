@@ -274,44 +274,99 @@ export async function addPendingBuy(
     return null;
   }
   
-  const config = await getTradeConfig(userId);
+  // Import the split buy functions
+  const { getSolPriceUsd, calculateSplitBuySegments, getRandomBuyPercentage } = await import("./jupiter");
+  
+  const balance = await getHotWalletBalance(userId);
+  if (balance <= 0) {
+    console.log(`User ${userId} has no SOL balance, skipping pending buy`);
+    return null;
+  }
+  
+  // Random buy percentage between 10-15%
+  const buyPercentage = getRandomBuyPercentage();
+  const totalSolAmount = balance * (buyPercentage / 100);
+  
+  // Get SOL price and calculate segments
+  const solPriceUsd = await getSolPriceUsd();
+  const segments = calculateSplitBuySegments(totalSolAmount, solPriceUsd);
+  
   const now = Math.floor(Date.now() / 1000);
-  const delayMinutes = config.minDelayMinutes + 
-    Math.random() * (config.maxDelayMinutes - config.minDelayMinutes);
-  const scheduledBuyAt = now + Math.floor(delayMinutes * 60);
   
-  const result = await db.insert(pendingBuys).values({
-    userId: userId,
-    tokenMint,
-    tokenSymbol,
-    tokenName,
-    detectedAt: now,
-    scheduledBuyAt,
-    initialPrice,
-    buyTriggered: false,
-    buyCount: 0,
-    initialBuyCount: 0,
-    status: "active",
-  }).returning();
+  // Initial delay: 10-20 minutes (random)
+  const initialDelayMinutes = 10 + Math.random() * 10;
+  let scheduledBuyAt = now + Math.floor(initialDelayMinutes * 60);
   
-  console.log(`Added pending buy for ${tokenSymbol} for user ${userId}, scheduled for ${new Date(scheduledBuyAt * 1000).toISOString()}`);
+  const totalUsd = totalSolAmount * solPriceUsd;
+  console.log(`Queuing ${segments.length} segment(s) for ${tokenSymbol}: $${totalUsd.toFixed(2)} USD (${totalSolAmount.toFixed(4)} SOL at ${buyPercentage.toFixed(1)}%)`);
   
-  return {
-    id: result[0].id,
-    userId: result[0].userId ?? undefined,
-    tokenMint: result[0].tokenMint,
-    tokenSymbol: result[0].tokenSymbol,
-    tokenName: result[0].tokenName ?? undefined,
-    detectedAt: result[0].detectedAt,
-    scheduledBuyAt: result[0].scheduledBuyAt,
-    initialPrice: result[0].initialPrice ?? undefined,
-    buyTriggered: result[0].buyTriggered ?? false,
-    triggerReason: result[0].triggerReason ?? undefined,
-    buyCount: result[0].buyCount ?? 0,
-    initialBuyCount: result[0].initialBuyCount ?? 0,
-    status: result[0].status ?? "active",
-    pauseReason: result[0].pauseReason ?? undefined,
-  };
+  // Create token wallet upfront - shared across ALL segments
+  // This ensures early triggers for any segment can use the same wallet
+  const tokenWallet = generateTokenWallet();
+  console.log(`Created token wallet for ${tokenSymbol}: ${tokenWallet.publicKey}`);
+  
+  let parentBuyId: number | undefined = undefined;
+  let firstPendingBuy: PendingBuy | null = null;
+  
+  for (let i = 0; i < segments.length; i++) {
+    const segmentSol = segments[i];
+    const segmentUsd = segmentSol * solPriceUsd;
+    
+    const result = await db.insert(pendingBuys).values({
+      userId: userId,
+      tokenMint,
+      tokenSymbol,
+      tokenName,
+      detectedAt: now,
+      scheduledBuyAt,
+      initialPrice,
+      buyTriggered: false,
+      buyCount: 0,
+      initialBuyCount: 0,
+      status: "active",
+      segmentIndex: i + 1,
+      totalSegments: segments.length,
+      parentBuyId: parentBuyId,
+      solAmount: segmentSol,
+      tokenWalletPublicKey: tokenWallet.publicKey,
+      tokenWalletEncryptedKey: tokenWallet.encryptedPrivateKey,
+    }).returning();
+    
+    // First segment becomes the parent for subsequent segments
+    if (i === 0) {
+      parentBuyId = result[0].id;
+      firstPendingBuy = {
+        id: result[0].id,
+        tokenMint: result[0].tokenMint,
+        tokenSymbol: result[0].tokenSymbol,
+        tokenName: result[0].tokenName ?? undefined,
+        detectedAt: result[0].detectedAt,
+        scheduledBuyAt: result[0].scheduledBuyAt,
+        initialPrice: result[0].initialPrice ?? undefined,
+        buyTriggered: result[0].buyTriggered ?? false,
+        triggerReason: result[0].triggerReason ?? undefined,
+        buyCount: result[0].buyCount ?? 0,
+        initialBuyCount: result[0].initialBuyCount ?? 0,
+        status: (result[0].status ?? "active") as "active" | "paused" | "cancelled" | "completed",
+        pauseReason: result[0].pauseReason ?? undefined,
+        segmentIndex: result[0].segmentIndex ?? 1,
+        totalSegments: result[0].totalSegments ?? 1,
+        parentBuyId: result[0].parentBuyId ?? undefined,
+        solAmount: result[0].solAmount ?? undefined,
+        tokenWalletPublicKey: result[0].tokenWalletPublicKey ?? undefined,
+      };
+    }
+    
+    console.log(`  Segment ${i + 1}/${segments.length}: $${segmentUsd.toFixed(2)} (${segmentSol.toFixed(4)} SOL) at ${new Date(scheduledBuyAt * 1000).toISOString()}`);
+    
+    // Subsequent segments: 25-35 minutes after previous (random)
+    if (i < segments.length - 1) {
+      const segmentDelayMinutes = 25 + Math.random() * 10;
+      scheduledBuyAt += Math.floor(segmentDelayMinutes * 60);
+    }
+  }
+  
+  return firstPendingBuy;
 }
 
 export interface WithdrawResult {

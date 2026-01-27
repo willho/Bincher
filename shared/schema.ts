@@ -115,6 +115,7 @@ export const holdings = pgTable("holdings", {
 
 // Pending buys - tokens queued for purchase with delay
 // Status: active (waiting), paused (insufficient funds), cancelled (user cancelled), completed (buy executed)
+// Split buys: When total > $400 USD, split into $350-400 segments with staggered timing
 export const pendingBuys = pgTable("pending_buys", {
   id: serial("id").primaryKey(),
   userId: integer("user_id"),
@@ -130,6 +131,12 @@ export const pendingBuys = pgTable("pending_buys", {
   initialBuyCount: integer("initial_buy_count").default(0),
   status: text("status").default("active"),
   pauseReason: text("pause_reason"),
+  segmentIndex: integer("segment_index").default(1),
+  totalSegments: integer("total_segments").default(1),
+  parentBuyId: integer("parent_buy_id"),
+  solAmount: real("sol_amount"),
+  tokenWalletPublicKey: text("token_wallet_public_key"),
+  tokenWalletEncryptedKey: text("token_wallet_encrypted_key"),
 });
 
 // Trade config - settings for copy trading
@@ -258,6 +265,11 @@ export const pendingBuySchema = z.object({
   initialBuyCount: z.number().default(0),
   status: z.enum(["active", "paused", "cancelled", "completed"]).default("active"),
   pauseReason: z.string().optional(),
+  segmentIndex: z.number().default(1),
+  totalSegments: z.number().default(1),
+  parentBuyId: z.number().optional(),
+  solAmount: z.number().optional(),
+  tokenWalletPublicKey: z.string().optional(),
 });
 
 export type PendingBuy = z.infer<typeof pendingBuySchema>;

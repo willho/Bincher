@@ -101,32 +101,32 @@ export async function executePendingBuy(
     }
 
     const buy = updateResult[0];
+    const isSegmentedBuy = (buy.totalSegments ?? 1) > 1;
     
-    // Check if we already have a holding for this token for this user (prevent duplicates)
-    const existingHolding = await db.select().from(holdings).where(
-      and(eq(holdings.tokenMint, buy.tokenMint), eq(holdings.userId, userId))
-    ).limit(1);
-    if (existingHolding.length > 0) {
-      console.log(`Already have holding for ${buy.tokenSymbol}, skipping buy`);
-      await db.update(pendingBuys).set({
-        status: "cancelled",
-        triggerReason: "already_holding",
-      }).where(eq(pendingBuys.id, pendingId));
-      return false;
+    // For non-segmented buys only: prevent duplicate holdings
+    // Segmented buys are expected to add to existing holdings
+    if (!isSegmentedBuy) {
+      const existingHolding = await db.select().from(holdings).where(
+        and(eq(holdings.tokenMint, buy.tokenMint), eq(holdings.userId, userId))
+      ).limit(1);
+      if (existingHolding.length > 0) {
+        console.log(`Already have holding for ${buy.tokenSymbol}, skipping buy`);
+        await db.update(pendingBuys).set({
+          status: "cancelled",
+          triggerReason: "already_holding",
+        }).where(eq(pendingBuys.id, pendingId));
+        return false;
+      }
     }
 
-    const config = await getTradeConfig(userId);
     const balance = await getHotWalletBalance(userId);
     
     // Estimate priority fee for funding calculation
     const priorityFeeLamports = await estimatePriorityFee();
     const priorityFeeSol = priorityFeeToSol(priorityFeeLamports);
     
-    // Calculate required funds:
-    // - buyAmount: SOL to swap for tokens
-    // - 4x priority fee: for buy, sell, and profit transfer transactions
-    // - 0.002 SOL base fee buffer: covers base fees for ~40 signatures (0.00005 each)
-    const solAmount = balance * (config.buyPercentage / 100);
+    // Use pre-calculated segment amount if available, otherwise calculate
+    const solAmount = buy.solAmount ?? balance * 0.1;
     const gasReserve = (priorityFeeSol * 4) + 0.002; // 4x priority + base fee buffer
     const totalRequired = solAmount + gasReserve;
     
@@ -136,10 +136,39 @@ export async function executePendingBuy(
       return false;
     }
 
-    // Generate a new disposable token wallet for this buy
-    console.log(`Generating token wallet for ${buy.tokenSymbol} buy...`);
-    const tokenWallet = generateTokenWallet();
-    console.log(`Created token wallet: ${tokenWallet.publicKey}`);
+    let tokenWallet: { publicKey: string; encryptedPrivateKey: string };
+    let tokenWalletKeypair: ReturnType<typeof getTokenWalletKeypair>;
+    
+    // Token wallet is created at queue time and stored on ALL segments
+    // This ensures any segment can execute first (e.g., early price trigger)
+    if (buy.tokenWalletEncryptedKey && buy.tokenWalletPublicKey) {
+      // Use pre-created token wallet from pending buy record
+      tokenWallet = {
+        publicKey: buy.tokenWalletPublicKey,
+        encryptedPrivateKey: buy.tokenWalletEncryptedKey,
+      };
+      tokenWalletKeypair = getTokenWalletKeypair(tokenWallet.encryptedPrivateKey);
+      if (!tokenWalletKeypair) {
+        console.error("Failed to decrypt token wallet keypair");
+        await cancelPendingBuy(pendingId, "token_wallet_decrypt_failed");
+        return false;
+      }
+      
+      const segmentInfo = isSegmentedBuy ? `Segment ${buy.segmentIndex}/${buy.totalSegments}: ` : "";
+      console.log(`${segmentInfo}Using token wallet ${tokenWallet.publicKey}`);
+    } else {
+      // Legacy fallback: generate new token wallet (for old pending buys without wallet)
+      console.log(`Generating token wallet for ${buy.tokenSymbol} buy (legacy)...`);
+      tokenWallet = generateTokenWallet();
+      console.log(`Created token wallet: ${tokenWallet.publicKey}`);
+      
+      tokenWalletKeypair = getTokenWalletKeypair(tokenWallet.encryptedPrivateKey);
+      if (!tokenWalletKeypair) {
+        console.error("Failed to decrypt token wallet keypair");
+        await cancelPendingBuy(pendingId, "token_wallet_decrypt_failed");
+        return false;
+      }
+    }
     
     // Get main wallet keypair to fund token wallet
     const mainWalletKeypair = await getHotWalletKeypair(userId);
@@ -159,15 +188,8 @@ export async function executePendingBuy(
     }
     console.log(`Token wallet funded: ${fundResult.signature}`);
     
-    // Get token wallet keypair for the buy
-    const tokenWalletKeypair = getTokenWalletKeypair(tokenWallet.encryptedPrivateKey);
-    if (!tokenWalletKeypair) {
-      console.error("Failed to decrypt token wallet keypair");
-      await cancelPendingBuy(pendingId, "token_wallet_decrypt_failed");
-      return false;
-    }
-    
-    console.log(`Buying ${buy.tokenSymbol} with ${solAmount.toFixed(4)} SOL (${config.buyPercentage}% of ${balance.toFixed(4)} SOL)`);
+    const segmentInfo = isSegmentedBuy ? ` (segment ${buy.segmentIndex}/${buy.totalSegments})` : "";
+    console.log(`Buying ${buy.tokenSymbol} with ${solAmount.toFixed(4)} SOL${segmentInfo}`);
 
     const result = await buyTokenWithWallet(tokenWalletKeypair, buy.tokenMint, solAmount);
 
@@ -180,26 +202,51 @@ export async function executePendingBuy(
     const currentPrice = await getTokenPrice(buy.tokenMint);
     const now = Math.floor(Date.now() / 1000);
 
-    // Store holding with token wallet info for future sells
-    await db.insert(holdings).values({
-      userId: userId,
-      tokenMint: buy.tokenMint,
-      tokenSymbol: buy.tokenSymbol,
-      tokenName: buy.tokenName,
-      amountBought: result.outputAmount || 0,
-      solSpent: result.inputAmount || solAmount,
-      buyPrice: currentPrice || buy.initialPrice || 0,
-      buyTimestamp: now,
-      buySignature: result.signature || "",
-      currentAmount: result.outputAmount || 0,
-      reclaimed: false,
-      lastPriceCheck: now,
-      lastPrice: currentPrice,
-      highestMultiplier: 1,
-      alertedMilestones: [],
-      tokenWalletPublicKey: tokenWallet.publicKey,
-      tokenWalletEncryptedKey: tokenWallet.encryptedPrivateKey,
-    });
+    // Check if holding already exists (for segmented buys, any segment can execute first)
+    const existingHolding = await db.select().from(holdings).where(
+      and(eq(holdings.tokenMint, buy.tokenMint), eq(holdings.userId, userId))
+    ).limit(1);
+    
+    if (existingHolding.length > 0) {
+      // Update existing holding (add to amounts)
+      const holding = existingHolding[0];
+      const newAmountBought = (holding.amountBought || 0) + (result.outputAmount || 0);
+      const newSolSpent = (holding.solSpent || 0) + (result.inputAmount || solAmount);
+      const newCurrentAmount = (holding.currentAmount || 0) + (result.outputAmount || 0);
+      
+      await db.update(holdings).set({
+        amountBought: newAmountBought,
+        solSpent: newSolSpent,
+        currentAmount: newCurrentAmount,
+        lastPriceCheck: now,
+        lastPrice: currentPrice,
+      }).where(eq(holdings.id, holding.id));
+      
+      console.log(`Updated holding for ${buy.tokenSymbol}${segmentInfo}`);
+    } else {
+      // Create new holding
+      await db.insert(holdings).values({
+        userId: userId,
+        tokenMint: buy.tokenMint,
+        tokenSymbol: buy.tokenSymbol,
+        tokenName: buy.tokenName,
+        amountBought: result.outputAmount || 0,
+        solSpent: result.inputAmount || solAmount,
+        buyPrice: currentPrice || buy.initialPrice || 0,
+        buyTimestamp: now,
+        buySignature: result.signature || "",
+        currentAmount: result.outputAmount || 0,
+        reclaimed: false,
+        lastPriceCheck: now,
+        lastPrice: currentPrice,
+        highestMultiplier: 1,
+        alertedMilestones: [],
+        tokenWalletPublicKey: tokenWallet.publicKey,
+        tokenWalletEncryptedKey: tokenWallet.encryptedPrivateKey,
+      });
+      
+      console.log(`Created holding for ${buy.tokenSymbol}${segmentInfo}`);
+    }
 
     await db.update(pendingBuys).set({
       buyTriggered: true,
@@ -207,12 +254,12 @@ export async function executePendingBuy(
       triggerReason: `completed:${triggerReason}`,
     }).where(eq(pendingBuys.id, pendingId));
 
-    console.log(`Successfully bought ${buy.tokenSymbol}:`);
+    console.log(`Successfully bought ${buy.tokenSymbol}${segmentInfo}:`);
     console.log(`  Signature: ${result.signature}`);
     console.log(`  Amount: ${result.outputAmount?.toLocaleString()} tokens`);
     console.log(`  Spent: ${result.inputAmount?.toFixed(4)} SOL`);
 
-    await sendBuyNotification(userId, buy.tokenSymbol, result.inputAmount || solAmount, result.outputAmount || 0, currentPrice, result.signature);
+    await sendBuyNotification(userId, buy.tokenSymbol, result.inputAmount || solAmount, result.outputAmount || 0, currentPrice, result.signature, buy.segmentIndex, buy.totalSegments);
 
     return true;
   } catch (error) {
@@ -317,22 +364,32 @@ async function sendBuyNotification(
   solSpent: number,
   tokenAmount: number,
   price: number | null,
-  signature: string | undefined
+  signature: string | undefined,
+  segmentIndex?: number | null,
+  totalSegments?: number | null
 ): Promise<void> {
   const settings = await storage.getNotificationSettings(userId);
   if (!settings?.enabled || !settings.emails?.length) {
     return;
   }
 
-  const subject = `Copy Trade: Bought ${tokenSymbol}`;
+  const isSegmented = (totalSegments ?? 1) > 1;
+  const segmentInfo = isSegmented ? ` (Segment ${segmentIndex}/${totalSegments})` : "";
+  const subject = `Copy Trade: Bought ${tokenSymbol}${segmentInfo}`;
   
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #fff; padding: 20px; border-radius: 12px;">
-      <h2 style="color: #00ff88; margin-bottom: 20px;">Copy Trade Executed</h2>
+      <h2 style="color: #00ff88; margin-bottom: 20px;">Copy Trade Executed${segmentInfo}</h2>
       
       <div style="background: #16213e; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
         <h3 style="color: #00ff88; margin: 0 0 12px 0;">${tokenSymbol}</h3>
         <table style="width: 100%; color: #e0e0e0;">
+          ${isSegmented ? `
+          <tr>
+            <td style="padding: 4px 0;">Segment:</td>
+            <td style="text-align: right; color: #fff;">${segmentIndex} of ${totalSegments}</td>
+          </tr>
+          ` : ''}
           <tr>
             <td style="padding: 4px 0;">SOL Spent:</td>
             <td style="text-align: right; color: #fff;">${solSpent.toFixed(4)} SOL</td>

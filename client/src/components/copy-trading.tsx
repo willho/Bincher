@@ -547,6 +547,7 @@ export function CopyTrading() {
                   {pendingBuys.map((pending) => {
                     const isPaused = pending.status === "paused";
                     const isActive = pending.status === "active";
+                    const isSegmented = (pending.totalSegments ?? 1) > 1;
                     
                     return (
                       <div
@@ -565,6 +566,11 @@ export function CopyTrading() {
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
                               <p className="font-medium">{pending.tokenSymbol}</p>
+                              {isSegmented && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {pending.segmentIndex}/{pending.totalSegments}
+                                </Badge>
+                              )}
                               {isPaused && (
                                 <Badge variant="outline" className="text-amber-500 border-amber-500/30 text-xs">
                                   Paused
@@ -572,7 +578,7 @@ export function CopyTrading() {
                               )}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                              Initial: {formatPrice(pending.initialPrice)}
+                              {pending.solAmount ? `${pending.solAmount.toFixed(3)} SOL` : `Initial: ${formatPrice(pending.initialPrice)}`}
                               {isPaused && pending.pauseReason && (
                                 <span className="text-amber-500 ml-2">
                                   ({pending.pauseReason === "insufficient_funds" ? "Low balance" : pending.pauseReason})
