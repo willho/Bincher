@@ -36,6 +36,9 @@ export function CopyTrading() {
   const [withdrawAddress, setWithdrawAddress] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [showWithdraw, setShowWithdraw] = useState(false);
+  const [showManualBuy, setShowManualBuy] = useState(false);
+  const [manualBuyMint, setManualBuyMint] = useState("");
+  const [manualBuyAmount, setManualBuyAmount] = useState("");
 
   const copyToClipboard = async (text: string, label: string = "Address") => {
     try {
@@ -86,6 +89,22 @@ export function CopyTrading() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/config"] });
       toast({ description: "Settings saved" });
+    },
+  });
+
+  const manualBuy = useMutation({
+    mutationFn: (data: { tokenMint: string; solAmount: number }) => 
+      apiRequest("POST", "/api/copy-trade/manual-buy", data),
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/wallet"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/holdings"] });
+      setManualBuyMint("");
+      setManualBuyAmount("");
+      setShowManualBuy(false);
+      toast({ description: `Bought ${data.tokenSymbol} for ${data.solSpent?.toFixed(4)} SOL` });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to execute buy", variant: "destructive" });
     },
   });
 
@@ -295,6 +314,78 @@ export function CopyTrading() {
                         <ArrowUpRight className="h-4 w-4 mr-2" />
                       )}
                       Withdraw
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <div className="border rounded-lg overflow-hidden">
+                <button
+                  className="w-full p-4 flex items-center justify-between hover-elevate"
+                  onClick={() => setShowManualBuy(!showManualBuy)}
+                  data-testid="button-toggle-manual-buy"
+                >
+                  <div className="flex items-center gap-2">
+                    <Plus className="h-4 w-4" />
+                    <span className="font-medium">Manual Buy</span>
+                  </div>
+                  <span className="text-sm text-muted-foreground">
+                    {showManualBuy ? "Hide" : "Show"}
+                  </span>
+                </button>
+                
+                {showManualBuy && (
+                  <div className="p-4 border-t space-y-4 bg-muted/30">
+                    <div className="space-y-2">
+                      <Label htmlFor="manual-buy-mint">Token Mint Address</Label>
+                      <Input
+                        id="manual-buy-mint"
+                        placeholder="Token contract address"
+                        value={manualBuyMint}
+                        onChange={(e) => setManualBuyMint(e.target.value)}
+                        data-testid="input-manual-buy-mint"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="manual-buy-amount">Amount (SOL)</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="manual-buy-amount"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="0.0"
+                          value={manualBuyAmount}
+                          onChange={(e) => setManualBuyAmount(e.target.value)}
+                          data-testid="input-manual-buy-amount"
+                        />
+                        <Button
+                          variant="outline"
+                          onClick={() => setManualBuyAmount(((hotWallet?.balance || 0) * 0.1).toFixed(4))}
+                          data-testid="button-manual-buy-10pct"
+                        >
+                          10%
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Available: {(hotWallet?.balance || 0).toFixed(4)} SOL
+                      </p>
+                    </div>
+                    <Button
+                      className="w-full"
+                      onClick={() => manualBuy.mutate({ 
+                        tokenMint: manualBuyMint, 
+                        solAmount: parseFloat(manualBuyAmount) 
+                      })}
+                      disabled={manualBuy.isPending || !manualBuyMint || !manualBuyAmount}
+                      data-testid="button-manual-buy-execute"
+                    >
+                      {manualBuy.isPending ? (
+                        <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <Plus className="h-4 w-4 mr-2" />
+                      )}
+                      Buy Token
                     </Button>
                   </div>
                 )}

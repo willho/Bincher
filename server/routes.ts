@@ -20,7 +20,7 @@ import {
   hasTokenBeenBought,
   withdrawSol
 } from "./wallet";
-import { sellToken } from "./jupiter";
+import { sellToken, buyToken, getTokenPrice, getTokenInfo } from "./jupiter";
 import { db } from "./db";
 import { holdings } from "@shared/schema";
 import { eq } from "drizzle-orm";
@@ -463,6 +463,84 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error selling token:", error);
       res.status(500).json({ error: "Failed to sell token" });
+    }
+  });
+
+  // Manual buy endpoint - buy any token by mint address
+  const manualBuySchema = z.object({
+    tokenMint: z.string().min(32).max(44),
+    solAmount: z.number().positive().finite().max(100),
+  });
+  
+  app.post("/api/copy-trade/manual-buy", async (req, res) => {
+    try {
+      const parsed = manualBuySchema.safeParse(req.body);
+      
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Valid token mint and SOL amount are required" });
+      }
+      
+      const { tokenMint, solAmount } = parsed.data;
+      
+      // Check if we already have a holding for this token
+      const existingHolding = await db.select().from(holdings).where(eq(holdings.tokenMint, tokenMint)).limit(1);
+      if (existingHolding.length > 0) {
+        return res.status(400).json({ error: "Already holding this token" });
+      }
+      
+      // Check hot wallet balance
+      const balance = await getHotWalletBalance();
+      if (balance < solAmount + 0.005) {
+        return res.status(400).json({ error: `Insufficient balance. Have ${balance.toFixed(4)} SOL, need ${(solAmount + 0.005).toFixed(4)} SOL` });
+      }
+      
+      // Get token info from DexScreener before buying
+      const tokenPrice = await getTokenPrice(tokenMint);
+      const tokenInfo = await getTokenInfo(tokenMint);
+      
+      // Require valid price to prevent division by zero in multiplier calculations
+      if (!tokenPrice || tokenPrice <= 0 || !isFinite(tokenPrice)) {
+        return res.status(400).json({ error: "Cannot determine token price. Try again later or check token mint address." });
+      }
+      
+      console.log(`Manual buy: ${solAmount} SOL for token ${tokenMint} at price ${tokenPrice}`);
+      
+      const result = await buyToken(tokenMint, solAmount);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      const now = Math.floor(Date.now() / 1000);
+      
+      // Create holding record
+      await db.insert(holdings).values({
+        tokenMint: tokenMint,
+        tokenSymbol: tokenInfo?.symbol || "UNKNOWN",
+        tokenName: tokenInfo?.name || "Unknown Token",
+        amountBought: result.outputAmount || 0,
+        solSpent: result.inputAmount || solAmount,
+        buyPrice: tokenPrice || 0,
+        buyTimestamp: now,
+        buySignature: result.signature || "",
+        currentAmount: result.outputAmount || 0,
+        reclaimed: false,
+        lastPriceCheck: now,
+        lastPrice: tokenPrice,
+        highestMultiplier: 1,
+        alertedMilestones: [],
+      });
+      
+      res.json({ 
+        success: true, 
+        signature: result.signature,
+        tokenSymbol: tokenInfo?.symbol || "UNKNOWN",
+        tokensBought: result.outputAmount,
+        solSpent: result.inputAmount
+      });
+    } catch (error) {
+      console.error("Error in manual buy:", error);
+      res.status(500).json({ error: "Failed to execute manual buy" });
     }
   });
 

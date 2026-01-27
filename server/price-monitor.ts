@@ -83,7 +83,12 @@ async function checkHoldingPrice(
 ): Promise<void> {
   try {
     const currentPrice = await getTokenPrice(holding.tokenMint);
-    if (!currentPrice || !holding.buyPrice) {
+    // Guard against invalid prices to prevent division errors
+    if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
+      return;
+    }
+    if (!holding.buyPrice || holding.buyPrice <= 0 || !isFinite(holding.buyPrice)) {
+      console.log(`Skipping ${holding.tokenSymbol}: invalid buyPrice ${holding.buyPrice}`);
       return;
     }
 
@@ -115,7 +120,10 @@ async function checkHoldingPrice(
 
     const reclaimedMilestones = (holding.reclaimedMilestones as number[]) || [];
     
-    if (!holding.reclaimed && multiplier >= config.reclaimMultiplier) {
+    // Check both reclaimed flag AND milestones array for 4x to prevent duplicates
+    const has4xReclaim = holding.reclaimed || reclaimedMilestones.includes(4);
+    
+    if (!has4xReclaim && multiplier >= config.reclaimMultiplier) {
       console.log(`Reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${config.reclaimMultiplier}x`);
       await executeReclaim(holding, currentPrice, config.reclaimMultiplier, "initial");
     }
@@ -126,6 +134,18 @@ async function checkHoldingPrice(
         console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x`);
         await executeProgressiveReclaim(holding, currentPrice, milestone);
         break;
+      }
+    }
+    
+    // Check for dump alert (price dropped significantly from buy price)
+    if (config.dumpAlertEnabled && !holding.dumpAlertSent) {
+      const lossPercent = ((holding.buyPrice - currentPrice) / holding.buyPrice) * 100;
+      if (lossPercent >= config.dumpAlertThreshold) {
+        console.log(`Dump alert for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss`);
+        await sendDumpAlert(holding, multiplier, currentPrice, lossPercent);
+        await db.update(holdings).set({
+          dumpAlertSent: true,
+        }).where(eq(holdings.id, holding.id));
       }
     }
     
@@ -141,7 +161,19 @@ async function executeReclaim(
   type: "initial" | "progressive"
 ): Promise<void> {
   try {
+    // Validate price is positive and finite
+    if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
+      console.log(`Invalid price for ${holding.tokenSymbol}: ${currentPrice}`);
+      return;
+    }
+    
     const tokensToSell = (holding.solSpent * 2 / currentPrice);
+    
+    // Validate tokens to sell is positive and doesn't exceed available
+    if (!isFinite(tokensToSell) || tokensToSell <= 0) {
+      console.log(`Invalid tokens to sell for ${holding.tokenSymbol}: ${tokensToSell}`);
+      return;
+    }
     
     if (tokensToSell > holding.currentAmount) {
       console.log(`Not enough tokens to reclaim for ${holding.tokenSymbol}: need ${tokensToSell}, have ${holding.currentAmount}`);
@@ -190,10 +222,21 @@ async function executeProgressiveReclaim(
   milestone: number
 ): Promise<void> {
   try {
+    // Validate price and current amount
+    if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
+      console.log(`Invalid price for progressive reclaim ${holding.tokenSymbol}: ${currentPrice}`);
+      return;
+    }
+    
+    if (!holding.currentAmount || holding.currentAmount <= 0) {
+      console.log(`No tokens to reclaim for ${holding.tokenSymbol}`);
+      return;
+    }
+    
     const tokensToSell = holding.currentAmount * 0.1;
     
-    if (tokensToSell <= 0) {
-      console.log(`No tokens to reclaim for ${holding.tokenSymbol}`);
+    if (!isFinite(tokensToSell) || tokensToSell <= 0) {
+      console.log(`Invalid tokens to sell for ${holding.tokenSymbol}: ${tokensToSell}`);
       return;
     }
 
@@ -375,6 +418,80 @@ async function sendReclaimNotification(
       console.log(`Reclaim notification sent to ${email}`);
     } catch (error) {
       console.error(`Failed to send reclaim notification to ${email}:`, error);
+    }
+  }
+}
+
+async function sendDumpAlert(
+  holding: typeof holdings.$inferSelect,
+  currentMultiplier: number,
+  currentPrice: number,
+  lossPercent: number
+): Promise<void> {
+  const settings = await storage.getNotificationSettings();
+  if (!settings?.enabled || !settings.emails?.length) {
+    return;
+  }
+
+  const subject = `${holding.tokenSymbol} DOWN ${lossPercent.toFixed(0)}%`;
+  
+  const currentValue = holding.currentAmount * currentPrice;
+  
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #fff; padding: 20px; border-radius: 12px;">
+      <h2 style="color: #ff4444; margin-bottom: 20px;">${holding.tokenSymbol} Price Alert</h2>
+      
+      <div style="background: #2d1f1f; padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #ff4444;">
+        <table style="width: 100%; color: #e0e0e0;">
+          <tr>
+            <td style="padding: 4px 0;">Loss:</td>
+            <td style="text-align: right; color: #ff4444; font-weight: bold;">-${lossPercent.toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Current Multiplier:</td>
+            <td style="text-align: right; color: #ff4444;">${currentMultiplier.toFixed(2)}x</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Current Price:</td>
+            <td style="text-align: right; color: #fff;">$${currentPrice < 0.0001 ? currentPrice.toExponential(2) : currentPrice.toFixed(6)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Buy Price:</td>
+            <td style="text-align: right; color: #fff;">$${holding.buyPrice < 0.0001 ? holding.buyPrice.toExponential(2) : holding.buyPrice.toFixed(6)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Initial Investment:</td>
+            <td style="text-align: right; color: #fff;">${holding.solSpent.toFixed(4)} SOL</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Tokens Remaining:</td>
+            <td style="text-align: right; color: #fff;">${formatNumber(holding.currentAmount).replace('$', '')}</td>
+          </tr>
+        </table>
+      </div>
+      
+      <p style="color: #f59e0b; font-size: 14px;">
+        Consider selling if you believe the price will continue to drop.
+      </p>
+      
+      <div style="margin-top: 16px;">
+        <a href="https://dexscreener.com/solana/${holding.tokenMint}" style="color: #00ff88; text-decoration: none;">
+          View on DexScreener
+        </a>
+      </div>
+      
+      <p style="color: #888; font-size: 12px; margin-top: 20px;">
+        Dump alert at ${new Date().toLocaleString()}
+      </p>
+    </div>
+  `;
+
+  for (const email of settings.emails) {
+    try {
+      await sendEmail(email, subject, html);
+      console.log(`Dump alert sent to ${email}`);
+    } catch (error) {
+      console.error(`Failed to send dump alert to ${email}:`, error);
     }
   }
 }

@@ -239,3 +239,26 @@ export async function getTokenPrice(tokenMint: string): Promise<number | null> {
     return null;
   }
 }
+
+export async function getTokenInfo(tokenMint: string): Promise<{ name: string; symbol: string } | null> {
+  try {
+    const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
+    if (!response.ok) return null;
+    
+    const data = await response.json();
+    if (data.pairs && data.pairs.length > 0) {
+      const sortedPairs = data.pairs.sort((a: any, b: any) => 
+        (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
+      );
+      const topPair = sortedPairs[0];
+      return {
+        name: topPair.baseToken?.name || "Unknown",
+        symbol: topPair.baseToken?.symbol || "UNKNOWN",
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error("Failed to get token info:", error);
+    return null;
+  }
+}

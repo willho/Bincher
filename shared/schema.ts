@@ -84,6 +84,7 @@ export const holdings = pgTable("holdings", {
   highestMultiplier: real("highest_multiplier").default(1),
   alertedMilestones: jsonb("alerted_milestones").$type<number[]>().default([]),
   reclaimedMilestones: jsonb("reclaimed_milestones").$type<number[]>().default([]),
+  dumpAlertSent: boolean("dump_alert_sent").default(false),
 });
 
 // Pending buys - tokens queued for purchase with delay
@@ -112,6 +113,8 @@ export const tradeConfig = pgTable("trade_config", {
   priceRiseTriggerPercent: real("price_rise_trigger_percent").default(15),
   reclaimMultiplier: real("reclaim_multiplier").default(4),
   milestonesToAlert: jsonb("milestones_to_alert").$type<number[]>().default([2, 4, 10]),
+  dumpAlertEnabled: boolean("dump_alert_enabled").default(true),
+  dumpAlertThreshold: real("dump_alert_threshold").default(50),
 });
 
 // Insert schemas
@@ -194,6 +197,7 @@ export const holdingSchema = z.object({
   highestMultiplier: z.number().default(1),
   alertedMilestones: z.array(z.number()).default([]),
   reclaimedMilestones: z.array(z.number()).default([]),
+  dumpAlertSent: z.boolean().default(false),
 });
 
 export type Holding = z.infer<typeof holdingSchema>;
@@ -224,6 +228,8 @@ export const tradeConfigSchema = z.object({
   priceRiseTriggerPercent: z.number().default(15),
   reclaimMultiplier: z.number().default(4),
   milestonesToAlert: z.array(z.number()).default([2, 4, 10]),
+  dumpAlertEnabled: z.boolean().default(true),
+  dumpAlertThreshold: z.number().default(50),
 });
 
 export type TradeConfig = z.infer<typeof tradeConfigSchema>;

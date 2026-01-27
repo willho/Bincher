@@ -67,22 +67,35 @@ export async function executePendingBuy(
   triggerReason: string
 ): Promise<boolean> {
   try {
-    const pending = await db.select().from(pendingBuys).where(eq(pendingBuys.id, pendingId)).limit(1);
-    if (pending.length === 0) {
-      console.error("Pending buy not found:", pendingId);
-      return false;
-    }
-
-    const buy = pending[0];
+    // Atomic lock: only update if not already processing/triggered/cancelled
+    const updateResult = await db.update(pendingBuys)
+      .set({ triggerReason: `processing:${triggerReason}` })
+      .where(
+        and(
+          eq(pendingBuys.id, pendingId),
+          eq(pendingBuys.buyTriggered, false),
+          eq(pendingBuys.cancelled, false)
+        )
+      )
+      .returning();
     
-    if (buy.buyTriggered || buy.cancelled) {
-      console.log("Pending buy already processed or cancelled:", pendingId);
+    if (updateResult.length === 0) {
+      console.log("Pending buy already processed, cancelled, or locked:", pendingId);
       return false;
     }
 
-    await db.update(pendingBuys).set({
-      triggerReason: `processing:${triggerReason}`,
-    }).where(eq(pendingBuys.id, pendingId));
+    const buy = updateResult[0];
+    
+    // Check if we already have a holding for this token (prevent duplicates)
+    const existingHolding = await db.select().from(holdings).where(eq(holdings.tokenMint, buy.tokenMint)).limit(1);
+    if (existingHolding.length > 0) {
+      console.log(`Already have holding for ${buy.tokenSymbol}, skipping buy`);
+      await db.update(pendingBuys).set({
+        cancelled: true,
+        triggerReason: "already_holding",
+      }).where(eq(pendingBuys.id, pendingId));
+      return false;
+    }
 
     const config = await getTradeConfig();
     const balance = await getHotWalletBalance();
