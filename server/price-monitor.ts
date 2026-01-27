@@ -247,6 +247,94 @@ async function createSwingEvent(
   console.log(`Swing event: ${holding.tokenSymbol} ${changeStr} (${triggerDesc})`);
 }
 
+async function createMilestoneEvent(
+  holding: typeof holdings.$inferSelect,
+  milestone: number,
+  multiplier: number,
+  currentPrice: number,
+  eventType: "milestone_reached" | "reclaim_executed" | "progressive_reclaim"
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const valueUsd = holding.currentAmount * currentPrice;
+  
+  let title: string;
+  let description: string;
+  let priority: "high" | "normal" | "low";
+  
+  switch (eventType) {
+    case "milestone_reached":
+      title = `${holding.tokenSymbol} hit ${milestone}x`;
+      description = `Price milestone reached - now at ${multiplier.toFixed(2)}x from buy`;
+      priority = milestone >= 10 ? "high" : "normal";
+      break;
+    case "reclaim_executed":
+      title = `${holding.tokenSymbol} reclaim at ${milestone}x`;
+      description = `Auto-sold 2x initial investment at ${milestone}x multiplier`;
+      priority = "high";
+      break;
+    case "progressive_reclaim":
+      title = `${holding.tokenSymbol} progressive sell at ${milestone}x`;
+      description = `Sold 10% of remaining holdings at ${milestone}x milestone`;
+      priority = "high";
+      break;
+  }
+  
+  await db.insert(tokenEvents).values({
+    tokenMint: holding.tokenMint,
+    tokenSymbol: holding.tokenSymbol,
+    eventType,
+    priority,
+    title,
+    description,
+    metadata: {
+      milestone,
+      multiplier,
+      buyPrice: holding.buyPrice,
+      currentPrice,
+      valueUsd,
+      currentAmount: holding.currentAmount,
+    },
+    createdAt: now,
+    priceAtEvent: currentPrice,
+    valueUsd,
+    relatedWallet: holding.sourceWalletAddress,
+  });
+  
+  console.log(`Milestone event: ${title}`);
+}
+
+async function createDumpAlertEvent(
+  holding: typeof holdings.$inferSelect,
+  lossPercent: number,
+  currentPrice: number
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const valueUsd = holding.currentAmount * currentPrice;
+  const multiplier = currentPrice / holding.buyPrice;
+  
+  await db.insert(tokenEvents).values({
+    tokenMint: holding.tokenMint,
+    tokenSymbol: holding.tokenSymbol,
+    eventType: "dump_alert",
+    priority: lossPercent >= 70 ? "high" : "normal",
+    title: `${holding.tokenSymbol} down ${lossPercent.toFixed(0)}%`,
+    description: `Token has dumped significantly - now at ${multiplier.toFixed(2)}x from buy`,
+    metadata: {
+      lossPercent,
+      multiplier,
+      buyPrice: holding.buyPrice,
+      currentPrice,
+      valueUsd,
+    },
+    createdAt: now,
+    priceAtEvent: currentPrice,
+    valueUsd,
+    relatedWallet: holding.sourceWalletAddress,
+  });
+  
+  console.log(`Dump event: ${holding.tokenSymbol} down ${lossPercent.toFixed(0)}%`);
+}
+
 async function checkHoldingPriceWithBatch(
   holding: typeof holdings.$inferSelect,
   userId: number,
@@ -293,6 +381,7 @@ async function checkHoldingPriceWithBatch(
       if (multiplier >= milestone && !alertedMilestones.includes(milestone)) {
         console.log(`Milestone reached for ${holding.tokenSymbol}: ${milestone}x`);
         await sendMilestoneAlert(userId, holding, milestone, multiplier, currentPrice);
+        await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "milestone_reached");
         
         const newAlerted = [...alertedMilestones, milestone];
         await db.update(holdings).set({
@@ -307,6 +396,7 @@ async function checkHoldingPriceWithBatch(
     if (!has4xReclaim && multiplier >= config.reclaimMultiplier) {
       console.log(`Reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${config.reclaimMultiplier}x`);
       await executeReclaim(userId, holding, currentPrice, config.reclaimMultiplier, "initial");
+      await createMilestoneEvent(holding, config.reclaimMultiplier, multiplier, currentPrice, "reclaim_executed");
     }
     
     const progressiveMilestones = [10, 100, 1000, 10000, 100000];
@@ -314,6 +404,7 @@ async function checkHoldingPriceWithBatch(
       if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
         console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x`);
         await executeProgressiveReclaim(userId, holding, currentPrice, milestone);
+        await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "progressive_reclaim");
         break;
       }
     }
@@ -323,6 +414,7 @@ async function checkHoldingPriceWithBatch(
       if (lossPercent >= config.dumpAlertThreshold) {
         console.log(`Dump alert for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss`);
         await sendDumpAlert(userId, holding, multiplier, currentPrice, lossPercent);
+        await createDumpAlertEvent(holding, lossPercent, currentPrice);
         await db.update(holdings).set({
           dumpAlertSent: true,
         }).where(eq(holdings.id, holding.id));
@@ -367,6 +459,7 @@ async function checkHoldingPrice(
       if (multiplier >= milestone && !alertedMilestones.includes(milestone)) {
         console.log(`Milestone reached for ${holding.tokenSymbol}: ${milestone}x`);
         await sendMilestoneAlert(userId, holding, milestone, multiplier, currentPrice);
+        await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "milestone_reached");
         
         const newAlerted = [...alertedMilestones, milestone];
         await db.update(holdings).set({
@@ -382,6 +475,7 @@ async function checkHoldingPrice(
     if (!has4xReclaim && multiplier >= config.reclaimMultiplier) {
       console.log(`Reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${config.reclaimMultiplier}x`);
       await executeReclaim(userId, holding, currentPrice, config.reclaimMultiplier, "initial");
+      await createMilestoneEvent(holding, config.reclaimMultiplier, multiplier, currentPrice, "reclaim_executed");
     }
     
     const progressiveMilestones = [10, 100, 1000, 10000, 100000];
@@ -389,6 +483,7 @@ async function checkHoldingPrice(
       if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
         console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x`);
         await executeProgressiveReclaim(userId, holding, currentPrice, milestone);
+        await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "progressive_reclaim");
         break;
       }
     }
@@ -398,6 +493,7 @@ async function checkHoldingPrice(
       if (lossPercent >= config.dumpAlertThreshold) {
         console.log(`Dump alert for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss`);
         await sendDumpAlert(userId, holding, multiplier, currentPrice, lossPercent);
+        await createDumpAlertEvent(holding, lossPercent, currentPrice);
         await db.update(holdings).set({
           dumpAlertSent: true,
         }).where(eq(holdings.id, holding.id));
