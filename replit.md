@@ -8,6 +8,9 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **Password hashing**: PBKDF2 with 10,000 iterations and random salt per user
 - **Remember me**: 1-day (default) or 30-day sessions
 - **User isolation**: All data is scoped per user via userId filtering
+- **Admin role**: Users with isAdmin=true have access to admin dashboard
+- **Username uniqueness**: Case-insensitive at registration, case-sensitive for login
+- **New user defaults**: Blank email settings (no pre-filled emails)
 
 ## Architecture
 
@@ -53,6 +56,7 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `/client/src/pages/login.tsx` - Login and registration page
 - `/client/src/components/copy-trading.tsx` - Copy trading UI component
 - `/client/src/components/monitored-wallets.tsx` - Monitored wallets management UI
+- `/client/src/components/admin-dashboard.tsx` - Admin dashboard UI (admin only)
 - `/shared/schema.ts` - Database schema and Zod types
 
 ## Configuration
@@ -98,6 +102,12 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `PATCH /api/copy-trade/config` - Update trade configuration
 - `GET /api/copy-trade/holdings` - Get token holdings
 - `GET /api/copy-trade/pending` - Get pending buy queue
+
+### Admin (requires isAdmin)
+- `GET /api/admin/users` - Get all users
+- `DELETE /api/admin/users/:userId` - Delete a user and all their data
+- `GET /api/admin/wallets` - Get all monitored wallets across all users
+- `GET /api/admin/stats` - Get system-wide statistics
 
 ## Features
 

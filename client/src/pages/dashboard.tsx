@@ -13,6 +13,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyTrading } from "@/components/copy-trading";
 import { MonitoredWallets } from "@/components/monitored-wallets";
+import { AdminDashboard } from "@/components/admin-dashboard";
 import { 
   Activity, 
   ArrowRightLeft, 
@@ -25,6 +26,7 @@ import {
   Plus,
   Power, 
   RefreshCw, 
+  Settings,
   Wallet,
   X,
   Zap
@@ -32,10 +34,23 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import type { Swap, MonitoringStatus, NotificationSettings } from "@shared/schema";
 
+interface SessionData {
+  authenticated: boolean;
+  username?: string;
+  userId?: number;
+  isAdmin?: boolean;
+}
+
 export default function Dashboard() {
   const [newEmail, setNewEmail] = useState("");
   const [minAmount, setMinAmount] = useState("");
   const { toast } = useToast();
+
+  const { data: session } = useQuery<SessionData>({
+    queryKey: ["/api/auth/session"],
+  });
+
+  const isAdmin = session?.isAdmin ?? false;
 
   const copyToClipboard = async (text: string, label: string = "Address") => {
     try {
@@ -168,7 +183,7 @@ export default function Dashboard() {
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         <Tabs defaultValue="monitor" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 mb-6">
+          <TabsList className={`grid w-full mb-6 ${isAdmin ? 'grid-cols-3' : 'grid-cols-2'}`}>
             <TabsTrigger value="monitor" className="flex items-center gap-2" data-testid="tab-monitor">
               <Activity className="h-4 w-4" />
               Monitor
@@ -177,6 +192,12 @@ export default function Dashboard() {
               <Bot className="h-4 w-4" />
               Copy Trade
             </TabsTrigger>
+            {isAdmin && (
+              <TabsTrigger value="admin" className="flex items-center gap-2" data-testid="tab-admin">
+                <Settings className="h-4 w-4" />
+                Admin
+              </TabsTrigger>
+            )}
           </TabsList>
           
           <TabsContent value="monitor" className="space-y-6">
@@ -496,6 +517,12 @@ export default function Dashboard() {
           <TabsContent value="copy-trade">
             <CopyTrading />
           </TabsContent>
+
+          {isAdmin && (
+            <TabsContent value="admin">
+              <AdminDashboard />
+            </TabsContent>
+          )}
         </Tabs>
       </main>
     </div>
