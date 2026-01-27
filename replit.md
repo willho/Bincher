@@ -123,3 +123,17 @@ Starts both frontend (Vite) and backend (Express) on port 5000.
 ```bash
 npm run db:push  # Push schema changes to database
 ```
+
+## Future Enhancements (TODO)
+
+### Multi-User Support
+Currently a single-user application. To support multiple users with their own hot wallets:
+- Add user authentication (Replit Auth recommended)
+- Add `userId` column to: `hot_wallet`, `holdings`, `pending_buys`, `trade_config`, `settings`
+- Each user gets their own encrypted hot wallet
+- Each user tracks their own holdings and pending buys
+- Option: shared monitored wallet vs per-user monitored wallets
+
+### Private Key Export
+- Add secure "Show Private Key" feature to backup hot wallet
+- Export base58 format for import into Phantom/Solflare
