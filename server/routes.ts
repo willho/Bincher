@@ -378,7 +378,8 @@ export async function registerRoutes(
               swap.toToken,
               swap.toTokenSymbol,
               toTokenMetadata?.name,
-              toTokenMetadata?.priceUsd
+              toTokenMetadata?.priceUsd,
+              toTokenMetadata?.liquidity
             );
             if (pendingBuy) {
               console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol, "for user:", userId);

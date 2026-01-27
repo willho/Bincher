@@ -266,7 +266,8 @@ export async function addPendingBuy(
   tokenMint: string,
   tokenSymbol: string,
   tokenName: string | undefined,
-  initialPrice: number | undefined
+  initialPrice: number | undefined,
+  liquidity: number | undefined
 ): Promise<PendingBuy | null> {
   const alreadyBought = await hasTokenBeenBought(userId, tokenMint);
   if (alreadyBought) {
@@ -283,12 +284,38 @@ export async function addPendingBuy(
     return null;
   }
   
-  // Random buy percentage between 10-15%
-  const buyPercentage = getRandomBuyPercentage();
-  const totalSolAmount = balance * (buyPercentage / 100);
-  
-  // Get SOL price and calculate segments
+  // Get SOL price for USD calculations
   const solPriceUsd = await getSolPriceUsd();
+  
+  // Tiered buy size logic based on pool liquidity:
+  // - Pool < $100: Fixed $10 buy
+  // - Pool $100-150: 10% of balance
+  // - Pool > $150: 10-15% random buy percentage
+  let totalSolAmount: number;
+  const poolLiquidity = liquidity ?? 0;
+  
+  if (poolLiquidity < 100) {
+    // Fixed $10 buy for small pools
+    totalSolAmount = 10 / solPriceUsd;
+    console.log(`Small pool ($${poolLiquidity.toFixed(0)} liquidity): Fixed $10 buy = ${totalSolAmount.toFixed(4)} SOL`);
+  } else if (poolLiquidity <= 150) {
+    // 10% of balance for medium pools
+    totalSolAmount = balance * 0.10;
+    console.log(`Medium pool ($${poolLiquidity.toFixed(0)} liquidity): 10% of balance = ${totalSolAmount.toFixed(4)} SOL`);
+  } else {
+    // 10-15% random for larger pools
+    const buyPercentage = getRandomBuyPercentage();
+    totalSolAmount = balance * (buyPercentage / 100);
+    console.log(`Large pool ($${poolLiquidity.toFixed(0)} liquidity): ${buyPercentage.toFixed(1)}% of balance = ${totalSolAmount.toFixed(4)} SOL`);
+  }
+  
+  // Ensure we don't buy more than balance allows
+  const maxBuy = balance * 0.15;
+  if (totalSolAmount > maxBuy) {
+    totalSolAmount = maxBuy;
+  }
+  
+  // Calculate segments (solPriceUsd already fetched above for tiered sizing)
   const segments = calculateSplitBuySegments(totalSolAmount, solPriceUsd);
   
   const now = Math.floor(Date.now() / 1000);
@@ -298,7 +325,7 @@ export async function addPendingBuy(
   let scheduledBuyAt = now + Math.floor(initialDelayMinutes * 60);
   
   const totalUsd = totalSolAmount * solPriceUsd;
-  console.log(`Queuing ${segments.length} segment(s) for ${tokenSymbol}: $${totalUsd.toFixed(2)} USD (${totalSolAmount.toFixed(4)} SOL at ${buyPercentage.toFixed(1)}%)`);
+  console.log(`Queuing ${segments.length} segment(s) for ${tokenSymbol}: $${totalUsd.toFixed(2)} USD (${totalSolAmount.toFixed(4)} SOL)`);
   
   // Create token wallet upfront - shared across ALL segments
   // This ensures early triggers for any segment can use the same wallet
