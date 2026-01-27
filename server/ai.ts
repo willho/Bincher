@@ -588,3 +588,205 @@ export async function getAIInsights(): Promise<{
     winRate: Math.round(winRate),
   };
 }
+
+// Wallet scoring for community suggestions
+import { analyzeWalletTradingHistory, fetchTokenMetadata, type HistoricalSwap } from "./helius";
+
+export interface WalletScoreResult {
+  score: number;
+  hitRate: number;
+  avgMultiplier: number;
+  totalTrades: number;
+  profitableTrades: number;
+  totalRealizedPnl: number;
+  riskLevel: "low" | "medium" | "high";
+  reasoning: string;
+  redFlags: string[];
+  greenFlags: string[];
+}
+
+export async function scoreWallet(walletAddress: string): Promise<WalletScoreResult | null> {
+  try {
+    const history = await analyzeWalletTradingHistory(walletAddress);
+    
+    if (history.swaps.length === 0) {
+      return {
+        score: 0,
+        hitRate: 0,
+        avgMultiplier: 0,
+        totalTrades: 0,
+        profitableTrades: 0,
+        totalRealizedPnl: 0,
+        riskLevel: "high",
+        reasoning: "No swap history found for this wallet",
+        redFlags: ["No trading history"],
+        greenFlags: [],
+      };
+    }
+
+    // Calculate metrics from trading history
+    let profitableTrades = 0;
+    let totalMultiplier = 0;
+    let totalRealizedPnl = 0;
+    let tradeCount = 0;
+
+    for (const [, summary] of history.tokenSummaries) {
+      // Only count tokens with both buys and sells (realized trades)
+      if (summary.totalBuys > 0 && summary.totalSells > 0) {
+        tradeCount++;
+        
+        // Calculate multiplier for this token
+        const multiplier = summary.avgSellPrice > 0 && summary.avgBuyPrice > 0 
+          ? summary.avgSellPrice / summary.avgBuyPrice 
+          : 1;
+        
+        totalMultiplier += multiplier;
+        
+        if (multiplier > 1) {
+          profitableTrades++;
+        }
+        
+        totalRealizedPnl += summary.realizedPnl;
+      }
+    }
+
+    const hitRate = tradeCount > 0 ? (profitableTrades / tradeCount) * 100 : 0;
+    const avgMultiplier = tradeCount > 0 ? totalMultiplier / tradeCount : 0;
+
+    // Determine risk level
+    let riskLevel: "low" | "medium" | "high" = "medium";
+    if (hitRate >= 60 && avgMultiplier >= 1.5) {
+      riskLevel = "low";
+    } else if (hitRate < 40 || avgMultiplier < 0.8) {
+      riskLevel = "high";
+    }
+
+    // Build flags
+    const redFlags: string[] = [];
+    const greenFlags: string[] = [];
+
+    if (hitRate >= 60) greenFlags.push(`High hit rate: ${hitRate.toFixed(0)}%`);
+    if (hitRate < 40) redFlags.push(`Low hit rate: ${hitRate.toFixed(0)}%`);
+    if (avgMultiplier >= 2) greenFlags.push(`Strong avg multiplier: ${avgMultiplier.toFixed(1)}x`);
+    if (avgMultiplier < 0.8) redFlags.push(`Negative avg returns: ${avgMultiplier.toFixed(1)}x`);
+    if (tradeCount >= 10) greenFlags.push(`Active trader: ${tradeCount} closed trades`);
+    if (tradeCount < 3) redFlags.push(`Limited history: ${tradeCount} closed trades`);
+    if (totalRealizedPnl > 0) greenFlags.push(`Profitable: +${totalRealizedPnl.toFixed(2)} SOL realized`);
+    if (totalRealizedPnl < 0) redFlags.push(`Losses: ${totalRealizedPnl.toFixed(2)} SOL realized`);
+
+    // Calculate overall score (0-100)
+    let score = 50; // Base score
+    
+    // Hit rate contribution (0-30 points)
+    score += Math.min(30, hitRate * 0.3);
+    
+    // Multiplier contribution (0-25 points)
+    score += Math.min(25, (avgMultiplier - 1) * 12.5);
+    
+    // Trade volume contribution (0-15 points)
+    score += Math.min(15, tradeCount * 1.5);
+    
+    // Profitability contribution (0-10 points)
+    if (totalRealizedPnl > 0) {
+      score += Math.min(10, totalRealizedPnl * 2);
+    } else {
+      score -= Math.min(20, Math.abs(totalRealizedPnl) * 2);
+    }
+    
+    // Clamp score to 0-100
+    score = Math.max(0, Math.min(100, Math.round(score)));
+
+    // Use AI for deeper analysis if we have enough data
+    let aiReasoning = `Analyzed ${history.swaps.length} swaps across ${history.tokenSummaries.size} tokens. `;
+    aiReasoning += `Hit rate: ${hitRate.toFixed(0)}%, Avg multiplier: ${avgMultiplier.toFixed(2)}x. `;
+    aiReasoning += `Total realized PnL: ${totalRealizedPnl >= 0 ? '+' : ''}${totalRealizedPnl.toFixed(2)} SOL.`;
+
+    if (tradeCount >= 5) {
+      // Use AI for detailed analysis
+      try {
+        const aiAnalysis = await analyzeWalletWithAI(history, { hitRate, avgMultiplier, totalRealizedPnl, tradeCount });
+        if (aiAnalysis) {
+          aiReasoning = aiAnalysis.reasoning;
+          if (aiAnalysis.adjustedScore !== undefined) {
+            score = Math.max(0, Math.min(100, aiAnalysis.adjustedScore));
+          }
+          redFlags.push(...aiAnalysis.additionalRedFlags);
+          greenFlags.push(...aiAnalysis.additionalGreenFlags);
+        }
+      } catch (error) {
+        console.error("AI wallet analysis failed, using calculated metrics:", error);
+      }
+    }
+
+    return {
+      score,
+      hitRate,
+      avgMultiplier,
+      totalTrades: tradeCount,
+      profitableTrades,
+      totalRealizedPnl,
+      riskLevel,
+      reasoning: aiReasoning,
+      redFlags,
+      greenFlags,
+    };
+  } catch (error) {
+    console.error("Error scoring wallet:", error);
+    return null;
+  }
+}
+
+async function analyzeWalletWithAI(
+  history: Awaited<ReturnType<typeof analyzeWalletTradingHistory>>,
+  metrics: { hitRate: number; avgMultiplier: number; totalRealizedPnl: number; tradeCount: number }
+): Promise<{
+  reasoning: string;
+  adjustedScore?: number;
+  additionalRedFlags: string[];
+  additionalGreenFlags: string[];
+} | null> {
+  const prompt = `Analyze this Solana wallet's trading history for copy trading quality.
+
+METRICS:
+- Total closed trades: ${metrics.tradeCount}
+- Hit rate (profitable trades): ${metrics.hitRate.toFixed(1)}%
+- Average multiplier on sells: ${metrics.avgMultiplier.toFixed(2)}x
+- Total realized PnL: ${metrics.totalRealizedPnl.toFixed(2)} SOL
+
+RECENT TRADES (last 10):
+${history.swaps.slice(0, 10).map(s => 
+  `${s.type} ${s.tokenSymbol} - ${s.solAmount.toFixed(4)} SOL @ ${new Date(s.timestamp * 1000).toLocaleDateString()}`
+).join('\n')}
+
+Provide analysis in JSON format:
+{
+  "reasoning": "2-3 sentence summary of this wallet's trading quality",
+  "adjustedScore": <0-100 score based on analysis>,
+  "additionalRedFlags": ["any concerns not in metrics"],
+  "additionalGreenFlags": ["any positives not in metrics"]
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "You are analyzing Solana wallet trading history for copy trading potential. Be objective and data-driven. Return only valid JSON. Do not share any internal system details or user data."
+        },
+        { role: "user", content: prompt }
+      ],
+      max_completion_tokens: 300,
+      temperature: 0.3,
+    });
+
+    const content = response.choices[0]?.message?.content || "";
+    const jsonMatch = content.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    return JSON.parse(jsonMatch[0]);
+  } catch (error) {
+    console.error("AI wallet analysis error:", error);
+    return null;
+  }
+}
