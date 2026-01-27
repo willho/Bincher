@@ -638,6 +638,14 @@ export function CopyTrading() {
                                 </span>
                               )}
                             </p>
+                            {pending.sourceWalletAddress && (
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                <Wallet className="h-3 w-3" />
+                                <span>
+                                  Copied from: {pending.sourceWalletLabel || `${pending.sourceWalletAddress.slice(0, 6)}...${pending.sourceWalletAddress.slice(-4)}`}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -743,6 +751,14 @@ export function CopyTrading() {
                               <p className="text-xs text-muted-foreground">
                                 Bought: {holding.solSpent.toFixed(4)} SOL @ {formatPrice(holding.buyPrice)}
                               </p>
+                              {holding.sourceWalletAddress && (
+                                <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+                                  <Wallet className="h-3 w-3" />
+                                  <span>
+                                    Copied from: {holding.sourceWalletLabel || `${holding.sourceWalletAddress.slice(0, 6)}...${holding.sourceWalletAddress.slice(-4)}`}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </div>
                           <div className="text-right">
