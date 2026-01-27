@@ -15,6 +15,7 @@ import { CopyTrading } from "@/components/copy-trading";
 import { MonitoredWallets } from "@/components/monitored-wallets";
 import { AdminDashboard } from "@/components/admin-dashboard";
 import { AIInsights } from "@/components/ai-insights";
+import { Alerts } from "@/components/alerts";
 import { 
   Activity, 
   ArrowRightLeft, 
@@ -95,6 +96,11 @@ export default function Dashboard() {
 
   const { data: wallet } = useQuery<{ address: string }>({
     queryKey: ["/api/wallet"],
+  });
+
+  const { data: unreadCount } = useQuery<{ count: number }>({
+    queryKey: ["/api/messages/unread-count"],
+    refetchInterval: 60000,
   });
 
   // Mutations
@@ -185,23 +191,32 @@ export default function Dashboard() {
 
       <main className="container mx-auto px-4 py-6 space-y-6">
         <Tabs defaultValue="monitor" className="w-full">
-          <TabsList className={`grid w-full mb-6 ${isAdmin ? 'grid-cols-4' : 'grid-cols-3'}`}>
-            <TabsTrigger value="monitor" className="flex items-center gap-2" data-testid="tab-monitor">
-              <Activity className="h-4 w-4" />
-              Monitor
+          <TabsList className={`grid w-full mb-6 gap-1 ${isAdmin ? 'grid-cols-5' : 'grid-cols-4'}`}>
+            <TabsTrigger value="monitor" className="flex items-center gap-1 px-2 text-xs sm:text-sm sm:gap-2 sm:px-3" data-testid="tab-monitor">
+              <Activity className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+              <span className="truncate">Monitor</span>
             </TabsTrigger>
-            <TabsTrigger value="copy-trade" className="flex items-center gap-2" data-testid="tab-copy-trade">
-              <Bot className="h-4 w-4" />
-              Copy Trade
+            <TabsTrigger value="copy-trade" className="flex items-center gap-1 px-2 text-xs sm:text-sm sm:gap-2 sm:px-3" data-testid="tab-copy-trade">
+              <Bot className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+              <span className="truncate">Copy</span>
             </TabsTrigger>
-            <TabsTrigger value="ai-insights" className="flex items-center gap-2" data-testid="tab-ai-insights">
-              <Brain className="h-4 w-4" />
-              AI Insights
+            <TabsTrigger value="insights" className="flex items-center gap-1 px-2 text-xs sm:text-sm sm:gap-2 sm:px-3" data-testid="tab-insights">
+              <Brain className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+              <span className="truncate">Insights</span>
+            </TabsTrigger>
+            <TabsTrigger value="alerts" className="flex items-center gap-1 px-2 text-xs sm:text-sm sm:gap-2 sm:px-3 relative" data-testid="tab-alerts">
+              <Bell className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+              <span className="truncate">Alerts</span>
+              {unreadCount && unreadCount.count > 0 && (
+                <span className="absolute -top-1 -right-1 bg-destructive text-destructive-foreground text-xs rounded-full h-4 w-4 flex items-center justify-center font-medium">
+                  {unreadCount.count > 9 ? "9+" : unreadCount.count}
+                </span>
+              )}
             </TabsTrigger>
             {isAdmin && (
-              <TabsTrigger value="admin" className="flex items-center gap-2" data-testid="tab-admin">
-                <Settings className="h-4 w-4" />
-                Admin
+              <TabsTrigger value="admin" className="flex items-center gap-1 px-2 text-xs sm:text-sm sm:gap-2 sm:px-3" data-testid="tab-admin">
+                <Settings className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
+                <span className="truncate">Admin</span>
               </TabsTrigger>
             )}
           </TabsList>
@@ -524,8 +539,12 @@ export default function Dashboard() {
             <CopyTrading />
           </TabsContent>
 
-          <TabsContent value="ai-insights">
+          <TabsContent value="insights">
             <AIInsights />
+          </TabsContent>
+
+          <TabsContent value="alerts">
+            <Alerts />
           </TabsContent>
 
           {isAdmin && (

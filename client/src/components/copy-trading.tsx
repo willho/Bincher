@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { 
   ArrowUpRight,
   Bot,
@@ -15,6 +16,8 @@ import {
   Copy,
   DollarSign,
   ExternalLink, 
+  Key,
+  Loader2,
   Pause,
   Play,
   Plus,
@@ -42,6 +45,10 @@ export function CopyTrading() {
   const [showManualBuy, setShowManualBuy] = useState(false);
   const [manualBuyMint, setManualBuyMint] = useState("");
   const [manualBuyAmount, setManualBuyAmount] = useState("");
+  const [showExportKey, setShowExportKey] = useState(false);
+  const [exportPassword, setExportPassword] = useState("");
+  const [exportedKey, setExportedKey] = useState<string | null>(null);
+  const [exportingHoldingId, setExportingHoldingId] = useState<number | null>(null);
 
   const copyToClipboard = async (text: string, label: string = "Address") => {
     try {
@@ -110,6 +117,43 @@ export function CopyTrading() {
       toast({ description: error.message || "Failed to execute buy", variant: "destructive" });
     },
   });
+
+  const exportHotWalletKey = useMutation({
+    mutationFn: (password: string) => 
+      apiRequest("POST", "/api/copy-trade/wallet/export-key", { password }),
+    onSuccess: (data: any) => {
+      setExportedKey(data.privateKey);
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to export key", variant: "destructive" });
+    },
+  });
+
+  const exportTokenWalletKey = useMutation({
+    mutationFn: (data: { holdingId: number; password: string }) => 
+      apiRequest("POST", `/api/copy-trade/holdings/${data.holdingId}/export-key`, { password: data.password }),
+    onSuccess: (data: any) => {
+      setExportedKey(data.privateKey);
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to export key", variant: "destructive" });
+    },
+  });
+
+  const handleExportKey = () => {
+    if (exportingHoldingId !== null) {
+      exportTokenWalletKey.mutate({ holdingId: exportingHoldingId, password: exportPassword });
+    } else {
+      exportHotWalletKey.mutate(exportPassword);
+    }
+  };
+
+  const openExportDialog = (holdingId: number | null = null) => {
+    setExportingHoldingId(holdingId);
+    setExportPassword("");
+    setExportedKey(null);
+    setShowExportKey(true);
+  };
 
   const withdrawSol = useMutation({
     mutationFn: (data: { destination: string; amount: number }) => 
@@ -266,6 +310,15 @@ export function CopyTrading() {
                       data-testid="button-refresh-balance"
                     >
                       <RefreshCw className={`h-4 w-4 ${refreshBalance.isPending ? "animate-spin" : ""}`} />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => openExportDialog(null)}
+                      data-testid="button-export-hot-wallet-key"
+                      title="Export private key"
+                    >
+                      <Key className="h-4 w-4" />
                     </Button>
                     <a
                       href={`https://solscan.io/account/${hotWallet.publicKey}`}
@@ -738,16 +791,26 @@ export function CopyTrading() {
                                 </>
                               )}
                             </Button>
-                            <a
-                              href={`https://dexscreener.com/solana/${holding.tokenMint}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="ml-auto"
-                            >
-                              <Button size="icon" variant="ghost">
-                                <ExternalLink className="h-4 w-4" />
+                            <div className="flex items-center gap-1 ml-auto">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => openExportDialog(holding.id)}
+                                title="Export token wallet key"
+                                data-testid={`button-export-token-key-${holding.id}`}
+                              >
+                                <Key className="h-4 w-4" />
                               </Button>
-                            </a>
+                              <a
+                                href={`https://dexscreener.com/solana/${holding.tokenMint}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <Button size="icon" variant="ghost">
+                                  <ExternalLink className="h-4 w-4" />
+                                </Button>
+                              </a>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -764,6 +827,106 @@ export function CopyTrading() {
           </Card>
         </>
       )}
+
+      <Dialog open={showExportKey} onOpenChange={(open) => {
+        setShowExportKey(open);
+        if (!open) {
+          setExportPassword("");
+          setExportedKey(null);
+          setExportingHoldingId(null);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Key className="h-5 w-5" />
+              Export Private Key
+            </DialogTitle>
+            <DialogDescription>
+              {exportingHoldingId !== null 
+                ? "Export the private key for this token wallet. Use it to import into Phantom or Solflare."
+                : "Export your hot wallet private key. Use it to import into Phantom or Solflare."
+              }
+            </DialogDescription>
+          </DialogHeader>
+          
+          {!exportedKey ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <p className="text-sm text-amber-700 dark:text-amber-300">
+                  Never share your private key with anyone. Anyone with your private key can access your funds.
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="export-password">Enter your password to confirm</Label>
+                <Input
+                  id="export-password"
+                  type="password"
+                  placeholder="Your account password"
+                  value={exportPassword}
+                  onChange={(e) => setExportPassword(e.target.value)}
+                  data-testid="input-export-password"
+                />
+              </div>
+              
+              <Button
+                onClick={handleExportKey}
+                disabled={!exportPassword || exportHotWalletKey.isPending || exportTokenWalletKey.isPending}
+                className="w-full"
+                data-testid="button-confirm-export"
+              >
+                {(exportHotWalletKey.isPending || exportTokenWalletKey.isPending) ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Verifying...
+                  </>
+                ) : (
+                  "Show Private Key"
+                )}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                <p className="text-sm text-destructive">
+                  Keep this private key secure. Do not share it with anyone.
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Private Key (Base58)</Label>
+                <div className="relative">
+                  <Input
+                    readOnly
+                    value={exportedKey}
+                    className="font-mono text-xs pr-10"
+                    data-testid="input-exported-key"
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                    onClick={() => copyToClipboard(exportedKey, "Private key")}
+                    data-testid="button-copy-exported-key"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+              
+              <Button
+                variant="outline"
+                onClick={() => setShowExportKey(false)}
+                className="w-full"
+                data-testid="button-close-export"
+              >
+                Close
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

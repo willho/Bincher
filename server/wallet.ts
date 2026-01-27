@@ -115,6 +115,63 @@ export async function getHotWalletKeypair(userId: number): Promise<Keypair | nul
   }
 }
 
+export async function exportHotWalletPrivateKey(userId: number): Promise<string | null> {
+  const keypair = await getHotWalletKeypair(userId);
+  if (!keypair) return null;
+  
+  // Export as base58 encoded string (compatible with Phantom, Solflare, etc.)
+  const bs58chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const bytes = keypair.secretKey;
+  
+  let result = '';
+  let num = BigInt('0x' + Buffer.from(bytes).toString('hex'));
+  while (num > 0n) {
+    result = bs58chars[Number(num % 58n)] + result;
+    num = num / 58n;
+  }
+  
+  // Handle leading zeros
+  for (let i = 0; i < bytes.length && bytes[i] === 0; i++) {
+    result = '1' + result;
+  }
+  
+  return result;
+}
+
+export async function exportTokenWalletPrivateKey(holdingId: number, userId: number): Promise<string | null> {
+  const rows = await db.select().from(holdings)
+    .where(and(eq(holdings.id, holdingId), eq(holdings.userId, userId)))
+    .limit(1);
+  
+  if (rows.length === 0 || !rows[0].tokenWalletEncryptedKey) return null;
+  
+  try {
+    const decrypted = decrypt(rows[0].tokenWalletEncryptedKey);
+    const secretKey = Uint8Array.from(Buffer.from(decrypted, 'hex'));
+    const keypair = Keypair.fromSecretKey(secretKey);
+    
+    // Export as base58
+    const bs58chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+    const bytes = keypair.secretKey;
+    
+    let result = '';
+    let num = BigInt('0x' + Buffer.from(bytes).toString('hex'));
+    while (num > 0n) {
+      result = bs58chars[Number(num % 58n)] + result;
+      num = num / 58n;
+    }
+    
+    for (let i = 0; i < bytes.length && bytes[i] === 0; i++) {
+      result = '1' + result;
+    }
+    
+    return result;
+  } catch (error) {
+    console.error("Failed to export token wallet key:", error);
+    return null;
+  }
+}
+
 export async function getHotWalletBalance(userId: number): Promise<number> {
   const wallet = await getOrCreateHotWallet(userId);
   if (!wallet) return 0;

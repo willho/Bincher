@@ -1,10 +1,15 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Trash2, Users, Wallet, Activity, BarChart3 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface AdminUser {
@@ -31,8 +36,23 @@ interface AdminStats {
   activeWallets: number;
 }
 
+interface AdminMessage {
+  id: number;
+  title: string;
+  content: string;
+  priority: string;
+  targetUserId: number | null;
+  createdBy: number;
+  createdAt: number;
+  expiresAt: number | null;
+}
+
 export function AdminDashboard() {
   const { toast } = useToast();
+  const [messageTitle, setMessageTitle] = useState("");
+  const [messageContent, setMessageContent] = useState("");
+  const [messagePriority, setMessagePriority] = useState("normal");
+  const [targetUser, setTargetUser] = useState<string>("all");
 
   const { data: stats, isLoading: statsLoading } = useQuery<AdminStats>({
     queryKey: ["/api/admin/stats"],
@@ -44,6 +64,37 @@ export function AdminDashboard() {
 
   const { data: wallets, isLoading: walletsLoading } = useQuery<AdminWallet[]>({
     queryKey: ["/api/admin/wallets"],
+  });
+
+  const { data: adminMessages, isLoading: messagesLoading } = useQuery<AdminMessage[]>({
+    queryKey: ["/api/admin/messages"],
+  });
+
+  const createMessage = useMutation({
+    mutationFn: (data: { title: string; content: string; priority: string; targetUserId: number | null }) =>
+      apiRequest("POST", "/api/admin/messages", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/messages"] });
+      setMessageTitle("");
+      setMessageContent("");
+      setMessagePriority("normal");
+      setTargetUser("all");
+      toast({ description: "Message sent successfully" });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to send message", variant: "destructive" });
+    },
+  });
+
+  const deleteMessage = useMutation({
+    mutationFn: (messageId: number) => apiRequest("DELETE", `/api/admin/messages/${messageId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/messages"] });
+      toast({ description: "Message deleted" });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to delete message", variant: "destructive" });
+    },
   });
 
   const deleteUser = useMutation({
@@ -73,6 +124,20 @@ export function AdminDashboard() {
     if (confirm(`Are you sure you want to delete user "${username}" and all their data?`)) {
       deleteUser.mutate(userId);
     }
+  };
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!messageTitle.trim() || !messageContent.trim()) {
+      toast({ description: "Title and content are required", variant: "destructive" });
+      return;
+    }
+    createMessage.mutate({
+      title: messageTitle.trim(),
+      content: messageContent.trim(),
+      priority: messagePriority,
+      targetUserId: targetUser === "all" ? null : parseInt(targetUser),
+    });
   };
 
   return (
@@ -197,6 +262,128 @@ export function AdminDashboard() {
             </div>
           ) : (
             <p className="text-muted-foreground text-center py-4">No users found</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Megaphone className="h-5 w-5" />
+            Send Announcement
+          </CardTitle>
+          <CardDescription>Send alerts and announcements to users</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSendMessage} className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="message-title">Title</Label>
+                <Input
+                  id="message-title"
+                  placeholder="Announcement title"
+                  value={messageTitle}
+                  onChange={(e) => setMessageTitle(e.target.value)}
+                  data-testid="input-message-title"
+                />
+              </div>
+              <div className="grid gap-4 grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="message-priority">Priority</Label>
+                  <Select value={messagePriority} onValueChange={setMessagePriority}>
+                    <SelectTrigger data-testid="select-message-priority">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="normal">Normal</SelectItem>
+                      <SelectItem value="high">High</SelectItem>
+                      <SelectItem value="urgent">Urgent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="message-target">Send To</Label>
+                  <Select value={targetUser} onValueChange={setTargetUser}>
+                    <SelectTrigger data-testid="select-message-target">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Users</SelectItem>
+                      {users?.map((user) => (
+                        <SelectItem key={user.id} value={String(user.id)}>
+                          {user.username}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="message-content">Message</Label>
+              <Textarea
+                id="message-content"
+                placeholder="Enter your announcement message..."
+                value={messageContent}
+                onChange={(e) => setMessageContent(e.target.value)}
+                className="min-h-[100px]"
+                data-testid="textarea-message-content"
+              />
+            </div>
+            <Button
+              type="submit"
+              disabled={createMessage.isPending || !messageTitle.trim() || !messageContent.trim()}
+              data-testid="button-send-message"
+            >
+              {createMessage.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4 mr-2" />
+              )}
+              Send Announcement
+            </Button>
+          </form>
+
+          {adminMessages && adminMessages.length > 0 && (
+            <div className="mt-6 pt-6 border-t">
+              <h4 className="font-medium mb-3">Previous Announcements</h4>
+              <div className="space-y-2 max-h-60 overflow-y-auto">
+                {adminMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className="flex items-start justify-between p-3 rounded-lg border text-sm"
+                    data-testid={`admin-message-${msg.id}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{msg.title}</span>
+                        {msg.priority !== "normal" && (
+                          <Badge variant={msg.priority === "urgent" ? "destructive" : "secondary"} className="text-xs">
+                            {msg.priority}
+                          </Badge>
+                        )}
+                        {msg.targetUserId && (
+                          <Badge variant="outline" className="text-xs">
+                            {users?.find(u => u.id === msg.targetUserId)?.username || `User #${msg.targetUserId}`}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 truncate">{msg.content}</p>
+                      <p className="text-xs text-muted-foreground">{formatDate(msg.createdAt)}</p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => deleteMessage.mutate(msg.id)}
+                      disabled={deleteMessage.isPending}
+                      data-testid={`button-delete-message-${msg.id}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

@@ -1,7 +1,7 @@
-import { type Swap, type InsertSwap, type NotificationSettings, type MonitoringStatus, type MonitoredWallet, type InsertMonitoredWallet } from "@shared/schema";
-import { swaps, settings, monitoringState, monitoredWallets, users, hotWallet, holdings, pendingBuys, tradeConfig } from "@shared/schema";
+import { type Swap, type InsertSwap, type NotificationSettings, type MonitoringStatus, type MonitoredWallet, type InsertMonitoredWallet, type AdminMessage, type InsertAdminMessage } from "@shared/schema";
+import { swaps, settings, monitoringState, monitoredWallets, users, hotWallet, holdings, pendingBuys, tradeConfig, adminMessages, messageReadStatus } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, or, isNull, gt } from "drizzle-orm";
 
 const DEFAULT_EMAIL = "";
 
@@ -328,6 +328,70 @@ export class DatabaseStorage implements IStorage {
       totalWallets: walletRows.length,
       activeWallets: activeWalletRows.length,
     };
+  }
+
+  // Admin messaging functions
+  async createAdminMessage(message: InsertAdminMessage): Promise<AdminMessage> {
+    const [row] = await db.insert(adminMessages).values(message).returning();
+    return row as AdminMessage;
+  }
+
+  async getMessagesForUser(userId: number): Promise<Array<AdminMessage & { read: boolean }>> {
+    const now = Math.floor(Date.now() / 1000);
+    
+    // Get messages that are either for all users (targetUserId is null) or specifically for this user
+    // and not expired
+    const messages = await db.select()
+      .from(adminMessages)
+      .where(
+        and(
+          or(isNull(adminMessages.targetUserId), eq(adminMessages.targetUserId, userId)),
+          or(isNull(adminMessages.expiresAt), gt(adminMessages.expiresAt, now))
+        )
+      )
+      .orderBy(desc(adminMessages.createdAt));
+    
+    // Get read status for this user
+    const readStatuses = await db.select()
+      .from(messageReadStatus)
+      .where(eq(messageReadStatus.userId, userId));
+    
+    const readMessageIds = new Set(readStatuses.map(s => s.messageId));
+    
+    return messages.map(m => ({
+      ...m,
+      read: readMessageIds.has(m.id),
+    })) as Array<AdminMessage & { read: boolean }>;
+  }
+
+  async getAllAdminMessages(): Promise<AdminMessage[]> {
+    const rows = await db.select().from(adminMessages).orderBy(desc(adminMessages.createdAt));
+    return rows as AdminMessage[];
+  }
+
+  async markMessageAsRead(messageId: number, userId: number): Promise<void> {
+    const existing = await db.select()
+      .from(messageReadStatus)
+      .where(and(eq(messageReadStatus.messageId, messageId), eq(messageReadStatus.userId, userId)))
+      .limit(1);
+    
+    if (existing.length === 0) {
+      await db.insert(messageReadStatus).values({
+        messageId,
+        userId,
+        readAt: Math.floor(Date.now() / 1000),
+      });
+    }
+  }
+
+  async deleteAdminMessage(messageId: number): Promise<void> {
+    await db.delete(messageReadStatus).where(eq(messageReadStatus.messageId, messageId));
+    await db.delete(adminMessages).where(eq(adminMessages.id, messageId));
+  }
+
+  async getUnreadMessageCount(userId: number): Promise<number> {
+    const messages = await this.getMessagesForUser(userId);
+    return messages.filter(m => !m.read).length;
   }
 }
 

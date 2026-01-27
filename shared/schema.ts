@@ -430,6 +430,51 @@ export const aiChatMessageSchema = z.object({
 export type AiChatMessage = z.infer<typeof aiChatMessageSchema>;
 export type InsertAiChatMessage = z.infer<typeof insertAiChatMessageSchema>;
 
+// Admin messages table for announcements/alerts to users
+export const adminMessages = pgTable("admin_messages", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull(),
+  content: text("content").notNull(),
+  priority: text("priority").default("normal"),
+  targetUserId: integer("target_user_id"),
+  createdBy: integer("created_by").notNull(),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at"),
+});
+
+export const insertAdminMessageSchema = createInsertSchema(adminMessages).omit({
+  id: true,
+});
+
+export const adminMessageSchema = z.object({
+  id: z.number(),
+  title: z.string(),
+  content: z.string(),
+  priority: z.string().default("normal"),
+  targetUserId: z.number().optional().nullable(),
+  createdBy: z.number(),
+  createdAt: z.number(),
+  expiresAt: z.number().optional().nullable(),
+});
+
+export type AdminMessage = z.infer<typeof adminMessageSchema>;
+export type InsertAdminMessage = z.infer<typeof insertAdminMessageSchema>;
+
+// Message read status tracking
+export const messageReadStatus = pgTable("message_read_status", {
+  id: serial("id").primaryKey(),
+  messageId: integer("message_id").notNull(),
+  userId: integer("user_id").notNull(),
+  readAt: integer("read_at").notNull(),
+});
+
+export const insertMessageReadStatusSchema = createInsertSchema(messageReadStatus).omit({
+  id: true,
+});
+
+export type MessageReadStatus = typeof messageReadStatus.$inferSelect;
+export type InsertMessageReadStatus = z.infer<typeof insertMessageReadStatusSchema>;
+
 // Helius webhook payload types
 export interface HeliusWebhookPayload {
   signature: string;

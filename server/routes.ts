@@ -22,7 +22,9 @@ import {
   hasTokenBeenBought,
   withdrawSol,
   getTokenWalletKeypair,
-  sendProfitsToMainWallet
+  sendProfitsToMainWallet,
+  exportHotWalletPrivateKey,
+  exportTokenWalletPrivateKey
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
@@ -829,6 +831,63 @@ export async function registerRoutes(
     }
   });
 
+  // Export hot wallet private key (requires password confirmation)
+  app.post("/api/copy-trade/wallet/export-key", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { password } = req.body;
+      
+      if (!password) {
+        return res.status(400).json({ error: "Password is required" });
+      }
+      
+      // Verify password
+      const user = await authenticateUser(req.username!, password);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+      
+      const privateKey = await exportHotWalletPrivateKey(req.userId!);
+      
+      if (!privateKey) {
+        return res.status(404).json({ error: "No wallet found" });
+      }
+      
+      res.json({ privateKey });
+    } catch (error) {
+      console.error("Error exporting hot wallet key:", error);
+      res.status(500).json({ error: "Failed to export key" });
+    }
+  });
+
+  // Export token wallet private key for a holding (requires password confirmation)
+  app.post("/api/copy-trade/holdings/:holdingId/export-key", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const holdingId = parseInt(req.params.holdingId);
+      const { password } = req.body;
+      
+      if (!password || isNaN(holdingId)) {
+        return res.status(400).json({ error: "Password and valid holding ID are required" });
+      }
+      
+      // Verify password
+      const user = await authenticateUser(req.username!, password);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+      
+      const privateKey = await exportTokenWalletPrivateKey(holdingId, req.userId!);
+      
+      if (!privateKey) {
+        return res.status(404).json({ error: "No token wallet found for this holding" });
+      }
+      
+      res.json({ privateKey });
+    } catch (error) {
+      console.error("Error exporting token wallet key:", error);
+      res.status(500).json({ error: "Failed to export key" });
+    }
+  });
+
   // Manually sell a token holding
   const sellSchema = z.object({
     percentage: z.number().min(1).max(100).optional().default(100),
@@ -1055,6 +1114,91 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting stats:", error);
       res.status(500).json({ error: "Failed to get stats" });
+    }
+  });
+
+  // ==================== Admin Messages Routes ====================
+
+  // Get all admin messages (admin only)
+  app.get("/api/admin/messages", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const messages = await storage.getAllAdminMessages();
+      res.json(messages);
+    } catch (error) {
+      console.error("Error getting admin messages:", error);
+      res.status(500).json({ error: "Failed to get messages" });
+    }
+  });
+
+  // Create admin message (admin only)
+  app.post("/api/admin/messages", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { title, content, priority, targetUserId, expiresAt } = req.body;
+      
+      if (!title || !content) {
+        return res.status(400).json({ error: "Title and content are required" });
+      }
+      
+      const message = await storage.createAdminMessage({
+        title,
+        content,
+        priority: priority || "normal",
+        targetUserId: targetUserId || null,
+        createdBy: req.userId!,
+        createdAt: Math.floor(Date.now() / 1000),
+        expiresAt: expiresAt || null,
+      });
+      
+      res.json(message);
+    } catch (error) {
+      console.error("Error creating admin message:", error);
+      res.status(500).json({ error: "Failed to create message" });
+    }
+  });
+
+  // Delete admin message (admin only)
+  app.delete("/api/admin/messages/:messageId", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const messageId = parseInt(req.params.messageId);
+      await storage.deleteAdminMessage(messageId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting admin message:", error);
+      res.status(500).json({ error: "Failed to delete message" });
+    }
+  });
+
+  // Get messages for current user (includes unread count)
+  app.get("/api/messages", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const messages = await storage.getMessagesForUser(req.userId!);
+      res.json(messages);
+    } catch (error) {
+      console.error("Error getting messages:", error);
+      res.status(500).json({ error: "Failed to get messages" });
+    }
+  });
+
+  // Get unread message count for current user
+  app.get("/api/messages/unread-count", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const count = await storage.getUnreadMessageCount(req.userId!);
+      res.json({ count });
+    } catch (error) {
+      console.error("Error getting unread count:", error);
+      res.status(500).json({ error: "Failed to get unread count" });
+    }
+  });
+
+  // Mark message as read
+  app.post("/api/messages/:messageId/read", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const messageId = parseInt(req.params.messageId);
+      await storage.markMessageAsRead(messageId, req.userId!);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error marking message as read:", error);
+      res.status(500).json({ error: "Failed to mark as read" });
     }
   });
 

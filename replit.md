@@ -164,6 +164,7 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **Duplicate Prevention**: Never buys the same token twice (checks holdings + active/paused pending buys)
 - **Rate Limiting**: Jupiter/DexScreener API calls rate-limited to stay within free tier
 - **SOL Withdrawal**: Withdraw SOL from hot wallet to any external Solana address
+- **Private Key Export**: Export hot wallet or token wallet private keys in base58 format (Phantom/Solflare compatible) with password verification
 - **Manual Sell**: Sell holdings manually at 25%, 50%, or 100%
 - **Pending Buy States**: active (waiting), paused (insufficient funds), cancelled, completed
 - **Auto-Pause**: Pending buys are automatically paused when hot wallet balance is too low
@@ -215,7 +216,3 @@ npm run db:push  # Push schema changes to database
 ```
 
 ## Future Enhancements (TODO)
-
-### Private Key Export
-- Add secure "Show Private Key" feature to backup hot wallet
-- Export base58 format for import into Phantom/Solflare
