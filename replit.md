@@ -175,6 +175,9 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **Optional Score Threshold**: Can set minimum AI score for automated buys in trade config
 - **Pattern Discovery**: AI identifies correlations from historical trading data (e.g., Twitter presence vs win rate)
 - **Chat Interface**: Interactive AI chat for asking questions about tokens and patterns
+- **AI Function Calling**: Chat can trigger actions via natural language:
+  - "Refresh score for PEPE" - Rescores a specific token
+  - "Refresh all token scores" - Batch refresh up to 50 tokens
 - **Outcome Tracking**: Links trade outcomes (final multiplier, hold time) to snapshots for learning
 - **Cost Efficient**: Uses gpt-4o-mini via Replit AI Integrations (<$1/month typical usage)
 
