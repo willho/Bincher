@@ -78,7 +78,7 @@ export async function sendSwapNotification(swap: Swap, toEmails: string | string
     const { data, error } = await resend.emails.send({
       from: "Swap Monitor <onboarding@resend.dev>",
       to: emailList,
-      subject: `Swap Detected: ${swap.fromTokenSymbol} → ${swap.toTokenSymbol}`,
+      subject: `Bought ${swap.toTokenSymbol} - ${meta?.priceUsd ? formatPrice(meta.priceUsd) : `${swap.toAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })} tokens`}`,
       html: `
         <div style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-radius: 16px;">
           <div style="text-align: center; margin-bottom: 32px;">
