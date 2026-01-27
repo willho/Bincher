@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
@@ -12,9 +12,17 @@ import { Loader2 } from "lucide-react";
 function AuthenticatedApp() {
   const [authKey, setAuthKey] = useState(0);
   
-  const { data: session, isLoading } = useQuery<{ authenticated: boolean; username?: string }>({
-    queryKey: ["/api/auth/session", authKey],
+  const { data: session, isLoading, refetch } = useQuery<{ authenticated: boolean; username?: string }>({
+    queryKey: ["/api/auth/session"],
+    staleTime: 0, // Always refetch session
   });
+  
+  // Refetch session when authKey changes (after login)
+  useEffect(() => {
+    if (authKey > 0) {
+      refetch();
+    }
+  }, [authKey, refetch]);
 
   if (isLoading) {
     return (

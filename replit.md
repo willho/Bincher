@@ -1,34 +1,47 @@
 # Solana Wallet Swap Monitor
 
 ## Overview
-A real-time monitoring application that tracks swap transactions for a specific Solana wallet and sends email notifications when swaps occur. Includes automated copy trading functionality with a hot wallet.
+A multi-user, real-time monitoring application that tracks swap transactions for Solana wallets and sends email notifications when swaps occur. Each user has their own isolated hot wallet for automated copy trading.
+
+## Authentication
+- **Session-based auth**: Uses httpOnly cookies with secure settings
+- **Password hashing**: PBKDF2 with 10,000 iterations and random salt per user
+- **Remember me**: 1-day (default) or 30-day sessions
+- **User isolation**: All data is scoped per user via userId filtering
 
 ## Architecture
 
 ### Frontend (React + Vite)
+- **Login Page**: Username/password form with "remember this device" option
 - **Dashboard**: Main page with tabbed interface for Monitor and Copy Trade sections
+- **Monitored Wallets**: Add/edit/remove multiple Solana wallet addresses per user
 - **WebSocket**: Real-time updates when new swaps are detected
 - **Theme**: Dark-first design with crypto-themed green accent colors
 
 ### Backend (Express)
+- **Auth Middleware**: Session cookie validation with userId extraction
 - **Helius Integration**: Uses webhooks for real-time swap detection (push-based, not polling)
 - **Resend Email**: Sends formatted email notifications on swap detection
 - **Jupiter Integration**: Executes token swaps for copy trading
 - **WebSocket Server**: Broadcasts swap updates to connected clients
-- **PostgreSQL Database**: Persists monitoring state, settings, swap history, and copy trading data
+- **PostgreSQL Database**: Persists users, monitoring state, settings, swap history, and copy trading data
 
 ### Database Tables
-- `swaps` - Stores detected swap transactions with token metadata
-- `settings` - Stores notification settings (emails, enabled status, min amount)
+- `users` - User accounts with username and hashed password
+- `sessions` - Active user sessions with expiration
+- `monitored_wallets` - Wallet addresses being monitored per user (with enabled flag)
+- `swaps` - Stores detected swap transactions with token metadata (linked to userId)
+- `settings` - Stores notification settings per user (emails, enabled status, min amount)
 - `monitoring_state` - Stores webhook ID and monitoring status (survives restarts)
-- `hot_wallet` - Stores encrypted hot wallet keypair for copy trading
-- `holdings` - Stores tokens bought through copy trading
-- `pending_buys` - Queue of tokens waiting to be bought
-- `trade_config` - Copy trading configuration settings
+- `hot_wallet` - Stores encrypted hot wallet keypair per user for copy trading
+- `holdings` - Stores tokens bought through copy trading per user
+- `pending_buys` - Queue of tokens waiting to be bought per user
+- `trade_config` - Copy trading configuration settings per user
 
 ### Key Components
 - `/server/db.ts` - Database connection using Drizzle ORM
 - `/server/storage.ts` - Database storage layer with CRUD operations
+- `/server/auth.ts` - User authentication, session management, password hashing
 - `/server/helius.ts` - Helius API client for webhook management and swap parsing
 - `/server/email.ts` - Resend email sending with styled HTML templates
 - `/server/wallet.ts` - Hot wallet management with encrypted keypair storage
@@ -37,7 +50,9 @@ A real-time monitoring application that tracks swap transactions for a specific 
 - `/server/price-monitor.ts` - Price monitoring and auto-reclaim logic
 - `/server/routes.ts` - API endpoints, webhook handler, and startup restoration
 - `/client/src/pages/dashboard.tsx` - Main dashboard UI
+- `/client/src/pages/login.tsx` - Login and registration page
 - `/client/src/components/copy-trading.tsx` - Copy trading UI component
+- `/client/src/components/monitored-wallets.tsx` - Monitored wallets management UI
 - `/shared/schema.ts` - Database schema and Zod types
 
 ## Configuration
@@ -48,22 +63,32 @@ A real-time monitoring application that tracks swap transactions for a specific 
 - `SESSION_SECRET` - Required (32+ chars) for hot wallet encryption
 - `DATABASE_URL` - PostgreSQL connection string (auto-provisioned)
 
-### Monitored Wallet
-- Address: `C92nBXrrANmWpgJKhBdbnqtUuCcoEZ7kQJoyScZ5sQak`
-- Notification Emails: Multiple recipients supported
-
 ## API Endpoints
+
+### Authentication
+- `GET /api/auth/check-setup` - Check if any users exist
+- `POST /api/auth/register` - Create new user account
+- `POST /api/auth/login` - Login with username/password
+- `GET /api/auth/session` - Check current session
+- `POST /api/auth/logout` - End session
 
 ### Monitoring
 - `GET /api/status` - Get monitoring status
 - `POST /api/monitoring/start` - Start monitoring (creates Helius webhook)
 - `POST /api/monitoring/stop` - Stop monitoring (deletes webhook)
 - `POST /api/webhook/helius` - Webhook endpoint for Helius to push swap data
-- `GET /api/swaps` - Get all detected swaps
+- `GET /api/swaps` - Get all detected swaps for current user
 - `GET /api/settings` - Get notification settings
 - `PATCH /api/settings` - Update notification settings
-- `GET /api/wallet` - Get monitored wallet address
+- `GET /api/wallet` - Get user's monitored wallet addresses
 - `GET /api/webhooks` - Debug: list all Helius webhooks
+
+### Monitored Wallets
+- `GET /api/monitored-wallets` - Get user's monitored wallets
+- `POST /api/monitored-wallets` - Add a new wallet to monitor
+- `PATCH /api/monitored-wallets/:id` - Update wallet (label, enabled)
+- `DELETE /api/monitored-wallets/:id` - Delete monitored wallet
+- `POST /api/monitored-wallets/sync` - Sync webhook with all monitored wallets
 
 ### Copy Trading
 - `GET /api/copy-trade/wallet` - Get hot wallet info
@@ -99,13 +124,18 @@ A real-time monitoring application that tracks swap transactions for a specific 
 - **Manual Sell**: Sell holdings manually at 25%, 50%, or 100%
 
 ## Security
+- User passwords hashed with PBKDF2 (10,000 iterations, random salt per user)
+- Session tokens stored in httpOnly cookies with secure/sameSite settings
+- All API routes protected with auth middleware requiring valid session
+- Complete user isolation: all queries filter by userId
 - Hot wallet private key encrypted with AES-256-GCM (authenticated encryption)
 - Random salt per encryption for stronger security
 - SESSION_SECRET required (32+ chars minimum)
 - Backward compatible with existing CBC-encrypted keys
 
 ## Notes
-- Resend connector was declined; using direct RESEND_API_KEY secret instead
+- Multi-user support with complete data isolation
+- Each user has their own monitored wallets, hot wallet, and trading data
 - Helius webhooks push swap data in real-time (no polling required)
 - Price monitoring uses hybrid approach: push for swaps, minimal polling for prices
 - WebSocket at `/ws` for real-time frontend updates
@@ -125,14 +155,6 @@ npm run db:push  # Push schema changes to database
 ```
 
 ## Future Enhancements (TODO)
-
-### Multi-User Support
-Currently a single-user application. To support multiple users with their own hot wallets:
-- Add user authentication (Replit Auth recommended)
-- Add `userId` column to: `hot_wallet`, `holdings`, `pending_buys`, `trade_config`, `settings`
-- Each user gets their own encrypted hot wallet
-- Each user tracks their own holdings and pending buys
-- Option: shared monitored wallet vs per-user monitored wallets
 
 ### Private Key Export
 - Add secure "Show Private Key" feature to backup hot wallet
