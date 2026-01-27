@@ -13,6 +13,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CopyTrading } from "@/components/copy-trading";
 import { MonitoredWallets } from "@/components/monitored-wallets";
+import { CommunityWallets } from "@/components/community-wallets";
 import { AdminDashboard } from "@/components/admin-dashboard";
 import { AIInsights } from "@/components/ai-insights";
 import { Alerts } from "@/components/alerts";
@@ -425,6 +426,9 @@ export default function Dashboard() {
 
         {/* Monitored Wallets */}
         <MonitoredWallets />
+
+        {/* Community Wallets */}
+        <CommunityWallets />
 
         {/* Swap History */}
         <Card>
