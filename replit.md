@@ -11,6 +11,7 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - **Admin role**: Users with isAdmin=true have access to admin dashboard
 - **Username uniqueness**: Case-insensitive at registration, case-sensitive for login
 - **New user defaults**: Blank email settings (no pre-filled emails)
+- **Password recovery**: Secure email-based reset with 15-minute expiring tokens, single-use, rate-limited (3/hour per email)
 
 ## Architecture
 
@@ -42,6 +43,7 @@ A multi-user, real-time monitoring application that tracks swap transactions for
 - `trade_config` - Copy trading configuration settings per user
 - `token_snapshots` - SHARED across all users, captures comprehensive token data for AI analysis
 - `ai_chat_messages` - Per-user AI chat conversation history
+- `password_reset_tokens` - Temporary tokens for password recovery (expires in 15 minutes)
 
 ### Key Components
 - `/server/db.ts` - Database connection using Drizzle ORM
