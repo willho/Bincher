@@ -26,6 +26,10 @@ export const users = pgTable("users", {
   isAdmin: boolean("is_admin").default(false),
   createdAt: integer("created_at").notNull(),
   lastLoginAt: integer("last_login_at"),
+  // Telegram integration
+  telegramChatId: text("telegram_chat_id"),
+  telegramLinkToken: text("telegram_link_token"),
+  telegramLinkedAt: integer("telegram_linked_at"),
 });
 
 // Monitored wallets - multiple wallet addresses per user
@@ -570,6 +574,96 @@ export const userEventPreferences = pgTable("user_event_preferences", {
 export const insertUserEventPreferencesSchema = createInsertSchema(userEventPreferences).omit({ id: true });
 export type UserEventPreferences = typeof userEventPreferences.$inferSelect;
 export type InsertUserEventPreferences = z.infer<typeof insertUserEventPreferencesSchema>;
+
+// System logs - comprehensive logging for production debugging
+export const systemLogs = pgTable("system_logs", {
+  id: serial("id").primaryKey(),
+  service: text("service").notNull(), // telegram, helius, openai, jupiter, resend, etc.
+  action: text("action").notNull(), // send_message, api_call, webhook_receive, etc.
+  status: text("status").notNull(), // success, error, warning, info
+  latencyMs: integer("latency_ms"), // time taken for operation
+  errorMessage: text("error_message"), // error details if status=error
+  errorStack: text("error_stack"), // stack trace for debugging
+  context: jsonb("context").$type<Record<string, any>>(), // additional context data
+  userId: integer("user_id"), // related user if applicable
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertSystemLogSchema = createInsertSchema(systemLogs).omit({ id: true });
+export type SystemLog = typeof systemLogs.$inferSelect;
+export type InsertSystemLog = z.infer<typeof insertSystemLogSchema>;
+
+// Pattern triggers - Pincher learns patterns and correlates to outcomes
+export const patternTriggers = pgTable("pattern_triggers", {
+  id: serial("id").primaryKey(),
+  patternType: text("pattern_type").notNull(), // whale_entry, holder_spike, volume_surge, etc.
+  tokenMint: text("token_mint"),
+  triggerData: jsonb("trigger_data").$type<Record<string, any>>().notNull(), // pattern-specific data
+  predictedOutcome: text("predicted_outcome"), // moon, dump, sideways
+  actualOutcome: text("actual_outcome"), // filled in after resolution
+  confidence: real("confidence"), // 0-1 confidence score
+  outcomeMultiplier: real("outcome_multiplier"), // actual price change multiplier
+  resolvedAt: integer("resolved_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertPatternTriggerSchema = createInsertSchema(patternTriggers).omit({ id: true });
+export type PatternTrigger = typeof patternTriggers.$inferSelect;
+export type InsertPatternTrigger = z.infer<typeof insertPatternTriggerSchema>;
+
+// Wallet reputation - track wallet performance over time
+export const walletReputation = pgTable("wallet_reputation", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull().unique(),
+  rugCount: integer("rug_count").default(0), // tokens that went to zero
+  successfulTrades: integer("successful_trades").default(0), // trades with positive outcome
+  totalTrades: integer("total_trades").default(0),
+  avgHoldTimeMinutes: integer("avg_hold_time_minutes"), // average hold time
+  avgMultiplier: real("avg_multiplier"), // average return multiplier
+  lastTradeAt: integer("last_trade_at"),
+  reputationScore: real("reputation_score"), // computed score 0-100
+  notes: text("notes"), // admin/AI notes about this wallet
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const insertWalletReputationSchema = createInsertSchema(walletReputation).omit({ id: true });
+export type WalletReputation = typeof walletReputation.$inferSelect;
+export type InsertWalletReputation = z.infer<typeof insertWalletReputationSchema>;
+
+// Holder snapshots - track holder distribution over time for pattern analysis
+export const holderSnapshots = pgTable("holder_snapshots", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  snapshotTime: integer("snapshot_time").notNull(),
+  topHolders: jsonb("top_holders").$type<{ address: string; percent: number; amount: number }[]>(),
+  totalHolders: integer("total_holders"),
+  top10Percent: real("top_10_percent"), // concentration in top 10
+  top50Percent: real("top_50_percent"), // concentration in top 50
+  concentrationScore: real("concentration_score"), // computed score
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertHolderSnapshotSchema = createInsertSchema(holderSnapshots).omit({ id: true });
+export type HolderSnapshot = typeof holderSnapshots.$inferSelect;
+export type InsertHolderSnapshot = z.infer<typeof insertHolderSnapshotSchema>;
+
+// Pincher data requests - AI can request new data points, admin approves
+export const pincherDataRequests = pgTable("pincher_data_requests", {
+  id: serial("id").primaryKey(),
+  requestType: text("request_type").notNull(), // new_metric, api_integration, pattern_tracking
+  description: text("description").notNull(), // what Pincher wants and why
+  reasoning: text("reasoning"), // AI's reasoning for the request
+  priority: text("priority").default("normal"), // low, normal, high
+  status: text("status").default("pending"), // pending, approved, rejected, implemented
+  adminNotes: text("admin_notes"), // admin response/notes
+  resolvedBy: integer("resolved_by"), // admin user id
+  resolvedAt: integer("resolved_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertPincherDataRequestSchema = createInsertSchema(pincherDataRequests).omit({ id: true });
+export type PincherDataRequest = typeof pincherDataRequests.$inferSelect;
+export type InsertPincherDataRequest = z.infer<typeof insertPincherDataRequestSchema>;
 
 // Helius webhook payload types
 export interface HeliusWebhookPayload {
