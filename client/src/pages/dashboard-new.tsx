@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Activity, Bell, TrendingUp, Wallet } from "lucide-react";
+import { Alerts } from "@/components/alerts";
 import type { MonitoringStatus, Swap } from "@shared/schema";
 
 export default function DashboardPage() {
@@ -107,52 +108,56 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Recent Activity</CardTitle>
-          <CardDescription>Latest swap transactions from monitored wallets</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {swapsLoading ? (
-            <div className="space-y-3">
-              {[...Array(3)].map((_, i) => (
-                <Skeleton key={i} className="h-16 w-full" />
-              ))}
-            </div>
-          ) : swaps && swaps.length > 0 ? (
-            <div className="space-y-3">
-              {swaps.slice(0, 10).map((swap) => (
-                <div
-                  key={swap.id}
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50 border"
-                  data-testid={`swap-item-${swap.id}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-full bg-primary/10">
-                      <TrendingUp className="h-4 w-4 text-primary" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline">{swap.fromTokenSymbol}</Badge>
-                        <span className="text-muted-foreground">→</span>
-                        <Badge variant="outline">{swap.toTokenSymbol}</Badge>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent Activity</CardTitle>
+            <CardDescription>Latest swap transactions from monitored wallets</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {swapsLoading ? (
+              <div className="space-y-3">
+                {[...Array(3)].map((_, i) => (
+                  <Skeleton key={i} className="h-16 w-full" />
+                ))}
+              </div>
+            ) : swaps && swaps.length > 0 ? (
+              <div className="space-y-3">
+                {swaps.slice(0, 5).map((swap) => (
+                  <div
+                    key={swap.id}
+                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50 border"
+                    data-testid={`swap-item-${swap.id}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-full bg-primary/10">
+                        <TrendingUp className="h-4 w-4 text-primary" />
                       </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {new Date(swap.timestamp).toLocaleString()}
-                      </p>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline">{swap.fromTokenSymbol}</Badge>
+                          <span className="text-muted-foreground">→</span>
+                          <Badge variant="outline">{swap.toTokenSymbol}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {new Date(swap.timestamp).toLocaleString()}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              <Activity className="h-10 w-10 mx-auto mb-2 opacity-50" />
-              <p>No recent activity</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                <Activity className="h-10 w-10 mx-auto mb-2 opacity-50" />
+                <p>No recent activity</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Alerts />
+      </div>
     </div>
   );
 }
