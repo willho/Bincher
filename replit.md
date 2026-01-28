@@ -46,3 +46,7 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - **PostgreSQL**: The primary database for persistent storage of all application data.
 - **DexScreener**: Used to fetch token metadata such as price, market cap, liquidity, FDV, and volume for token analysis.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers the AI Token Analysis features, providing token scoring, insights, and natural language interaction.
+
+## TODO
+
+- [ ] Add USDC→Token swap detection to emerging whale detection (currently only SOL→Token swaps are detected)
