@@ -33,6 +33,9 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - **Scalability**: Designed with user isolation and webhook-driven event processing to support multiple users efficiently.
 - **API Budget & Key Management**: Comprehensive API call tracking with daily/monthly limits, warning thresholds, and automatic pausing. Admin API key pool for load balancing and redundancy. User-supplied API keys increase personal wallet limits.
 - **Wallet Limits**: Base limit of 2 monitored wallets per user, increased by +2 per valid API key supplied, up to 20 maximum.
+- **Tiered Price Aggregation**: OHLC+ price data with multi-tier retention (15min buckets for 2hr, hourly for 48hr, daily for 14 days, weekly for 90 days). In-memory tick buffer for real-time swing detection, with background aggregation job compressing ticks into database rows.
+- **Whale Detection**: Cached top-100 holder lists per token with event-triggered refresh. Swap webhook detects whale activity (buyer/seller in top-100 holders) and broadcasts whale events via WebSocket. Holder tiers: Top 10 = high signal, Top 50 = medium, Top 100 = info.
+- **Enhanced Heat Scoring**: Token heat scores now include whale activity as a 20% weighted factor, considering recent whale events and top-10 holder concentration. Other factors: recentBuys (25%), priceVolatility (20%), userAttention (20%), recency (15%).
 
 ## External Dependencies
 
