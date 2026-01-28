@@ -49,4 +49,4 @@ A PostgreSQL database stores all application data, including user accounts, sess
 
 ## TODO
 
-- [ ] Add USDC→Token swap detection to emerging whale detection (currently only SOL→Token swaps are detected)
+- [ ] Add full USDC swap monitoring: USDC→Token and Token→USDC swaps should be detected and processed the same as SOL swaps (webhook parsing, swap recording, whale detection, emerging whale detection, notifications)
