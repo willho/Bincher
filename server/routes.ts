@@ -20,6 +20,7 @@ import {
   removeAdminApiKey,
   toggleAdminApiKey,
   maskApiKey,
+  getUserResendApiKey,
 } from "./api-keys";
 import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
 import { z } from "zod";
@@ -566,10 +567,12 @@ export async function registerRoutes(
           const minAmount = settings.minSwapAmount ?? 0;
           if (savedSwap.fromAmount >= minAmount) {
             const allEmails = settings.emails?.length ? settings.emails : [settings.email];
-            const sent = await sendSwapNotification(savedSwap, allEmails);
+            // Use user's Resend API key if available, otherwise fall back to system default
+            const userResendKey = await getUserResendApiKey(userId);
+            const sent = await sendSwapNotification(savedSwap, allEmails, userResendKey ?? undefined);
             if (sent) {
               await storage.markSwapNotified(savedSwap.id);
-              console.log("Notification sent for swap:", savedSwap.id, "to", allEmails.length, "recipients");
+              console.log("Notification sent for swap:", savedSwap.id, "to", allEmails.length, "recipients", userResendKey ? "(using user's Resend key)" : "(using system default)");
             }
           }
         }

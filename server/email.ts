@@ -1,7 +1,11 @@
 import { Resend } from "resend";
 import type { Swap } from "@shared/schema";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const defaultResend = new Resend(process.env.RESEND_API_KEY);
+
+function getResendClient(apiKey?: string): Resend {
+  return apiKey ? new Resend(apiKey) : defaultResend;
+}
 
 export function formatNumber(num: number | undefined, decimals: number = 2): string {
   if (num === undefined || num === null) return "N/A";
@@ -25,8 +29,9 @@ function formatPriceChange(change: number | undefined): string {
   return `<span style="color: ${color}; font-weight: 600;">${sign}${change.toFixed(2)}%</span>`;
 }
 
-export async function sendSwapNotification(swap: Swap, toEmails: string | string[]): Promise<boolean> {
+export async function sendSwapNotification(swap: Swap, toEmails: string | string[], apiKey?: string): Promise<boolean> {
   const emailList = Array.isArray(toEmails) ? toEmails : [toEmails];
+  const resend = getResendClient(apiKey);
   try {
     const formattedDate = new Date(swap.timestamp).toLocaleString("en-US", {
       dateStyle: "medium",
@@ -149,7 +154,8 @@ export async function sendSwapNotification(swap: Swap, toEmails: string | string
   }
 }
 
-export async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+export async function sendEmail(to: string, subject: string, html: string, apiKey?: string): Promise<boolean> {
+  const resend = getResendClient(apiKey);
   try {
     const { data, error } = await resend.emails.send({
       from: "Swap Monitor <onboarding@resend.dev>",

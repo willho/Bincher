@@ -87,6 +87,8 @@ export async function validateUserApiKey(keyId: number): Promise<boolean> {
       isValid = await validateHeliusKey(decryptedKey);
     } else if (key.service === "dexscreener") {
       isValid = true;
+    } else if (key.service === "resend") {
+      isValid = await validateResendKey(decryptedKey);
     }
     
     await db.update(userApiKeys).set({
@@ -116,6 +118,35 @@ async function validateHeliusKey(apiKey: string): Promise<boolean> {
     return response.ok;
   } catch {
     return false;
+  }
+}
+
+async function validateResendKey(apiKey: string): Promise<boolean> {
+  try {
+    // Validate by attempting to get API key info from Resend
+    const response = await fetch("https://api.resend.com/api-keys", {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function getUserResendApiKey(userId: number): Promise<string | null> {
+  const keys = await db.select().from(userApiKeys)
+    .where(and(eq(userApiKeys.userId, userId), eq(userApiKeys.service, "resend"), eq(userApiKeys.isValid, true)));
+  
+  if (keys.length === 0) return null;
+  
+  try {
+    return decryptApiKey(keys[0].encryptedApiKey);
+  } catch {
+    return null;
   }
 }
 

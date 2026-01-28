@@ -259,6 +259,7 @@ export function ApiKeysSettings() {
                   <SelectContent>
                     <SelectItem value="helius">Helius (Solana RPC)</SelectItem>
                     <SelectItem value="dexscreener">DexScreener (Price Data)</SelectItem>
+                    <SelectItem value="resend">Resend (Email Notifications)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
