@@ -48,3 +48,40 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - **PostgreSQL**: Primary database for persistent storage.
 - **DexScreener**: Fetching token metadata (price, market cap, liquidity, FDV, volume).
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
+
+## Frontend Redesign Implementation
+
+### New 4-Page Structure
+| Route | Page | Contents |
+|-------|------|----------|
+| /dashboard | Dashboard | Portfolio overview, alerts feed, swap history, heat scores |
+| /watchlist | Watchlist | Monitored wallets, community wallets |
+| /trading | Trading | Holdings list, swap/send actions |
+| /trading/:token | Token | Per-token details, analysis, swap/send |
+| /settings | Settings | API keys, notifications, account, admin |
+
+### PHASE 1: Foundation ✅
+- [x] Sidebar navigation with Shell logo
+- [x] Route structure: /dashboard, /watchlist, /trading, /trading/:token, /settings
+- [x] PincherFooter component - omnipresent AI chat widget
+- [x] Page-aware context display (badge shows current page)
+
+### PHASE 2: Page Reorganization (Next)
+- [ ] Dashboard: Portfolio overview, alerts feed, swap history
+- [ ] Watchlist: Monitored wallets, community wallets
+- [ ] Trading: Holdings, copy trading settings
+- [ ] Token: Per-token details, AI analysis
+- [ ] Settings: API keys, notifications, admin
+
+### PHASE 3: Pincher Backend Enhancements
+- [ ] Channel awareness (telegram/web tone adjustment)
+- [ ] Cross-channel context queries
+- [ ] Cached alerts (AI generates once, system delivers)
+- [ ] Admin instructions injection
+
+### Miss Pincher Personality
+- **Voice**: Dry wit, tough love, casual but serious when needed
+- **Crab Mystery**: Name/logo suspicious, denies being a crab, subtle slip-ups
+- **Trading Soul**: Realistic advice, score-weighted responses
+- **Relationship Tracking**: Affinity scores, keeps receipts for clap backs
+- **Professional Core**: Never sabotages function, alerts/analysis stay accurate

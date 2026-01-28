@@ -26,7 +26,8 @@ import SettingsPage from "@/pages/settings";
 import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
 import NotFound from "@/pages/not-found";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Crab } from "lucide-react";
+import { PincherFooter } from "@/components/pincher-footer";
+import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 const navItems = [
@@ -49,7 +50,7 @@ function AppSidebar() {
       <SidebarHeader className="p-4 border-b">
         <Link href="/dashboard">
           <div className="flex items-center gap-2 cursor-pointer" data-testid="link-logo">
-            <Crab className="h-6 w-6 text-primary" />
+            <Shell className="h-6 w-6 text-primary" />
             <span className="font-bold text-lg">Penny Pincher</span>
           </div>
         </Link>
@@ -139,7 +140,7 @@ function AuthenticatedApp() {
           <header className="flex items-center gap-4 p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
           </header>
-          <main className="flex-1 p-6 overflow-auto">
+          <main className="flex-1 p-6 overflow-auto pb-20">
             <Switch>
               <Route path="/" component={DashboardPage} />
               <Route path="/dashboard" component={DashboardPage} />
@@ -151,6 +152,7 @@ function AuthenticatedApp() {
             </Switch>
           </main>
         </div>
+        <PincherFooter />
       </div>
     </SidebarProvider>
   );
