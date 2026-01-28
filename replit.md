@@ -47,6 +47,17 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - **DexScreener**: Used to fetch token metadata such as price, market cap, liquidity, FDV, and volume for token analysis.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers the AI Token Analysis features, providing token scoring, insights, and natural language interaction.
 
+## Queued Implementation Tasks
+
+1. Telegram bot for one-way alerts (two-way control = future TODO)
+2. AI budget pacing with gradual dynamic throttling ($1/day per user)
+3. Pattern triggers table - Pincher learns patterns but stays conservative early
+4. Batch analysis system (bundled token checks every 15-30 min)
+5. Two-tier alert system: standard (cached templates) vs AI-evaluated
+6. Simplify frontend to 4 pages: Dashboard, Watchlist, Trading, Token detail
+7. Resend API key integration (user-supplied keys)
+
 ## TODO
 
 - [ ] Add full USDC swap monitoring: USDC→Token and Token→USDC swaps should be detected and processed the same as SOL swaps (webhook parsing, swap recording, whale detection, emerging whale detection, notifications)
+- [ ] Telegram two-way control (after one-way alerts working)
