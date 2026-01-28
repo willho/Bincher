@@ -165,6 +165,50 @@ export function getHolderTier(rank: number): "top10" | "top50" | "top100" | null
   return null;
 }
 
+export interface EmergingWhaleCheck {
+  isEmergingWhale: boolean;
+  wouldBeRank: number | null;
+  top10Threshold: number | null;  // Amount needed to be in top 10
+  swapAmount: number;
+}
+
+export function checkEmergingWhale(tokenMint: string, swapTokenAmount: number, walletAddress?: string): EmergingWhaleCheck {
+  const cached = holderCache.get(tokenMint);
+  if (!cached || cached.holders.length < 10) {
+    return { isEmergingWhale: false, wouldBeRank: null, top10Threshold: null, swapAmount: swapTokenAmount };
+  }
+
+  // If wallet is already in top 10, skip - they're already a whale
+  if (walletAddress) {
+    const existingIdx = cached.holders.findIndex(h => h.address.toLowerCase() === walletAddress.toLowerCase());
+    if (existingIdx !== -1 && existingIdx < 10) {
+      return { isEmergingWhale: false, wouldBeRank: existingIdx + 1, top10Threshold: null, swapAmount: swapTokenAmount };
+    }
+  }
+
+  // Get the #10 holder's uiAmount as the threshold (human-readable, matches swap.toAmount)
+  const top10Threshold = cached.holders[9]?.uiAmount || 0;
+  
+  // Check where this swap amount would rank (compare against uiAmount for consistency)
+  let wouldBeRank: number | null = null;
+  for (let i = 0; i < cached.holders.length; i++) {
+    if (swapTokenAmount > cached.holders[i].uiAmount) {
+      wouldBeRank = i + 1;
+      break;
+    }
+  }
+  
+  // If swap amount is larger than #10, they could become a top 10 holder
+  const isEmergingWhale = swapTokenAmount > top10Threshold;
+  
+  return {
+    isEmergingWhale,
+    wouldBeRank: wouldBeRank || (swapTokenAmount > 0 ? 101 : null),
+    top10Threshold,
+    swapAmount: swapTokenAmount,
+  };
+}
+
 // ==================== AGGREGATION ====================
 
 function getBucketStart(timestamp: number, tier: AggregateTier): number {

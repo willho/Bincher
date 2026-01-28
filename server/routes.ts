@@ -53,7 +53,8 @@ import {
   getHolderTier, 
   triggerHolderRefresh,
   getHoldersCached,
-  getAggregatesForAI 
+  getAggregatesForAI,
+  checkEmergingWhale
 } from "./price-aggregator";
 
 let wss: WebSocketServer;
@@ -525,6 +526,37 @@ export async function registerRoutes(
                 client.send(msg);
               }
             });
+          }
+        }
+        
+        // Emerging whale detection: Check if this BUY would make someone a top-10 holder
+        if (swap.fromTokenSymbol === "SOL" && swap.toAmount) {
+          const emergingCheck = checkEmergingWhale(swap.toToken, swap.toAmount, swapWalletAddress);
+          if (emergingCheck.isEmergingWhale && emergingCheck.wouldBeRank) {
+            console.log(`Emerging whale detected: Potential rank #${emergingCheck.wouldBeRank} holder for ${swap.toTokenSymbol} (bought ${swap.toAmount} tokens)`);
+            
+            // Trigger holder refresh to update the list
+            triggerHolderRefresh(swap.toToken);
+            
+            // Broadcast NEW_TOP_HOLDER event
+            if (wss) {
+              const newTopHolderEvent = {
+                type: "NEW_TOP_HOLDER",
+                tokenMint: swap.toToken,
+                tokenSymbol: swap.toTokenSymbol,
+                walletAddress: swapWalletAddress,
+                potentialRank: emergingCheck.wouldBeRank,
+                tokensAcquired: swap.toAmount,
+                top10Threshold: emergingCheck.top10Threshold,
+                timestamp: Date.now(),
+              };
+              const msg = JSON.stringify(newTopHolderEvent);
+              wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                  client.send(msg);
+                }
+              });
+            }
           }
         }
 

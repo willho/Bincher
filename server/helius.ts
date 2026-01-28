@@ -76,6 +76,8 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
 export interface TopHolderInfo {
   address: string;
   percent: number;
+  amount: number;      // Raw token amount (with decimals)
+  uiAmount: number;    // Human-readable amount (without decimals)
   isLP?: boolean;
 }
 
@@ -133,11 +135,13 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
     }
 
     let totalSupply = 0;
+    let decimals = 9; // Default to 9 decimals (common for Solana tokens)
     if (supplyResponse.ok) {
       const supplyData = await supplyResponse.json();
       await trackApiCall("helius", "getTokenSupply", 1); // Track supply call separately on success
       if (supplyData.result?.value?.amount) {
         totalSupply = parseFloat(supplyData.result.value.amount);
+        decimals = supplyData.result.value.decimals ?? 9;
       }
     }
     
@@ -150,6 +154,7 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
 
     if (totalSupply === 0) return [];
 
+    const divisor = Math.pow(10, decimals);
     const holders: TopHolderInfo[] = [];
     for (const holder of holdersData.result.value.slice(0, limit)) {
       const amount = parseFloat(holder.amount || "0");
@@ -157,6 +162,8 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
       holders.push({
         address: holder.address,
         percent: Math.round(percent * 100) / 100,
+        amount: amount,
+        uiAmount: amount / divisor,
       });
     }
 
