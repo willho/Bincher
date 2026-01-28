@@ -23,6 +23,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
   const [resetSent, setResetSent] = useState(false);
+  const [isSignUpMode, setIsSignUpMode] = useState(false);
 
   const { data: needsSetup, isLoading: checkingSetup } = useQuery<{ needsSetup: boolean }>({
     queryKey: ["/api/auth/check-setup"],
@@ -63,7 +64,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (needsSetup?.needsSetup) {
+    if (isSetup) {
       if (password !== confirmPassword) {
         toast({ description: "Passwords do not match", variant: "destructive" });
         return;
@@ -86,7 +87,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     );
   }
 
-  const isSetup = needsSetup?.needsSetup;
+  const isSetup = needsSetup?.needsSetup || isSignUpMode;
   const isPending = login.isPending || register.isPending;
 
   return (
@@ -199,6 +200,36 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                 >
                   Forgot password?
                 </button>
+              </div>
+            )}
+
+            {!needsSetup?.needsSetup && (
+              <div className="text-center pt-2 border-t">
+                {isSignUpMode ? (
+                  <p className="text-sm text-muted-foreground">
+                    Already have an account?{" "}
+                    <button
+                      type="button"
+                      onClick={() => setIsSignUpMode(false)}
+                      className="text-primary hover:underline font-medium"
+                      data-testid="link-switch-to-login"
+                    >
+                      Sign in
+                    </button>
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Don't have an account?{" "}
+                    <button
+                      type="button"
+                      onClick={() => setIsSignUpMode(true)}
+                      className="text-primary hover:underline font-medium"
+                      data-testid="link-switch-to-signup"
+                    >
+                      Sign up
+                    </button>
+                  </p>
+                )}
               </div>
             )}
           </form>
