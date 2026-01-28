@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp } from "lucide-react";
+import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 
@@ -81,12 +82,37 @@ interface ApiBudgetStatus {
   shouldPause: boolean;
 }
 
+interface AdminApiKeyInfo {
+  id: number;
+  service: string;
+  keyLabel: string;
+  isActive: boolean | null;
+  priority: number | null;
+  usageCount: number | null;
+  lastUsedAt: number | null;
+  createdAt: number;
+}
+
+interface WalletLimitsConfigInfo {
+  id: number;
+  baseWalletLimit: number;
+  walletsPerApiKey: number;
+  maxWalletLimit: number;
+  updatedAt: number | null;
+}
+
 export function AdminDashboard() {
   const { toast } = useToast();
   const [messageTitle, setMessageTitle] = useState("");
   const [messageContent, setMessageContent] = useState("");
   const [messagePriority, setMessagePriority] = useState("normal");
   const [targetUser, setTargetUser] = useState<string>("all");
+  
+  const [showAddApiKey, setShowAddApiKey] = useState(false);
+  const [newApiKeyService, setNewApiKeyService] = useState("");
+  const [newApiKey, setNewApiKey] = useState("");
+  const [newApiKeyLabel, setNewApiKeyLabel] = useState("");
+  const [newApiKeyPriority, setNewApiKeyPriority] = useState("0");
 
   const { data: stats, isLoading: statsLoading } = useQuery<AdminStats>({
     queryKey: ["/api/admin/stats"],
@@ -110,6 +136,53 @@ export function AdminDashboard() {
 
   const { data: apiBudgets, isLoading: budgetsLoading } = useQuery<ApiBudgetStatus[]>({
     queryKey: ["/api/admin/api-budget"],
+  });
+
+  const { data: adminApiKeys, isLoading: apiKeysLoading } = useQuery<AdminApiKeyInfo[]>({
+    queryKey: ["/api/admin/api-keys"],
+  });
+
+  const { data: walletLimitsConfig } = useQuery<WalletLimitsConfigInfo>({
+    queryKey: ["/api/admin/wallet-limits"],
+  });
+
+  const addAdminApiKeyMutation = useMutation({
+    mutationFn: (data: { service: string; apiKey: string; keyLabel: string; priority: number }) =>
+      apiRequest("POST", "/api/admin/api-keys", data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/api-keys"] });
+      setShowAddApiKey(false);
+      setNewApiKeyService("");
+      setNewApiKey("");
+      setNewApiKeyLabel("");
+      setNewApiKeyPriority("0");
+      toast({ description: "API key added to pool" });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to add API key", variant: "destructive" });
+    },
+  });
+
+  const deleteAdminApiKeyMutation = useMutation({
+    mutationFn: (keyId: number) => apiRequest("DELETE", `/api/admin/api-keys/${keyId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/api-keys"] });
+      toast({ description: "API key removed" });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to remove API key", variant: "destructive" });
+    },
+  });
+
+  const toggleAdminApiKeyMutation = useMutation({
+    mutationFn: ({ keyId, isActive }: { keyId: number; isActive: boolean }) =>
+      apiRequest("PATCH", `/api/admin/api-keys/${keyId}`, { isActive }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/api-keys"] });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to toggle API key", variant: "destructive" });
+    },
   });
 
   const approveWallet = useMutation({
@@ -367,6 +440,177 @@ export function AdminDashboard() {
             </div>
           ) : (
             <p className="text-muted-foreground text-center py-4">No API usage data available yet</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            API Key Pool
+          </CardTitle>
+          <CardDescription>Manage backend API keys for load balancing and redundancy</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {apiKeysLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : adminApiKeys && adminApiKeys.length > 0 ? (
+            <div className="space-y-2">
+              {adminApiKeys.map((key) => (
+                <div
+                  key={key.id}
+                  data-testid={`admin-api-key-${key.id}`}
+                  className="flex items-center justify-between p-3 bg-muted/50 rounded-lg border"
+                >
+                  <div className="flex items-center gap-3">
+                    <Key className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <div className="font-medium text-sm flex items-center gap-2">
+                        {key.keyLabel}
+                        <Badge variant="outline" className="text-xs capitalize">{key.service}</Badge>
+                        {key.priority !== null && key.priority > 0 && (
+                          <Badge variant="secondary" className="text-xs">Priority: {key.priority}</Badge>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {key.usageCount || 0} uses
+                        {key.lastUsedAt && ` · Last used ${new Date(key.lastUsedAt * 1000).toLocaleDateString()}`}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">{key.isActive ? "Active" : "Inactive"}</span>
+                      <Switch
+                        checked={key.isActive ?? false}
+                        onCheckedChange={(checked) => toggleAdminApiKeyMutation.mutate({ keyId: key.id, isActive: checked })}
+                        data-testid={`switch-api-key-${key.id}`}
+                      />
+                    </div>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => deleteAdminApiKeyMutation.mutate(key.id)}
+                      disabled={deleteAdminApiKeyMutation.isPending}
+                      data-testid={`button-delete-admin-key-${key.id}`}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-muted-foreground">
+              <Key className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No API keys in pool</p>
+              <p className="text-xs mt-1">Add keys for load balancing and redundancy</p>
+            </div>
+          )}
+
+          {showAddApiKey ? (
+            <div className="border rounded-lg p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Service</Label>
+                  <Select value={newApiKeyService} onValueChange={setNewApiKeyService}>
+                    <SelectTrigger data-testid="select-admin-service">
+                      <SelectValue placeholder="Select service" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="helius">Helius</SelectItem>
+                      <SelectItem value="dexscreener">DexScreener</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Priority</Label>
+                  <Input
+                    type="number"
+                    value={newApiKeyPriority}
+                    onChange={(e) => setNewApiKeyPriority(e.target.value)}
+                    placeholder="0"
+                    data-testid="input-admin-priority"
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Label</Label>
+                <Input
+                  value={newApiKeyLabel}
+                  onChange={(e) => setNewApiKeyLabel(e.target.value)}
+                  placeholder="e.g., Helius Key 1"
+                  data-testid="input-admin-key-label"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>API Key</Label>
+                <Input
+                  type="password"
+                  value={newApiKey}
+                  onChange={(e) => setNewApiKey(e.target.value)}
+                  placeholder="Enter API key"
+                  data-testid="input-admin-api-key"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => {
+                    if (!newApiKeyService || !newApiKey || !newApiKeyLabel) {
+                      toast({ description: "Please fill all fields", variant: "destructive" });
+                      return;
+                    }
+                    addAdminApiKeyMutation.mutate({
+                      service: newApiKeyService,
+                      apiKey: newApiKey,
+                      keyLabel: newApiKeyLabel,
+                      priority: parseInt(newApiKeyPriority) || 0,
+                    });
+                  }}
+                  disabled={addAdminApiKeyMutation.isPending}
+                  data-testid="button-save-admin-key"
+                >
+                  {addAdminApiKeyMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  Add Key
+                </Button>
+                <Button variant="outline" onClick={() => setShowAddApiKey(false)} data-testid="button-cancel-admin-key">
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button variant="outline" className="w-full" onClick={() => setShowAddApiKey(true)} data-testid="button-add-admin-key">
+              <Plus className="h-4 w-4 mr-2" />
+              Add API Key to Pool
+            </Button>
+          )}
+
+          {walletLimitsConfig && (
+            <div className="bg-muted/30 rounded-lg p-3 space-y-2 text-sm">
+              <div className="font-medium flex items-center gap-2">
+                <Settings className="h-4 w-4" />
+                Wallet Limits Configuration
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <div className="font-medium">{walletLimitsConfig.baseWalletLimit}</div>
+                  <div className="text-xs text-muted-foreground">Base Limit</div>
+                </div>
+                <div>
+                  <div className="font-medium">+{walletLimitsConfig.walletsPerApiKey}</div>
+                  <div className="text-xs text-muted-foreground">Per API Key</div>
+                </div>
+                <div>
+                  <div className="font-medium">{walletLimitsConfig.maxWalletLimit}</div>
+                  <div className="text-xs text-muted-foreground">Max Limit</div>
+                </div>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>

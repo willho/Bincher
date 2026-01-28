@@ -6,6 +6,21 @@ import { storage } from "./storage";
 import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress } from "./helius";
 import { sendSwapNotification, sendPasswordResetEmail } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
+import {
+  getUserApiKeys,
+  addUserApiKey,
+  removeUserApiKey,
+  validateUserApiKey,
+  getUserWalletLimit,
+  canAddWallet,
+  getWalletLimitsConfig,
+  updateWalletLimitsConfig,
+  getAdminApiKeys,
+  addAdminApiKey,
+  removeAdminApiKey,
+  toggleAdminApiKey,
+  maskApiKey,
+} from "./api-keys";
 import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
@@ -807,6 +822,11 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid Solana wallet address" });
       }
       
+      const limitCheck = await canAddWallet(req.userId!);
+      if (!limitCheck.allowed) {
+        return res.status(403).json({ error: limitCheck.reason });
+      }
+      
       const wallet = await storage.addMonitoredWallet(req.userId!, walletAddress, label);
       res.json(wallet);
     } catch (error) {
@@ -1511,6 +1531,214 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting API usage history:", error);
       res.status(500).json({ error: "Failed to get API usage history" });
+    }
+  });
+
+  // ==================== User API Keys & Wallet Limits ====================
+
+  // Get user's wallet limit info
+  app.get("/api/wallet-limits", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const limits = await getUserWalletLimit(req.userId!);
+      res.json(limits);
+    } catch (error) {
+      console.error("Error getting wallet limits:", error);
+      res.status(500).json({ error: "Failed to get wallet limits" });
+    }
+  });
+
+  // Get user's API keys (masked)
+  app.get("/api/api-keys", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const keys = await getUserApiKeys(req.userId!);
+      const maskedKeys = keys.map(k => ({
+        id: k.id,
+        service: k.service,
+        keyLabel: k.keyLabel,
+        isValid: k.isValid,
+        lastValidatedAt: k.lastValidatedAt,
+        createdAt: k.createdAt,
+      }));
+      res.json(maskedKeys);
+    } catch (error) {
+      console.error("Error getting API keys:", error);
+      res.status(500).json({ error: "Failed to get API keys" });
+    }
+  });
+
+  // Add user API key
+  app.post("/api/api-keys", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { service, apiKey, keyLabel } = req.body;
+      
+      if (!service || !apiKey) {
+        return res.status(400).json({ error: "Service and API key are required" });
+      }
+      
+      if (!["helius", "dexscreener"].includes(service)) {
+        return res.status(400).json({ error: "Invalid service. Must be 'helius' or 'dexscreener'" });
+      }
+      
+      const key = await addUserApiKey(req.userId!, service, apiKey, keyLabel);
+      
+      // Validate the key immediately
+      const isValid = await validateUserApiKey(key.id);
+      
+      res.json({
+        id: key.id,
+        service: key.service,
+        keyLabel: key.keyLabel,
+        isValid,
+        createdAt: key.createdAt,
+      });
+    } catch (error) {
+      console.error("Error adding API key:", error);
+      res.status(500).json({ error: "Failed to add API key" });
+    }
+  });
+
+  // Delete user API key
+  app.delete("/api/api-keys/:keyId", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const keyId = parseInt(req.params.keyId);
+      await removeUserApiKey(req.userId!, keyId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error removing API key:", error);
+      res.status(500).json({ error: "Failed to remove API key" });
+    }
+  });
+
+  // Revalidate user API key
+  app.post("/api/api-keys/:keyId/validate", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const keyId = parseInt(req.params.keyId);
+      const keys = await getUserApiKeys(req.userId!);
+      const key = keys.find(k => k.id === keyId);
+      
+      if (!key) {
+        return res.status(404).json({ error: "API key not found" });
+      }
+      
+      const isValid = await validateUserApiKey(keyId);
+      res.json({ isValid });
+    } catch (error) {
+      console.error("Error validating API key:", error);
+      res.status(500).json({ error: "Failed to validate API key" });
+    }
+  });
+
+  // ==================== Admin API Key Pool ====================
+
+  // Get admin API key pool (masked)
+  app.get("/api/admin/api-keys", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const keys = await getAdminApiKeys();
+      const maskedKeys = keys.map(k => ({
+        id: k.id,
+        service: k.service,
+        keyLabel: k.keyLabel,
+        isActive: k.isActive,
+        priority: k.priority,
+        usageCount: k.usageCount,
+        lastUsedAt: k.lastUsedAt,
+        createdAt: k.createdAt,
+      }));
+      res.json(maskedKeys);
+    } catch (error) {
+      console.error("Error getting admin API keys:", error);
+      res.status(500).json({ error: "Failed to get admin API keys" });
+    }
+  });
+
+  // Add admin API key
+  app.post("/api/admin/api-keys", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { service, apiKey, keyLabel, priority } = req.body;
+      
+      if (!service || !apiKey || !keyLabel) {
+        return res.status(400).json({ error: "Service, API key, and label are required" });
+      }
+      
+      if (!["helius", "dexscreener"].includes(service)) {
+        return res.status(400).json({ error: "Invalid service. Must be 'helius' or 'dexscreener'" });
+      }
+      
+      const key = await addAdminApiKey(service, apiKey, keyLabel, priority || 0);
+      
+      res.json({
+        id: key.id,
+        service: key.service,
+        keyLabel: key.keyLabel,
+        isActive: key.isActive,
+        priority: key.priority,
+        createdAt: key.createdAt,
+      });
+    } catch (error) {
+      console.error("Error adding admin API key:", error);
+      res.status(500).json({ error: "Failed to add admin API key" });
+    }
+  });
+
+  // Delete admin API key
+  app.delete("/api/admin/api-keys/:keyId", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const keyId = parseInt(req.params.keyId);
+      await removeAdminApiKey(keyId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error removing admin API key:", error);
+      res.status(500).json({ error: "Failed to remove admin API key" });
+    }
+  });
+
+  // Toggle admin API key active status
+  app.patch("/api/admin/api-keys/:keyId", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const keyId = parseInt(req.params.keyId);
+      const { isActive } = req.body;
+      
+      if (typeof isActive !== "boolean") {
+        return res.status(400).json({ error: "isActive must be a boolean" });
+      }
+      
+      const key = await toggleAdminApiKey(keyId, isActive);
+      if (!key) {
+        return res.status(404).json({ error: "API key not found" });
+      }
+      
+      res.json({
+        id: key.id,
+        service: key.service,
+        keyLabel: key.keyLabel,
+        isActive: key.isActive,
+        priority: key.priority,
+      });
+    } catch (error) {
+      console.error("Error toggling admin API key:", error);
+      res.status(500).json({ error: "Failed to toggle admin API key" });
+    }
+  });
+
+  // Get/update wallet limits config (admin only)
+  app.get("/api/admin/wallet-limits", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const config = await getWalletLimitsConfig();
+      res.json(config);
+    } catch (error) {
+      console.error("Error getting wallet limits config:", error);
+      res.status(500).json({ error: "Failed to get wallet limits config" });
+    }
+  });
+
+  app.patch("/api/admin/wallet-limits", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { baseWalletLimit, walletsPerApiKey, maxWalletLimit } = req.body;
+      const config = await updateWalletLimitsConfig(baseWalletLimit, walletsPerApiKey, maxWalletLimit);
+      res.json(config);
+    } catch (error) {
+      console.error("Error updating wallet limits config:", error);
+      res.status(500).json({ error: "Failed to update wallet limits config" });
     }
   });
 

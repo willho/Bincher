@@ -607,3 +607,49 @@ export const apiBudgetConfig = pgTable("api_budget_config", {
 export const insertApiBudgetConfigSchema = createInsertSchema(apiBudgetConfig).omit({ id: true });
 export type ApiBudgetConfig = typeof apiBudgetConfig.$inferSelect;
 export type InsertApiBudgetConfig = z.infer<typeof insertApiBudgetConfigSchema>;
+
+// User-supplied API keys - users can add their own keys to increase wallet limits
+export const userApiKeys = pgTable("user_api_keys", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  service: text("service").notNull(), // helius, dexscreener
+  encryptedApiKey: text("encrypted_api_key").notNull(),
+  keyLabel: text("key_label"), // optional label like "My Helius Key"
+  isValid: boolean("is_valid").default(true), // set to false if key fails validation
+  lastValidatedAt: integer("last_validated_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertUserApiKeySchema = createInsertSchema(userApiKeys).omit({ id: true });
+export type UserApiKey = typeof userApiKeys.$inferSelect;
+export type InsertUserApiKey = z.infer<typeof insertUserApiKeySchema>;
+
+// Admin API key pool - multiple keys for backend load balancing and redundancy
+export const adminApiKeys = pgTable("admin_api_keys", {
+  id: serial("id").primaryKey(),
+  service: text("service").notNull(), // helius, dexscreener
+  encryptedApiKey: text("encrypted_api_key").notNull(),
+  keyLabel: text("key_label").notNull(), // descriptive label like "Helius Key 1"
+  isActive: boolean("is_active").default(true),
+  priority: integer("priority").default(0), // higher = preferred
+  usageCount: integer("usage_count").default(0),
+  lastUsedAt: integer("last_used_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertAdminApiKeySchema = createInsertSchema(adminApiKeys).omit({ id: true });
+export type AdminApiKey = typeof adminApiKeys.$inferSelect;
+export type InsertAdminApiKey = z.infer<typeof insertAdminApiKeySchema>;
+
+// Wallet limits configuration
+export const walletLimitsConfig = pgTable("wallet_limits_config", {
+  id: serial("id").primaryKey(),
+  baseWalletLimit: integer("base_wallet_limit").notNull().default(2), // free tier
+  walletsPerApiKey: integer("wallets_per_api_key").notNull().default(2), // bonus per key
+  maxWalletLimit: integer("max_wallet_limit").notNull().default(20), // hard cap
+  updatedAt: integer("updated_at"),
+});
+
+export const insertWalletLimitsConfigSchema = createInsertSchema(walletLimitsConfig).omit({ id: true });
+export type WalletLimitsConfig = typeof walletLimitsConfig.$inferSelect;
+export type InsertWalletLimitsConfig = z.infer<typeof insertWalletLimitsConfigSchema>;

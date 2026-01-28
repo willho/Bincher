@@ -17,6 +17,7 @@ import { CommunityWallets } from "@/components/community-wallets";
 import { AdminDashboard } from "@/components/admin-dashboard";
 import { AIInsights } from "@/components/ai-insights";
 import { Alerts } from "@/components/alerts";
+import { ApiKeysSettings } from "@/components/api-keys-settings";
 import { 
   Activity, 
   ArrowRightLeft, 
@@ -426,6 +427,9 @@ export default function Dashboard() {
 
         {/* Monitored Wallets */}
         <MonitoredWallets />
+
+        {/* API Keys & Wallet Limits */}
+        <ApiKeysSettings />
 
         {/* Community Wallets */}
         <CommunityWallets />
