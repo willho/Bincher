@@ -539,6 +539,17 @@ export async function registerRoutes(
               }
             });
           }
+          
+          // Send Telegram whale alert
+          const whaleTokenSymbol = swap.fromTokenSymbol === "SOL" ? swap.toTokenSymbol : swap.fromTokenSymbol;
+          sendTelegramWhaleAlert(userId, {
+            tokenSymbol: whaleTokenSymbol,
+            tokenMint: tokenForWhaleCheck,
+            whaleAddress: swapWalletAddress,
+            tier: tier as "top10" | "top50" | "top100",
+            action: action.toLowerCase() as "buy" | "sell",
+            amount: swap.toAmount,
+          }).catch(err => console.error("Telegram whale alert error:", err));
         }
         
         // Emerging whale detection: Check if this BUY would make someone a top-10 holder
@@ -569,6 +580,17 @@ export async function registerRoutes(
                 }
               });
             }
+            
+            // Send Telegram emerging whale alert
+            sendTelegramWhaleAlert(userId, {
+              tokenSymbol: swap.toTokenSymbol,
+              tokenMint: swap.toToken,
+              whaleAddress: swapWalletAddress,
+              tier: "top10",
+              action: "buy",
+              amount: swap.toAmount,
+              isEmergingWhale: true,
+            }).catch(err => console.error("Telegram emerging whale alert error:", err));
           }
         }
 
@@ -587,6 +609,19 @@ export async function registerRoutes(
             }
           }
         }
+
+        // Send Telegram swap alert
+        const sourceWalletForAlert = await storage.getMonitoredWalletByAddress(swapWalletAddress);
+        sendTelegramSwapAlert(userId, {
+          walletLabel: sourceWalletForAlert?.label || "Wallet",
+          walletAddress: swapWalletAddress,
+          tokenSymbol: swap.type === "BUY" ? swap.toTokenSymbol : swap.fromTokenSymbol,
+          tokenMint: swap.type === "BUY" ? swap.toToken : swap.fromToken,
+          type: swap.type === "BUY" ? "buy" : "sell",
+          amount: swap.type === "BUY" ? swap.toAmount : swap.fromAmount,
+          solAmount: swap.type === "BUY" ? swap.fromAmount : swap.toAmount,
+          priceUsd: toTokenMetadata?.priceUsd,
+        }).catch(err => console.error("Telegram alert error:", err));
 
         // Copy trading: Queue pending buy if this is a BUY (SOL -> Token)
         const tradeConf = await getTradeConfig(userId);
