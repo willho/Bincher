@@ -226,6 +226,11 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async getUserById(userId: number) {
+    const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    return user || null;
+  }
+
   async getMonitoredWallets(userId: number): Promise<MonitoredWallet[]> {
     return await db.select().from(monitoredWallets).where(eq(monitoredWallets.userId, userId));
   }

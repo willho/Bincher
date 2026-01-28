@@ -57,6 +57,17 @@ import {
   getAggregatesForAI,
   checkEmergingWhale
 } from "./price-aggregator";
+import {
+  handleWebhookUpdate,
+  createLinkToken,
+  verifyBotToken,
+  setWebhook,
+  getWebhookInfo,
+  unlinkTelegram,
+  sendSwapAlert as sendTelegramSwapAlert,
+  sendWhaleAlert as sendTelegramWhaleAlert,
+  log as telegramLog,
+} from "./telegram";
 
 let wss: WebSocketServer;
 
@@ -667,6 +678,113 @@ export async function registerRoutes(
       address: addresses.length > 0 ? addresses[0] : null,
       addresses: addresses
     });
+  });
+
+  // ==================== Telegram Integration Routes ====================
+
+  // Telegram webhook endpoint - receives updates from Telegram
+  app.post("/api/telegram/webhook", async (req, res) => {
+    try {
+      // Respond immediately to Telegram
+      res.status(200).json({ ok: true });
+      
+      // Process update asynchronously
+      handleWebhookUpdate(req.body).catch(err => {
+        console.error("Telegram webhook error:", err);
+      });
+    } catch (error) {
+      console.error("Telegram webhook error:", error);
+      res.status(200).json({ ok: true }); // Always 200 to prevent Telegram retries
+    }
+  });
+
+  // Generate Telegram link token for current user
+  app.post("/api/telegram/link", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = req.userId!;
+      const token = await createLinkToken(userId);
+      
+      // Get bot username for deep link
+      const botInfo = await verifyBotToken();
+      if (!botInfo.valid || !botInfo.username) {
+        return res.status(500).json({ error: "Telegram bot not configured" });
+      }
+      
+      const deepLink = `https://t.me/${botInfo.username}?start=${token}`;
+      res.json({ success: true, deepLink, token });
+    } catch (error) {
+      console.error("Error creating Telegram link:", error);
+      res.status(500).json({ error: "Failed to create link" });
+    }
+  });
+
+  // Unlink Telegram from current user
+  app.post("/api/telegram/unlink", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = req.userId!;
+      await unlinkTelegram(userId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error unlinking Telegram:", error);
+      res.status(500).json({ error: "Failed to unlink" });
+    }
+  });
+
+  // Get Telegram link status for current user
+  app.get("/api/telegram/status", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = req.userId!;
+      const user = await storage.getUserById(userId);
+      res.json({
+        linked: !!user?.telegramChatId,
+        linkedAt: user?.telegramLinkedAt,
+      });
+    } catch (error) {
+      console.error("Error getting Telegram status:", error);
+      res.status(500).json({ error: "Failed to get status" });
+    }
+  });
+
+  // Admin: Get Telegram bot info and webhook status
+  app.get("/api/admin/telegram/status", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) {
+        return res.status(403).json({ error: "Admin only" });
+      }
+
+      const botInfo = await verifyBotToken();
+      const webhookInfo = await getWebhookInfo();
+      
+      res.json({
+        bot: botInfo,
+        webhook: webhookInfo,
+      });
+    } catch (error) {
+      console.error("Error getting Telegram admin status:", error);
+      res.status(500).json({ error: "Failed to get status" });
+    }
+  });
+
+  // Admin: Set Telegram webhook URL
+  app.post("/api/admin/telegram/webhook", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) {
+        return res.status(403).json({ error: "Admin only" });
+      }
+
+      const { url } = req.body;
+      if (!url) {
+        return res.status(400).json({ error: "URL required" });
+      }
+
+      const result = await setWebhook(url);
+      res.json(result);
+    } catch (error) {
+      console.error("Error setting Telegram webhook:", error);
+      res.status(500).json({ error: "Failed to set webhook" });
+    }
   });
 
   // ==================== Monitored Wallets Routes ====================
