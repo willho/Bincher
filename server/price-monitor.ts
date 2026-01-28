@@ -13,6 +13,12 @@ import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
 import { checkPriceRiseTrigger } from "./trade-processor";
 import { calculateTokenHeat, TokenHeatData } from "./heat-score";
+import { 
+  recordTick, 
+  startAggregationJob, 
+  stopAggregationJob,
+  triggerHolderRefresh 
+} from "./price-aggregator";
 
 const PRICE_CHECK_INTERVAL_MS = 30000;
 const MIN_CHECK_INTERVAL_PER_TOKEN_MS = 30000;
@@ -119,6 +125,13 @@ export async function checkPricesAndReclaim(): Promise<void> {
     }
     
     const batchPrices = await getBatchTokenPrices([...tokenMintsToCheck]);
+    
+    // Record ticks for aggregation system
+    for (const [tokenMint, priceData] of Array.from(batchPrices.entries())) {
+      if (priceData.price !== null) {
+        recordTick(tokenMint, priceData);
+      }
+    }
     
     for (const holding of holdingsToProcess) {
       const priceData = batchPrices.get(holding.tokenMint);
@@ -961,6 +974,9 @@ export function startPriceMonitor(): void {
   console.log("Starting price monitor...");
   priceMonitorInterval = setInterval(checkPricesAndReclaim, PRICE_CHECK_INTERVAL_MS);
   checkPricesAndReclaim();
+  
+  // Start the aggregation job (runs every 60 seconds)
+  startAggregationJob(60000);
 }
 
 export function stopPriceMonitor(): void {
@@ -969,4 +985,7 @@ export function stopPriceMonitor(): void {
     priceMonitorInterval = null;
     console.log("Price monitor stopped");
   }
+  
+  // Stop the aggregation job
+  stopAggregationJob();
 }

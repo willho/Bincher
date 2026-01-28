@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { holdings, pendingBuys, tokenSnapshots } from "@shared/schema";
 import { eq, gte, and, or, desc, sql } from "drizzle-orm";
+import { getHoldersCached } from "./price-aggregator";
 
 export interface TokenHeatData {
   tokenMint: string;
@@ -12,6 +13,7 @@ export interface TokenHeatData {
     priceVolatility: number;
     userAttention: number;
     recency: number;
+    whaleActivity: number;
   };
   lastUpdated: number;
 }
@@ -34,6 +36,7 @@ export async function calculateTokenHeat(tokenMint: string): Promise<TokenHeatDa
   let priceVolatilityScore = 0;
   let userAttentionScore = 0;
   let recencyScore = 0;
+  let whaleActivityScore = 0;
 
   const recentHoldings = await db.select().from(holdings)
     .where(and(
@@ -90,11 +93,41 @@ export async function calculateTokenHeat(tokenMint: string): Promise<TokenHeatDa
     priceVolatilityScore = Math.min(100, Math.abs(snapshots[0].priceChange24h) * 2);
   }
 
+  // Whale activity score based on recent holder cache activity
+  try {
+    const holderData = await getHoldersCached(tokenMint);
+    if (holderData && holderData.lastEventTriggerAt > 0) {
+      // If there was a whale event in the last hour, boost whale score
+      const hoursSinceWhaleEvent = (Date.now() - holderData.lastEventTriggerAt) / (1000 * 3600);
+      if (hoursSinceWhaleEvent < 1) {
+        // Very recent whale activity - high score
+        whaleActivityScore = Math.max(0, 100 - hoursSinceWhaleEvent * 50);
+      } else if (hoursSinceWhaleEvent < 24) {
+        // Recent whale activity within a day - moderate score
+        whaleActivityScore = Math.max(0, 50 - (hoursSinceWhaleEvent - 1) * 2);
+      }
+      
+      // Boost score if top 10 holder concentration is high (indicates whale interest)
+      if (holderData.holders.length >= 10) {
+        const top10Percent = holderData.holders.slice(0, 10).reduce((sum, h) => sum + h.percent, 0);
+        if (top10Percent > 50) {
+          whaleActivityScore = Math.min(100, whaleActivityScore + 25);
+        } else if (top10Percent > 30) {
+          whaleActivityScore = Math.min(100, whaleActivityScore + 10);
+        }
+      }
+    }
+  } catch (error) {
+    // Don't fail heat calculation if holder cache fails
+    console.warn("Failed to get holder data for heat score:", error);
+  }
+
   const heatScore = Math.round(
-    (recentBuysScore * 0.30) +
-    (priceVolatilityScore * 0.25) +
-    (userAttentionScore * 0.25) +
-    (recencyScore * 0.20)
+    (recentBuysScore * 0.25) +
+    (priceVolatilityScore * 0.20) +
+    (userAttentionScore * 0.20) +
+    (recencyScore * 0.15) +
+    (whaleActivityScore * 0.20)
   );
 
   let heatTier: "hot" | "warm" | "cold";
@@ -116,6 +149,7 @@ export async function calculateTokenHeat(tokenMint: string): Promise<TokenHeatDa
       priceVolatility: priceVolatilityScore,
       userAttention: userAttentionScore,
       recency: recencyScore,
+      whaleActivity: whaleActivityScore,
     },
     lastUpdated: Date.now(),
   };

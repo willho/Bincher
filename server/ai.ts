@@ -1,10 +1,11 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall } from "./api-budget";
+import { getHoldersCached } from "./price-aggregator";
 
 const scoreResultSchema = z.object({
   score: z.number().int().min(0).max(100),
@@ -122,7 +123,12 @@ export async function getSnapshotsWithOutcomes(): Promise<TokenSnapshot[]> {
   return rows as TokenSnapshot[];
 }
 
-function buildScoringPrompt(snapshot: TokenSnapshot, historicalData?: TokenSnapshot[]): string {
+async function buildScoringPrompt(
+  snapshot: TokenSnapshot, 
+  historicalData?: TokenSnapshot[],
+  aggregateData?: { tier: string; open: number; high: number; low: number; close: number; volume: number; buys: number; sells: number; marketCap: number }[],
+  whaleData?: { top10Percent: number; holderCount: number; recentWhaleActivity: boolean }
+): Promise<string> {
   const data = {
     token: snapshot.tokenSymbol,
     name: snapshot.tokenName,
@@ -158,6 +164,24 @@ ${JSON.stringify(data, null, 2)}
 
 `;
 
+  // Add price pattern data from aggregates if available
+  if (aggregateData && aggregateData.length > 0) {
+    prompt += `\nPRICE PATTERNS (OHLC aggregates):
+${JSON.stringify(aggregateData, null, 2)}
+
+`;
+  }
+
+  // Add whale concentration data if available
+  if (whaleData) {
+    prompt += `\nWHALE ACTIVITY:
+- Top 10 holders control: ${whaleData.top10Percent.toFixed(1)}%
+- Total holder count: ${whaleData.holderCount}
+- Recent whale activity detected: ${whaleData.recentWhaleActivity ? 'Yes' : 'No'}
+
+`;
+  }
+
   if (historicalData && historicalData.length > 0) {
     const patterns = historicalData.slice(0, 20).map(h => ({
       symbol: h.tokenSymbol,
@@ -191,6 +215,8 @@ Key factors to consider:
 - Social presence (Twitter = more legitimate)
 - Dev wallet concentration
 - LP burned/locked status
+- Price patterns from OHLC data (if provided) - look for volatility, trends, support levels
+- Whale activity - recent whale buys are positive signals, high concentration is risky
 
 Return ONLY valid JSON, no markdown or explanation outside the JSON.`;
 
@@ -209,7 +235,51 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
   if (!snapshot) return null;
 
   const historicalData = await getSnapshotsWithOutcomes();
-  const prompt = buildScoringPrompt(snapshot, historicalData);
+  
+  // Fetch aggregate price data for pattern analysis
+  let aggregateData: { tier: string; open: number; high: number; low: number; close: number; volume: number; buys: number; sells: number; marketCap: number }[] | undefined;
+  try {
+    const recentAggregates = await db.select().from(priceAggregates)
+      .where(eq(priceAggregates.tokenMint, snapshot.tokenMint))
+      .orderBy(desc(priceAggregates.bucketStart))
+      .limit(10);
+    
+    if (recentAggregates.length > 0) {
+      aggregateData = recentAggregates.map(a => ({
+        tier: a.tier,
+        open: a.priceOpen || 0,
+        high: a.priceHigh || 0,
+        low: a.priceLow || 0,
+        close: a.priceClose || 0,
+        volume: a.volume || 0,
+        buys: a.buys || 0,
+        sells: a.sells || 0,
+        marketCap: a.marketCap || 0,
+      }));
+    }
+  } catch (err) {
+    console.warn("Failed to fetch aggregates for scoring:", err);
+  }
+  
+  // Fetch whale/holder data
+  let whaleData: { top10Percent: number; holderCount: number; recentWhaleActivity: boolean } | undefined;
+  try {
+    const holderCache = await getHoldersCached(snapshot.tokenMint);
+    if (holderCache && holderCache.holders.length >= 10) {
+      const top10Percent = holderCache.holders.slice(0, 10).reduce((sum, h) => sum + h.percent, 0);
+      const recentWhaleActivity = holderCache.lastEventTriggerAt > 0 && 
+        (Date.now() - holderCache.lastEventTriggerAt) < 24 * 60 * 60 * 1000;
+      whaleData = {
+        top10Percent,
+        holderCount: holderCache.holders.length,
+        recentWhaleActivity,
+      };
+    }
+  } catch (err) {
+    console.warn("Failed to fetch holder data for scoring:", err);
+  }
+  
+  const prompt = await buildScoringPrompt(snapshot, historicalData, aggregateData, whaleData);
 
   const budgetCheck = await shouldAllowApiCall("openai");
   if (!budgetCheck.allowed) {

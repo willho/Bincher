@@ -368,6 +368,11 @@ export interface BatchPriceResult {
   price: number | null;
   liquidity: number | null;
   priceChange24h: number | null;
+  volume24h: number | null;
+  buys24h: number | null;
+  sells24h: number | null;
+  marketCap: number | null;
+  fdv: number | null;
 }
 
 export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<string, BatchPriceResult>> {
@@ -377,10 +382,22 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
     return results;
   }
   
+  const emptyResult = (mint: string): BatchPriceResult => ({
+    tokenMint: mint,
+    price: null,
+    liquidity: null,
+    priceChange24h: null,
+    volume24h: null,
+    buys24h: null,
+    sells24h: null,
+    marketCap: null,
+    fdv: null,
+  });
+
   const budgetCheck = await shouldAllowApiCall("dexscreener");
   if (!budgetCheck.allowed) {
     console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
-    tokenMints.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+    tokenMints.forEach(mint => results.set(mint, emptyResult(mint)));
     return results;
   }
 
@@ -396,7 +413,7 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
     const batchBudgetCheck = await shouldAllowApiCall("dexscreener");
     if (!batchBudgetCheck.allowed) {
       console.warn(`DexScreener API blocked mid-batch: ${batchBudgetCheck.reason}`);
-      batch.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+      batch.forEach(mint => results.set(mint, emptyResult(mint)));
       break; // Stop processing remaining batches
     }
     
@@ -405,7 +422,7 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
       const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${addresses}`);
       
       if (!response.ok) {
-        batch.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+        batch.forEach(mint => results.set(mint, emptyResult(mint)));
         continue;
       }
       
@@ -413,7 +430,7 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
       await trackApiCall("dexscreener", "getBatchTokenPrices"); // Track after successful response
       
       batch.forEach(mint => {
-        results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null });
+        results.set(mint, emptyResult(mint));
       });
       
       if (data.pairs && data.pairs.length > 0) {
@@ -440,6 +457,11 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
             price: parseFloat(bestPair.priceUsd) || null,
             liquidity: bestPair.liquidity?.usd || null,
             priceChange24h: bestPair.priceChange?.h24 || null,
+            volume24h: bestPair.volume?.h24 || null,
+            buys24h: bestPair.txns?.h24?.buys || null,
+            sells24h: bestPair.txns?.h24?.sells || null,
+            marketCap: bestPair.marketCap || null,
+            fdv: bestPair.fdv || null,
           });
         }
       }
@@ -449,7 +471,7 @@ export async function getBatchTokenPrices(tokenMints: string[]): Promise<Map<str
       }
     } catch (error) {
       console.error("Failed to get batch token prices:", error);
-      batch.forEach(mint => results.set(mint, { tokenMint: mint, price: null, liquidity: null, priceChange24h: null }));
+      batch.forEach(mint => results.set(mint, emptyResult(mint)));
     }
   }
 

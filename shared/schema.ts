@@ -235,6 +235,40 @@ export const tokenSnapshots = pgTable("token_snapshots", {
   outcomeUpdatedAt: integer("outcome_updated_at"),
 });
 
+// Price aggregates - OHLC+ data with tiered retention for pattern analysis
+// Tiers: 15min, hourly, daily, weekly - older data gets rolled up
+export const priceAggregates = pgTable("price_aggregates", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  tier: text("tier").notNull(), // "15min" | "hourly" | "daily" | "weekly"
+  bucketStart: integer("bucket_start").notNull(), // Unix timestamp for bucket start
+  
+  // Price OHLC
+  priceOpen: real("price_open"),
+  priceHigh: real("price_high"),
+  priceLow: real("price_low"),
+  priceClose: real("price_close"),
+  
+  // Liquidity at start/end of bucket
+  lpOpen: real("lp_open"),
+  lpClose: real("lp_close"),
+  
+  // Volume and transactions (summed over bucket)
+  volume: real("volume"),
+  buys: integer("buys"),
+  sells: integer("sells"),
+  
+  // Market metrics (snapshot at bucket close)
+  marketCap: real("market_cap"),
+  fdv: real("fdv"),
+  
+  // Holder count (last known value in bucket)
+  holderCount: integer("holder_count"),
+  
+  // Metadata
+  createdAt: integer("created_at").notNull(),
+});
+
 // AI chat messages - for conversational insights
 export const aiChatMessages = pgTable("ai_chat_messages", {
   id: serial("id").primaryKey(),
@@ -265,8 +299,14 @@ export const insertHoldingSchema = createInsertSchema(holdings).omit({ id: true 
 export const insertPendingBuySchema = createInsertSchema(pendingBuys).omit({ id: true });
 export const insertTradeConfigSchema = createInsertSchema(tradeConfig).omit({ id: true });
 export const insertTokenSnapshotSchema = createInsertSchema(tokenSnapshots).omit({ id: true });
+export const insertPriceAggregateSchema = createInsertSchema(priceAggregates).omit({ id: true });
 export const insertAiChatMessageSchema = createInsertSchema(aiChatMessages).omit({ id: true });
 export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({ id: true });
+
+// Price aggregate types
+export type PriceAggregate = typeof priceAggregates.$inferSelect;
+export type InsertPriceAggregate = z.infer<typeof insertPriceAggregateSchema>;
+export type AggregateTier = "15min" | "hourly" | "daily" | "weekly";
 
 // User types
 export type User = typeof users.$inferSelect;

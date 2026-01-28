@@ -48,6 +48,13 @@ import { eq, and } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences } from "./ai";
+import { 
+  isWalletInTop100, 
+  getHolderTier, 
+  triggerHolderRefresh,
+  getHoldersCached,
+  getAggregatesForAI 
+} from "./price-aggregator";
 
 let wss: WebSocketServer;
 
@@ -478,6 +485,48 @@ export async function registerRoutes(
 
         // Broadcast to WebSocket clients
         broadcastSwap(savedSwap);
+
+        // Whale detection: Check if the swapper is in top 100 holders of the token
+        const tokenForWhaleCheck = swap.fromTokenSymbol === "SOL" ? swap.toToken : swap.fromToken;
+        let whaleCheck = isWalletInTop100(tokenForWhaleCheck, swapWalletAddress);
+        
+        // If cache is empty, try to populate it first then check again
+        if (!whaleCheck.found) {
+          const holderCache = await getHoldersCached(tokenForWhaleCheck, true);
+          if (holderCache && holderCache.holders.length > 0) {
+            whaleCheck = isWalletInTop100(tokenForWhaleCheck, swapWalletAddress);
+          }
+        }
+        
+        if (whaleCheck.found && whaleCheck.rank) {
+          const tier = getHolderTier(whaleCheck.rank);
+          const action = swap.fromTokenSymbol === "SOL" ? "BUY" : "SELL";
+          console.log(`Whale activity detected: Rank #${whaleCheck.rank} (${tier}) ${action} on ${swap.toTokenSymbol || swap.fromTokenSymbol}`);
+          
+          // Trigger holder refresh for this token since we just saw whale activity
+          triggerHolderRefresh(tokenForWhaleCheck);
+          
+          // Broadcast whale event to connected clients
+          if (wss) {
+            const whaleEvent = {
+              type: "WHALE_ACTIVITY",
+              tokenMint: tokenForWhaleCheck,
+              tokenSymbol: swap.fromTokenSymbol === "SOL" ? swap.toTokenSymbol : swap.fromTokenSymbol,
+              walletAddress: swapWalletAddress,
+              action,
+              rank: whaleCheck.rank,
+              tier,
+              holdPercent: whaleCheck.percent,
+              timestamp: Date.now(),
+            };
+            const msg = JSON.stringify(whaleEvent);
+            wss.clients.forEach(client => {
+              if (client.readyState === WebSocket.OPEN) {
+                client.send(msg);
+              }
+            });
+          }
+        }
 
         // Send email notification to user's recipients
         const settings = await storage.getNotificationSettings(userId);
