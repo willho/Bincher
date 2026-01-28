@@ -593,6 +593,19 @@ export const insertSystemLogSchema = createInsertSchema(systemLogs).omit({ id: t
 export type SystemLog = typeof systemLogs.$inferSelect;
 export type InsertSystemLog = z.infer<typeof insertSystemLogSchema>;
 
+// Link tokens for Telegram deep link account linking (10-minute expiry)
+export const linkTokens = pgTable("link_tokens", {
+  id: serial("id").primaryKey(),
+  token: text("token").notNull().unique(),
+  userId: integer("user_id").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertLinkTokenSchema = createInsertSchema(linkTokens).omit({ id: true });
+export type LinkToken = typeof linkTokens.$inferSelect;
+export type InsertLinkToken = z.infer<typeof insertLinkTokenSchema>;
+
 // Pattern triggers - Pincher learns patterns and correlates to outcomes
 export const patternTriggers = pgTable("pattern_triggers", {
   id: serial("id").primaryKey(),

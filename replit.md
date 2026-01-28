@@ -47,17 +47,55 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - **DexScreener**: Used to fetch token metadata such as price, market cap, liquidity, FDV, and volume for token analysis.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers the AI Token Analysis features, providing token scoring, insights, and natural language interaction.
 
+## Telegram Integration (Two-Way)
+
+The system implements a full two-way Telegram bot interface using webhooks (matching the Helius pattern):
+
+### Architecture
+- **Webhook-based**: POST `/api/telegram/webhook` receives updates - more efficient than polling
+- **Deep link account linking**: `/start <token>` links Telegram chat to user account
+- **Setup wizard**: UI-based configuration with prefill logic for idempotent re-runs
+- **Role-based commands**: Admin and user commands share the same bot, differentiated by isAdmin flag
+
+### User Commands
+- `/help` - Show available commands
+- `/status` - Show account status, linked wallet count, API key status
+- `/wallets` - List monitored wallets
+- `/holdings` - Show current token holdings
+- `/unlink` - Disconnect Telegram from account
+
+### Admin Commands (for users with isAdmin=true)
+- `/stats` - System statistics (users, wallets, API usage)
+- `/users` - List all users
+- `/requests` - Show pending Pincher data requests
+- `/approve <id>` - Approve a data request
+- `/reject <id>` - Reject a data request
+
+### Alert Types
+- **Swap alerts**: Triggered when monitored wallet makes a swap
+- **Whale alerts**: Top-100 holder activity with tier (top10/top50/top100)
+- **Emerging whale alerts**: New potential top-10 holders
+
+### Chat Routing
+- Non-command messages routed to Miss Pincher AI for natural conversation
+- Maintains relationship tracking across sessions
+- Full personality system with crab mystery and score-weighted responses
+
+### Technical Notes
+- Bot token stored as TELEGRAM_BOT_TOKEN secret
+- Webhook URL auto-registered via setup wizard
+- Deep link tokens stored in link_tokens table (10-minute expiry)
+- All Telegram events logged to system_logs table
+
 ## Queued Implementation Tasks
 
-1. Telegram bot for one-way alerts (two-way control = future TODO)
-2. AI budget pacing with gradual dynamic throttling ($1/day per user)
-3. Pattern triggers table - Pincher learns patterns but stays conservative early
-4. Batch analysis system (bundled token checks every 15-30 min)
-5. Two-tier alert system: standard (cached templates) vs AI-evaluated
-6. Simplify frontend to 4 pages: Dashboard, Watchlist, Trading, Token detail
-7. Resend API key integration (user-supplied keys)
+1. AI budget pacing with gradual dynamic throttling ($1/day per user)
+2. Pattern triggers table - Pincher learns patterns but stays conservative early
+3. Batch analysis system (bundled token checks every 15-30 min)
+4. Two-tier alert system: standard (cached templates) vs AI-evaluated
+5. Simplify frontend to 4 pages: Dashboard, Watchlist, Trading, Token detail
+6. Resend API key integration (user-supplied keys)
 
 ## TODO
 
 - [ ] Add full USDC swap monitoring: USDC→Token and Token→USDC swaps should be detected and processed the same as SOL swaps (webhook parsing, swap recording, whale detection, emerging whale detection, notifications)
-- [ ] Telegram two-way control (after one-way alerts working)

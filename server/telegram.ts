@@ -1,8 +1,10 @@
 import { db } from "./db";
-import { users, systemLogs, pincherDataRequests, monitoredWallets, holdings, swaps } from "@shared/schema";
-import { eq, desc, and, sql } from "drizzle-orm";
+import { users, systemLogs, linkTokens, pincherDataRequests, monitoredWallets, holdings, swaps } from "@shared/schema";
+import { eq, desc, and, sql, lt } from "drizzle-orm";
 import { chatWithAI } from "./ai";
 import crypto from "crypto";
+
+const LINK_TOKEN_EXPIRY_SECONDS = 600; // 10 minutes
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
@@ -120,7 +122,23 @@ export function generateLinkToken(): string {
 
 export async function createLinkToken(userId: number): Promise<string> {
   const token = generateLinkToken();
-  await db.update(users).set({ telegramLinkToken: token }).where(eq(users.id, userId));
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + LINK_TOKEN_EXPIRY_SECONDS;
+  
+  // Clean up any expired tokens first
+  await db.delete(linkTokens).where(lt(linkTokens.expiresAt, now));
+  
+  // Delete any existing tokens for this user
+  await db.delete(linkTokens).where(eq(linkTokens.userId, userId));
+  
+  // Insert new token
+  await db.insert(linkTokens).values({
+    token,
+    userId,
+    expiresAt,
+    createdAt: now,
+  });
+  
   await log("telegram", "create_link_token", "info", { userId });
   return token;
 }
@@ -129,13 +147,28 @@ export async function verifyAndLinkTelegram(
   token: string,
   chatId: string
 ): Promise<{ success: boolean; username?: string; error?: string }> {
-  const [user] = await db.select().from(users).where(eq(users.telegramLinkToken, token)).limit(1);
+  const now = Math.floor(Date.now() / 1000);
+  
+  // Find valid (non-expired) token
+  const [linkToken] = await db
+    .select()
+    .from(linkTokens)
+    .where(and(eq(linkTokens.token, token), lt(now, linkTokens.expiresAt)))
+    .limit(1);
 
-  if (!user) {
-    await log("telegram", "link_verify", "warning", { context: { token, chatId, reason: "invalid_token" } });
+  if (!linkToken) {
+    await log("telegram", "link_verify", "warning", { context: { token, chatId, reason: "invalid_or_expired_token" } });
     return { success: false, error: "Invalid or expired link token" };
   }
 
+  // Get the user
+  const [user] = await db.select().from(users).where(eq(users.id, linkToken.userId)).limit(1);
+  if (!user) {
+    await log("telegram", "link_verify", "error", { context: { token, chatId, reason: "user_not_found" } });
+    return { success: false, error: "User not found" };
+  }
+
+  // Check if chat already linked to different user
   const existingLinked = await db.select().from(users).where(eq(users.telegramChatId, chatId)).limit(1);
   if (existingLinked.length > 0 && existingLinked[0].id !== user.id) {
     await log("telegram", "link_verify", "warning", {
@@ -145,14 +178,17 @@ export async function verifyAndLinkTelegram(
     return { success: false, error: "This Telegram account is already linked to another user" };
   }
 
+  // Link the account and delete the token (one-time use)
   await db
     .update(users)
     .set({
       telegramChatId: chatId,
-      telegramLinkToken: null,
-      telegramLinkedAt: Math.floor(Date.now() / 1000),
+      telegramLinkedAt: now,
     })
     .where(eq(users.id, user.id));
+  
+  // Delete the used token (one-time use)
+  await db.delete(linkTokens).where(eq(linkTokens.id, linkToken.id));
 
   await log("telegram", "link_success", "success", { userId: user.id, context: { chatId } });
   return { success: true, username: user.username };
@@ -163,10 +199,13 @@ export async function unlinkTelegram(userId: number): Promise<boolean> {
     .update(users)
     .set({
       telegramChatId: null,
-      telegramLinkToken: null,
       telegramLinkedAt: null,
     })
     .where(eq(users.id, userId));
+  
+  // Also clean up any pending link tokens
+  await db.delete(linkTokens).where(eq(linkTokens.userId, userId));
+  
   await log("telegram", "unlink", "success", { userId });
   return true;
 }
