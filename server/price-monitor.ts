@@ -86,6 +86,11 @@ export async function checkPricesAndReclaim(): Promise<void> {
         )
       );
     
+    // Skip polling entirely if no tokens are held by users
+    if (holdingsList.length === 0 && pendingBuysList.length === 0) {
+      return;
+    }
+    
     const now = Date.now();
     const tokenMintsToCheck = new Set<string>();
     
