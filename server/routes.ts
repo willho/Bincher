@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrencySymbol } from "./helius";
 import { sendSwapNotification, sendPasswordResetEmail } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import {
@@ -500,7 +500,9 @@ export async function registerRoutes(
         broadcastSwap(savedSwap);
 
         // Whale detection: Check if the swapper is in top 100 holders of the token
-        const tokenForWhaleCheck = swap.fromTokenSymbol === "SOL" ? swap.toToken : swap.fromToken;
+        // For BUYs (SOL/USDC -> Token), check the toToken; for SELLs (Token -> SOL/USDC), check the fromToken
+        const isBuy = isBaseCurrencySymbol(swap.fromTokenSymbol);
+        const tokenForWhaleCheck = isBuy ? swap.toToken : swap.fromToken;
         let whaleCheck = isWalletInTop100(tokenForWhaleCheck, swapWalletAddress);
         
         // If cache is empty, try to populate it first then check again
@@ -513,7 +515,7 @@ export async function registerRoutes(
         
         if (whaleCheck.found && whaleCheck.rank) {
           const tier = getHolderTier(whaleCheck.rank);
-          const action = swap.fromTokenSymbol === "SOL" ? "BUY" : "SELL";
+          const action = isBuy ? "BUY" : "SELL";
           console.log(`Whale activity detected: Rank #${whaleCheck.rank} (${tier}) ${action} on ${swap.toTokenSymbol || swap.fromTokenSymbol}`);
           
           // Trigger holder refresh for this token since we just saw whale activity
@@ -524,7 +526,7 @@ export async function registerRoutes(
             const whaleEvent = {
               type: "WHALE_ACTIVITY",
               tokenMint: tokenForWhaleCheck,
-              tokenSymbol: swap.fromTokenSymbol === "SOL" ? swap.toTokenSymbol : swap.fromTokenSymbol,
+              tokenSymbol: isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol,
               walletAddress: swapWalletAddress,
               action,
               rank: whaleCheck.rank,
@@ -541,7 +543,7 @@ export async function registerRoutes(
           }
           
           // Send Telegram whale alert
-          const whaleTokenSymbol = swap.fromTokenSymbol === "SOL" ? swap.toTokenSymbol : swap.fromTokenSymbol;
+          const whaleTokenSymbol = isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol;
           sendTelegramWhaleAlert(userId, {
             tokenSymbol: whaleTokenSymbol,
             tokenMint: tokenForWhaleCheck,
@@ -553,7 +555,7 @@ export async function registerRoutes(
         }
         
         // Emerging whale detection: Check if this BUY would make someone a top-10 holder
-        if (swap.fromTokenSymbol === "SOL" && swap.toAmount) {
+        if (isBuy && swap.toAmount) {
           const emergingCheck = checkEmergingWhale(swap.toToken, swap.toAmount, swapWalletAddress);
           if (emergingCheck.isEmergingWhale && emergingCheck.wouldBeRank) {
             console.log(`Emerging whale detected: Potential rank #${emergingCheck.wouldBeRank} holder for ${swap.toTokenSymbol} (bought ${swap.toAmount} tokens)`);
@@ -623,9 +625,9 @@ export async function registerRoutes(
           priceUsd: toTokenMetadata?.priceUsd,
         }).catch(err => console.error("Telegram alert error:", err));
 
-        // Copy trading: Queue pending buy if this is a BUY (SOL -> Token)
+        // Copy trading: Queue pending buy if this is a BUY (SOL/USDC -> Token)
         const tradeConf = await getTradeConfig(userId);
-        if (tradeConf.enabled && swap.fromTokenSymbol === "SOL") {
+        if (tradeConf.enabled && isBuy) {
           const alreadyBought = await hasTokenBeenBought(userId, swap.toToken);
           if (!alreadyBought) {
             // Get the monitored wallet details for source tracking

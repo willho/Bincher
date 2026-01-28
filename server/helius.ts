@@ -4,6 +4,21 @@ import { trackApiCall, shouldAllowApiCall } from "./api-budget";
 // Import for DexScreener budget tracking (fetchTokenMetadata uses DexScreener)
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
+
+// Token mint addresses for base currencies
+export const SOL_MINT = "So11111111111111111111111111111111111111112";
+export const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export const BASE_CURRENCY_MINTS = [SOL_MINT, USDC_MINT];
+export const BASE_CURRENCY_SYMBOLS = ["SOL", "USDC"];
+
+// Helper to check if a token is a base currency (SOL or USDC)
+export function isBaseCurrency(tokenMint: string): boolean {
+  return BASE_CURRENCY_MINTS.includes(tokenMint);
+}
+
+export function isBaseCurrencySymbol(symbol: string): boolean {
+  return BASE_CURRENCY_SYMBOLS.includes(symbol);
+}
 const WALLET_ADDRESS = "C92nBXrrANmWpgJKhBdbnqtUuCcoEZ7kQJoyScZ5sQak";
 
 export function getWebhookUrl(): string {
