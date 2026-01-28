@@ -447,6 +447,57 @@ export async function fetchWalletSwapHistory(walletAddress: string, limit: numbe
             pricePerToken: solAmount / tokenAmount,
           });
         }
+      } else if (tokenInputs.length > 0 && tokenOutputs.length > 0) {
+        // Token -> Token swap - check if either side is USDC
+        const tokenIn = tokenInputs[0];
+        const tokenOut = tokenOutputs[0];
+        const inputMint = tokenIn.mint;
+        const outputMint = tokenOut.mint;
+        
+        // USDC -> Token (BUY)
+        if (isBaseCurrency(inputMint) && !isBaseCurrency(outputMint)) {
+          const usdcAmount = tokenIn.rawTokenAmount?.tokenAmount
+            ? parseFloat(tokenIn.rawTokenAmount.tokenAmount) / Math.pow(10, tokenIn.rawTokenAmount.decimals || 6)
+            : 0;
+          const tokenAmount = tokenOut.rawTokenAmount?.tokenAmount
+            ? parseFloat(tokenOut.rawTokenAmount.tokenAmount) / Math.pow(10, tokenOut.rawTokenAmount.decimals || 9)
+            : 0;
+          
+          if (tokenAmount > 0 && usdcAmount > 0) {
+            swaps.push({
+              signature,
+              timestamp,
+              type: "BUY",
+              tokenMint: outputMint,
+              tokenSymbol: getTokenSymbol(outputMint),
+              tokenAmount,
+              solAmount: usdcAmount, // Store USDC amount in solAmount field for consistency
+              pricePerToken: usdcAmount / tokenAmount,
+            });
+          }
+        }
+        // Token -> USDC (SELL)
+        else if (!isBaseCurrency(inputMint) && isBaseCurrency(outputMint)) {
+          const tokenAmount = tokenIn.rawTokenAmount?.tokenAmount
+            ? parseFloat(tokenIn.rawTokenAmount.tokenAmount) / Math.pow(10, tokenIn.rawTokenAmount.decimals || 9)
+            : 0;
+          const usdcAmount = tokenOut.rawTokenAmount?.tokenAmount
+            ? parseFloat(tokenOut.rawTokenAmount.tokenAmount) / Math.pow(10, tokenOut.rawTokenAmount.decimals || 6)
+            : 0;
+          
+          if (tokenAmount > 0 && usdcAmount > 0) {
+            swaps.push({
+              signature,
+              timestamp,
+              type: "SELL",
+              tokenMint: inputMint,
+              tokenSymbol: getTokenSymbol(inputMint),
+              tokenAmount,
+              solAmount: usdcAmount, // Store USDC amount in solAmount field for consistency
+              pricePerToken: usdcAmount / tokenAmount,
+            });
+          }
+        }
       }
     }
 

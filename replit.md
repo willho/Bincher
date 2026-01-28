@@ -98,4 +98,4 @@ The system implements a full two-way Telegram bot interface using webhooks (matc
 
 ## TODO
 
-- [ ] Add full USDC swap monitoring: USDC→Token and Token→USDC swaps should be detected and processed the same as SOL swaps (webhook parsing, swap recording, whale detection, emerging whale detection, notifications)
+- [x] Add full USDC swap monitoring: USDC→Token and Token→USDC swaps are now detected and processed the same as SOL swaps (completed in Phase 3)

@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrencySymbol } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrency, isBaseCurrencySymbol } from "./helius";
 import { sendSwapNotification, sendPasswordResetEmail } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import {
@@ -501,7 +501,8 @@ export async function registerRoutes(
 
         // Whale detection: Check if the swapper is in top 100 holders of the token
         // For BUYs (SOL/USDC -> Token), check the toToken; for SELLs (Token -> SOL/USDC), check the fromToken
-        const isBuy = isBaseCurrencySymbol(swap.fromTokenSymbol);
+        // Use mint-based detection for robustness (doesn't depend on symbol mapping)
+        const isBuy = isBaseCurrency(swap.fromToken);
         const tokenForWhaleCheck = isBuy ? swap.toToken : swap.fromToken;
         let whaleCheck = isWalletInTop100(tokenForWhaleCheck, swapWalletAddress);
         
