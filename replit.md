@@ -1,7 +1,7 @@
-# Solana Wallet Swap Monitor
+# Penny Pincher
 
 ## Overview
-This project is a real-time, multi-user application designed to monitor Solana wallet swap transactions and provide automated copy trading capabilities. It aims to empower users with tools for tracking specific wallet activities, receiving timely notifications, and executing automated trades based on predefined strategies. The core vision is to offer a sophisticated, yet user-friendly platform for Solana ecosystem participants to gain insights and automate their trading actions, with a strong focus on security, user data isolation, and efficient blockchain interaction.
+Penny Pincher is a real-time, multi-user application designed to monitor Solana wallet swap transactions and provide automated copy trading capabilities. It aims to empower users with tools for tracking specific wallet activities, receiving timely notifications, and executing automated trades based on predefined strategies. The core vision is to offer a sophisticated, yet user-friendly platform for Solana ecosystem participants to gain insights and automate their trading actions, with a strong focus on security, user data isolation, and efficient blockchain interaction.
 
 ## User Preferences
 - I prefer simple language.
