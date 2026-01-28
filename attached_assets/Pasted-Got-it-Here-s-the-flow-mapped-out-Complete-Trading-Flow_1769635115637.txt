@@ -1,0 +1,45 @@
+Got it. Here's the flow mapped out:
+
+Complete Trading Flow
+1. User funds Trading Wallet (SOL/USDC)
+           ↓
+2. Enables Copy Trading on Watchlist wallet
+           ↓
+3. Monitored wallet buys token
+           ↓
+4. System creates NEW Token Wallet, executes buy
+           ↓
+5. Token appears in Trading → Holdings
+Token Dashboard (per token)
+┌─────────────────────────────────────────────────┐
+│ BONK                                            │
+│ Wallet: 7xK2...9fQm                             │
+│ Holdings: 50,000 ($125)  |  Entry: $0.0020      │
+├─────────────────────────────────────────────────┤
+│ Auto Trading: [ON ▼]                            │
+│ Strategy: [Balanced ▼]  ← dropdown, default     │
+│                                                 │
+│ Take profit: 3x  |  Stop loss: -50%             │
+│ Exit style: Gradual                             │
+│                                                 │
+│ [Settings ⚙️]  [Send]  [Swap]                   │
+└─────────────────────────────────────────────────┘
+Settings Panel (split view)
+┌────────────────────────┬────────────────────────┐
+│ Archetypes             │ 🦀 Miss Pincher        │
+│                        │                        │
+│ ○ Safe Exit            │ "What are we working   │
+│ ● Balanced             │  with here?"           │
+│ ○ Let It Ride          │                        │
+│ ○ Quick Flip           │ [Chat input...]        │
+│ ○ DCA Out              │                        │
+│ ○ Degen Ape            │ "Set me to degen"      │
+│                        │ → Pincher switches it  │
+│ [Layer 1.5 tweaks]     │                        │
+│ [Advanced rules]       │                        │
+└────────────────────────┴────────────────────────┘
+Pincher can guide OR just do it when asked: "Set me up for moonshots" → she picks archetype and tweaks.
+
+Does this match your vision?
+
+Yes. She is also on the watchlist page to help with picking when to copytrade whom and how. Help me flesh this out
