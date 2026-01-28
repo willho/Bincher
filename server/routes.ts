@@ -193,7 +193,7 @@ export async function registerRoutes(
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const { username, password, heliusApiKey, cashoutWallet } = req.body;
       
       if (!username || !password) {
         return res.status(400).json({ error: "Username and password required" });
@@ -203,9 +203,28 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Password must be at least 8 characters" });
       }
 
-      const result = await createUser(username, password);
+      if (!heliusApiKey) {
+        return res.status(400).json({ error: "Helius API key is required" });
+      }
+
+      // Validate Solana wallet address if provided
+      if (cashoutWallet && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(cashoutWallet)) {
+        return res.status(400).json({ error: "Invalid Solana wallet address" });
+      }
+
+      const result = await createUser(username, password, cashoutWallet);
       if (!result.success) {
         return res.status(400).json({ error: result.error });
+      }
+
+      // Store the Helius API key for the new user
+      if (result.userId) {
+        try {
+          await addUserApiKey(result.userId, "helius", heliusApiKey, "Helius API Key");
+        } catch (keyError) {
+          console.error("Failed to store API key:", keyError);
+          return res.status(500).json({ error: "Account created but failed to store API key. Please add it in settings." });
+        }
       }
 
       res.json({ success: true });

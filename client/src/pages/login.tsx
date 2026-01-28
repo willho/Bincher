@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Lock, User, Mail, ArrowLeft } from "lucide-react";
+import { Loader2, Lock, User, Mail, ArrowLeft, Key, Wallet } from "lucide-react";
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -19,6 +19,8 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [heliusApiKey, setHeliusApiKey] = useState("");
+  const [cashoutWallet, setCashoutWallet] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
@@ -52,7 +54,12 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   });
 
   const register = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/auth/register", { username, password }),
+    mutationFn: () => apiRequest("POST", "/api/auth/register", { 
+      username, 
+      password, 
+      heliusApiKey,
+      cashoutWallet: cashoutWallet || undefined 
+    }),
     onSuccess: () => {
       login.mutate();
     },
@@ -71,6 +78,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       }
       if (password.length < 8) {
         toast({ description: "Password must be at least 8 characters", variant: "destructive" });
+        return;
+      }
+      if (!heliusApiKey.trim()) {
+        toast({ description: "Helius API key is required", variant: "destructive" });
         return;
       }
       register.mutate();
@@ -157,6 +168,57 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                     data-testid="input-confirm-password"
                   />
                 </div>
+              </div>
+            )}
+
+            {isSetup && (
+              <div className="space-y-2">
+                <Label htmlFor="helius-api-key">Helius API Key</Label>
+                <div className="relative">
+                  <Key className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="helius-api-key"
+                    type="password"
+                    placeholder="Enter your Helius API key"
+                    value={heliusApiKey}
+                    onChange={(e) => setHeliusApiKey(e.target.value)}
+                    className="pl-10"
+                    required
+                    data-testid="input-helius-api-key"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Get your free API key at{" "}
+                  <a 
+                    href="https://helius.dev" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    helius.dev
+                  </a>
+                </p>
+              </div>
+            )}
+
+            {isSetup && (
+              <div className="space-y-2">
+                <Label htmlFor="cashout-wallet">Default Cashout Wallet (Optional)</Label>
+                <div className="relative">
+                  <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="cashout-wallet"
+                    type="text"
+                    placeholder="Your Solana wallet address"
+                    value={cashoutWallet}
+                    onChange={(e) => setCashoutWallet(e.target.value)}
+                    className="pl-10"
+                    data-testid="input-cashout-wallet"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Profits will be sent here when you cash out
+                </p>
               </div>
             )}
 

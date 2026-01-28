@@ -31,7 +31,11 @@ function generateSessionToken(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
-export async function createUser(username: string, password: string): Promise<{ success: boolean; error?: string; userId?: number }> {
+export async function createUser(
+  username: string, 
+  password: string,
+  defaultCashoutWallet?: string
+): Promise<{ success: boolean; error?: string; userId?: number }> {
   try {
     // Check username uniqueness case-insensitively
     const existing = await db.select().from(users)
@@ -48,6 +52,7 @@ export async function createUser(username: string, password: string): Promise<{ 
       username,
       passwordHash,
       createdAt: now,
+      defaultCashoutWallet: defaultCashoutWallet || null,
     }).returning({ id: users.id });
 
     return { success: true, userId: result[0].id };

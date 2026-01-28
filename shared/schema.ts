@@ -26,6 +26,8 @@ export const users = pgTable("users", {
   isAdmin: boolean("is_admin").default(false),
   createdAt: integer("created_at").notNull(),
   lastLoginAt: integer("last_login_at"),
+  // Default cashout wallet for withdrawals
+  defaultCashoutWallet: text("default_cashout_wallet"),
   // Telegram integration
   telegramChatId: text("telegram_chat_id"),
   telegramLinkToken: text("telegram_link_token"),
