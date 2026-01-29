@@ -191,9 +191,11 @@ export async function registerRoutes(
     }
   });
 
+  const ADMIN_CODEWORD = "Admin1112";
+
   app.post("/api/auth/register", async (req, res) => {
     try {
-      const { username, password, heliusApiKey, cashoutWallet } = req.body;
+      const { username, password, heliusApiKey, cashoutWallet, adminCodeword } = req.body;
       
       if (!username || !password) {
         return res.status(400).json({ error: "Username and password required" });
@@ -212,7 +214,23 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid Solana wallet address" });
       }
 
-      const result = await createUser(username, password, cashoutWallet);
+      // Check if this is first user (install wizard)
+      const userCount = await db.select({ count: sql<number>`count(*)::int` }).from(users);
+      const isFirstUser = userCount[0].count === 0;
+      let grantAdmin = false;
+
+      if (isFirstUser) {
+        // First user MUST provide correct admin codeword
+        if (!adminCodeword) {
+          return res.status(400).json({ error: "Admin codeword required for first user setup", requiresCodeword: true });
+        }
+        if (adminCodeword !== ADMIN_CODEWORD) {
+          return res.status(400).json({ error: "Invalid admin codeword" });
+        }
+        grantAdmin = true;
+      }
+
+      const result = await createUser(username, password, cashoutWallet, grantAdmin);
       if (!result.success) {
         return res.status(400).json({ error: result.error });
       }
@@ -227,7 +245,7 @@ export async function registerRoutes(
         }
       }
 
-      res.json({ success: true });
+      res.json({ success: true, isAdmin: grantAdmin, showWizard: grantAdmin });
     } catch (error) {
       console.error("Registration error:", error);
       res.status(500).json({ error: "Registration failed" });

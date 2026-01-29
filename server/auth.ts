@@ -34,7 +34,8 @@ function generateSessionToken(): string {
 export async function createUser(
   username: string, 
   password: string,
-  defaultCashoutWallet?: string
+  defaultCashoutWallet?: string,
+  isAdmin?: boolean
 ): Promise<{ success: boolean; error?: string; userId?: number }> {
   try {
     // Check username uniqueness case-insensitively
@@ -53,6 +54,7 @@ export async function createUser(
       passwordHash,
       createdAt: now,
       defaultCashoutWallet: defaultCashoutWallet || null,
+      isAdmin: isAdmin ?? false,
     }).returning({ id: users.id });
 
     return { success: true, userId: result[0].id };

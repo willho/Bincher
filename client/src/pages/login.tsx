@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Lock, User, Mail, ArrowLeft, Key, Wallet } from "lucide-react";
+import { Loader2, Lock, User, Mail, ArrowLeft, Key, Wallet, Shield, CheckCircle, Settings, Sparkles } from "lucide-react";
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -21,11 +21,14 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [heliusApiKey, setHeliusApiKey] = useState("");
   const [cashoutWallet, setCashoutWallet] = useState("");
+  const [adminCodeword, setAdminCodeword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
   const [resetSent, setResetSent] = useState(false);
   const [isSignUpMode, setIsSignUpMode] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardStep, setWizardStep] = useState(0);
 
   const { data: needsSetup, isLoading: checkingSetup } = useQuery<{ needsSetup: boolean }>({
     queryKey: ["/api/auth/check-setup"],
@@ -58,9 +61,14 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       username, 
       password, 
       heliusApiKey,
-      cashoutWallet: cashoutWallet || undefined 
+      cashoutWallet: cashoutWallet || undefined,
+      adminCodeword: needsSetup?.needsSetup ? adminCodeword : undefined
     }),
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      if (data.showWizard) {
+        setShowWizard(true);
+        setWizardStep(0);
+      }
       login.mutate();
     },
     onError: (error: any) => {
@@ -108,11 +116,15 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           <div className="mx-auto w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mb-4">
             <Lock className="h-6 w-6 text-primary" />
           </div>
-          <CardTitle>{isSetup ? "Create Account" : "Welcome Back"}</CardTitle>
+          <CardTitle>
+            {needsSetup?.needsSetup ? "First-Time Setup" : isSetup ? "Create Account" : "Welcome Back"}
+          </CardTitle>
           <CardDescription>
-            {isSetup 
-              ? "Set up your credentials to secure your wallet monitor"
-              : "Sign in to access your wallet monitor"
+            {needsSetup?.needsSetup
+              ? "Set up the admin account to get started with Penny Pincher"
+              : isSetup 
+                ? "Set up your credentials to secure your wallet monitor"
+                : "Sign in to access your wallet monitor"
             }
           </CardDescription>
         </CardHeader>
@@ -218,6 +230,27 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Profits will be sent here when you cash out
+                </p>
+              </div>
+            )}
+
+            {needsSetup?.needsSetup && (
+              <div className="space-y-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
+                <Label htmlFor="admin-codeword" className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary" />
+                  Admin Codeword (First User Setup)
+                </Label>
+                <Input
+                  id="admin-codeword"
+                  type="password"
+                  placeholder="Enter the admin codeword"
+                  value={adminCodeword}
+                  onChange={(e) => setAdminCodeword(e.target.value)}
+                  required
+                  data-testid="input-admin-codeword"
+                />
+                <p className="text-xs text-muted-foreground">
+                  The first user becomes the admin. Enter the codeword provided by the app owner.
                 </p>
               </div>
             )}
@@ -363,6 +396,62 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               </Button>
             </form>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showWizard} onOpenChange={setShowWizard}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              Welcome, Admin!
+            </DialogTitle>
+            <DialogDescription>
+              You've been set up as the administrator. Here's what you can do next.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4">
+            {wizardStep === 0 && (
+              <div className="space-y-4">
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
+                  <CheckCircle className="h-5 w-5 text-green-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium">Account Created</p>
+                    <p className="text-sm text-muted-foreground">You're now the admin with full access</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
+                  <CheckCircle className="h-5 w-5 text-green-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium">Helius API Key Configured</p>
+                    <p className="text-sm text-muted-foreground">Ready for wallet monitoring</p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3 p-3 rounded-lg border border-primary/30 bg-primary/5">
+                  <Settings className="h-5 w-5 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium">Next Steps</p>
+                    <ul className="text-sm text-muted-foreground mt-1 space-y-1 list-disc list-inside">
+                      <li>Go to <strong>Settings</strong> to set up Telegram notifications</li>
+                      <li>Use <strong>Production Setup</strong> in Admin tab to sync webhooks</li>
+                      <li>Add wallets to monitor in the <strong>Watchlist</strong></li>
+                    </ul>
+                  </div>
+                </div>
+
+                <Button 
+                  className="w-full" 
+                  onClick={() => setShowWizard(false)}
+                  data-testid="button-wizard-done"
+                >
+                  Got it, let's go!
+                </Button>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
