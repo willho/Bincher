@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Lock, User, Mail, ArrowLeft, Key, Wallet, Shield, CheckCircle, Settings, Sparkles } from "lucide-react";
+import { Loader2, Lock, User, Mail, ArrowLeft, Key, Wallet, Shield, CheckCircle, Settings, Sparkles, AlertCircle, XCircle, Database, Bot, Send, Cpu } from "lucide-react";
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -29,6 +29,15 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [isSignUpMode, setIsSignUpMode] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
   const [wizardStep, setWizardStep] = useState(0);
+  const [healthChecks, setHealthChecks] = useState<{
+    helius: { ok: boolean; message: string };
+    database: { ok: boolean; message: string };
+    telegram: { ok: boolean; message: string };
+    email: { ok: boolean; message: string };
+    ai: { ok: boolean; message: string };
+  } | null>(null);
+  const [healthCheckLoading, setHealthCheckLoading] = useState(false);
+  const [healthCheckError, setHealthCheckError] = useState(false);
 
   const { data: needsSetup, isLoading: checkingSetup } = useQuery<{ needsSetup: boolean }>({
     queryKey: ["/api/auth/check-setup"],
@@ -64,10 +73,30 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       cashoutWallet: cashoutWallet || undefined,
       adminCodeword: needsSetup?.needsSetup ? adminCodeword : undefined
     }),
-    onSuccess: (data: any) => {
+    onSuccess: async (data: any) => {
       if (data.showWizard) {
         setShowWizard(true);
         setWizardStep(0);
+        setHealthCheckLoading(true);
+        setHealthCheckError(false);
+        try {
+          const response = await fetch('/api/health-check', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ heliusApiKey })
+          });
+          if (response.ok) {
+            const results = await response.json();
+            setHealthChecks(results);
+          } else {
+            setHealthCheckError(true);
+          }
+        } catch (e) {
+          console.error('Health check failed:', e);
+          setHealthCheckError(true);
+        } finally {
+          setHealthCheckLoading(false);
+        }
       } else {
         login.mutate();
       }
@@ -408,7 +437,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               Welcome, Admin!
             </DialogTitle>
             <DialogDescription>
-              You've been set up as the administrator. Here's what you can do next.
+              System checks complete. Here's your setup status.
             </DialogDescription>
           </DialogHeader>
           
@@ -422,26 +451,167 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                     <p className="text-sm text-muted-foreground">You're now the admin with full access</p>
                   </div>
                 </div>
-                
-                <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
-                  <CheckCircle className="h-5 w-5 text-green-500 mt-0.5 shrink-0" />
-                  <div>
-                    <p className="font-medium">Helius API Key Configured</p>
-                    <p className="text-sm text-muted-foreground">Ready for wallet monitoring</p>
-                  </div>
-                </div>
 
-                <div className="flex items-start gap-3 p-3 rounded-lg border border-primary/30 bg-primary/5">
-                  <Settings className="h-5 w-5 text-primary mt-0.5 shrink-0" />
-                  <div>
-                    <p className="font-medium">Next Steps</p>
-                    <ul className="text-sm text-muted-foreground mt-1 space-y-1 list-disc list-inside">
-                      <li>Go to <strong>Settings</strong> to set up Telegram notifications</li>
-                      <li>Use <strong>Production Setup</strong> in Admin tab to sync webhooks</li>
-                      <li>Add wallets to monitor in the <strong>Watchlist</strong></li>
-                    </ul>
+                {healthCheckLoading && (
+                  <div className="flex items-center justify-center p-6">
+                    <div className="flex flex-col items-center gap-3">
+                      <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                      <p className="text-sm text-muted-foreground">Running system checks...</p>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {!healthCheckLoading && healthCheckError && (
+                  <div className="flex items-start gap-3 p-3 rounded-lg border border-destructive/30 bg-destructive/5">
+                    <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="font-medium text-destructive">Health Check Failed</p>
+                      <p className="text-sm text-muted-foreground">
+                        Could not verify system status. You can continue anyway or retry.
+                      </p>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="mt-2"
+                        onClick={async () => {
+                          setHealthCheckLoading(true);
+                          setHealthCheckError(false);
+                          try {
+                            const response = await fetch('/api/health-check', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ heliusApiKey })
+                            });
+                            if (response.ok) {
+                              const results = await response.json();
+                              setHealthChecks(results);
+                            } else {
+                              setHealthCheckError(true);
+                            }
+                          } catch {
+                            setHealthCheckError(true);
+                          } finally {
+                            setHealthCheckLoading(false);
+                          }
+                        }}
+                        data-testid="button-retry-health-check"
+                      >
+                        Retry Check
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {!healthCheckLoading && healthChecks && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-muted-foreground">System Status</p>
+                    
+                    <div className="flex items-center gap-3 p-2 rounded-lg bg-muted/30">
+                      {healthChecks.helius.ok ? (
+                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-destructive shrink-0" />
+                      )}
+                      <Key className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">Helius API</p>
+                        <p className="text-xs text-muted-foreground">{healthChecks.helius.message}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 p-2 rounded-lg bg-muted/30">
+                      {healthChecks.database.ok ? (
+                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-destructive shrink-0" />
+                      )}
+                      <Database className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">Database</p>
+                        <p className="text-xs text-muted-foreground">{healthChecks.database.message}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 p-2 rounded-lg bg-muted/30">
+                      {healthChecks.ai.ok ? (
+                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-yellow-500 shrink-0" />
+                      )}
+                      <Cpu className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">Miss Pincher AI</p>
+                        <p className="text-xs text-muted-foreground">{healthChecks.ai.message}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 p-2 rounded-lg bg-muted/30">
+                      {healthChecks.telegram.ok ? (
+                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-yellow-500 shrink-0" />
+                      )}
+                      <Bot className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">Telegram Bot</p>
+                        <p className="text-xs text-muted-foreground">{healthChecks.telegram.message}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 p-2 rounded-lg bg-muted/30">
+                      {healthChecks.email.ok ? (
+                        <CheckCircle className="h-4 w-4 text-green-500 shrink-0" />
+                      ) : (
+                        <AlertCircle className="h-4 w-4 text-yellow-500 shrink-0" />
+                      )}
+                      <Send className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium">Email (Resend)</p>
+                        <p className="text-xs text-muted-foreground">{healthChecks.email.message}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {!healthCheckLoading && healthChecks && (!healthChecks.helius.ok || !healthChecks.database.ok) && (
+                  <div className="flex items-start gap-3 p-3 rounded-lg border border-destructive/30 bg-destructive/5">
+                    <XCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium text-destructive">Critical Issues Detected</p>
+                      <p className="text-sm text-muted-foreground">
+                        Some required services aren't working. Check your configuration.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {!healthCheckLoading && (healthChecks || healthCheckError) && (
+                  <div className="flex items-start gap-3 p-3 rounded-lg border border-primary/30 bg-primary/5">
+                    <Settings className="h-5 w-5 text-primary mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-medium">Next Steps</p>
+                      <ul className="text-sm text-muted-foreground mt-1 space-y-1 list-disc list-inside">
+                        {healthChecks && !healthChecks.helius.ok && (
+                          <li className="text-destructive">Fix <strong>Helius API key</strong> in Settings - required for wallet monitoring</li>
+                        )}
+                        {healthChecks && !healthChecks.database.ok && (
+                          <li className="text-destructive">Check <strong>database connection</strong> - required for app to function</li>
+                        )}
+                        {healthChecks && !healthChecks.ai.ok && (
+                          <li>Configure <strong>AI integration</strong> for Miss Pincher chat features</li>
+                        )}
+                        {healthChecks && !healthChecks.telegram.ok && (
+                          <li>Add <strong>TELEGRAM_BOT_TOKEN</strong> secret for notifications</li>
+                        )}
+                        {healthChecks && !healthChecks.email.ok && (
+                          <li>Add <strong>RESEND_API_KEY</strong> secret for email notifications</li>
+                        )}
+                        <li>Use <strong>Production Setup</strong> in Admin tab to sync webhooks</li>
+                        <li>Add wallets to monitor in the <strong>Watchlist</strong></li>
+                      </ul>
+                    </div>
+                  </div>
+                )}
 
                 <Button 
                   className="w-full" 
@@ -449,9 +619,17 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                     setShowWizard(false);
                     login.mutate();
                   }}
+                  disabled={healthCheckLoading}
                   data-testid="button-wizard-done"
                 >
-                  Got it, let's go!
+                  {healthCheckLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Checking...
+                    </>
+                  ) : (
+                    "Got it, let's go!"
+                  )}
                 </Button>
               </div>
             )}

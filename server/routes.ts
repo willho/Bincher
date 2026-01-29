@@ -68,6 +68,7 @@ import {
   sendWhaleAlert as sendTelegramWhaleAlert,
   log as telegramLog,
 } from "./telegram";
+import { isAIAvailable } from "./ai-health";
 
 let wss: WebSocketServer;
 
@@ -192,6 +193,77 @@ export async function registerRoutes(
   });
 
   const ADMIN_CODEWORD = "Admin1112";
+
+  // Health check function for install wizard
+  async function runInstallHealthChecks(heliusApiKey: string): Promise<{
+    helius: { ok: boolean; message: string };
+    database: { ok: boolean; message: string };
+    telegram: { ok: boolean; message: string };
+    email: { ok: boolean; message: string };
+    ai: { ok: boolean; message: string };
+  }> {
+    const results = {
+      helius: { ok: false, message: "Not tested" },
+      database: { ok: false, message: "Not tested" },
+      telegram: { ok: false, message: "Not configured" },
+      email: { ok: false, message: "Not configured" },
+      ai: { ok: false, message: "Not available" },
+    };
+
+    // Test Helius API key
+    try {
+      const response = await fetch(`https://api.helius.xyz/v0/webhooks?api-key=${heliusApiKey}`);
+      if (response.ok) {
+        results.helius = { ok: true, message: "API key valid" };
+      } else if (response.status === 401) {
+        results.helius = { ok: false, message: "Invalid API key" };
+      } else {
+        results.helius = { ok: false, message: `API error: ${response.status}` };
+      }
+    } catch (e) {
+      results.helius = { ok: false, message: "Connection failed" };
+    }
+
+    // Test database connection
+    try {
+      await db.execute("SELECT 1");
+      results.database = { ok: true, message: "Connected" };
+    } catch (e) {
+      results.database = { ok: false, message: "Connection failed" };
+    }
+
+    // Check Telegram bot token
+    if (process.env.TELEGRAM_BOT_TOKEN) {
+      try {
+        const valid = await verifyBotToken();
+        results.telegram = valid 
+          ? { ok: true, message: "Bot token valid" }
+          : { ok: false, message: "Invalid bot token" };
+      } catch (e) {
+        results.telegram = { ok: false, message: "Verification failed" };
+      }
+    } else {
+      results.telegram = { ok: false, message: "Not configured (optional)" };
+    }
+
+    // Check Resend API key
+    if (process.env.RESEND_API_KEY) {
+      results.email = { ok: true, message: "API key configured" };
+    } else {
+      results.email = { ok: false, message: "Not configured (optional)" };
+    }
+
+    // Check AI availability
+    if (process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY) {
+      results.ai = isAIAvailable() 
+        ? { ok: true, message: "Available" }
+        : { ok: false, message: "Configured but currently unavailable" };
+    } else {
+      results.ai = { ok: false, message: "Not configured" };
+    }
+
+    return results;
+  }
 
   app.post("/api/auth/register", async (req, res) => {
     try {
@@ -2040,6 +2112,23 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error updating wallet limits config:", error);
       res.status(500).json({ error: "Failed to update wallet limits config" });
+    }
+  });
+
+  // ==================== Install Wizard Health Check ====================
+  
+  // Health check endpoint for install wizard (requires helius key in query for validation)
+  app.post("/api/health-check", async (req, res) => {
+    try {
+      const { heliusApiKey } = req.body;
+      if (!heliusApiKey) {
+        return res.status(400).json({ error: "Helius API key required" });
+      }
+      const results = await runInstallHealthChecks(heliusApiKey);
+      res.json(results);
+    } catch (error) {
+      console.error("Health check error:", error);
+      res.status(500).json({ error: "Health check failed" });
     }
   });
 
