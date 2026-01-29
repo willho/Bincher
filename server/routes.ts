@@ -215,8 +215,8 @@ export async function registerRoutes(
       }
 
       // Check if this is first user (install wizard)
-      const userCount = await db.select({ count: sql<number>`count(*)::int` }).from(users);
-      const isFirstUser = userCount[0].count === 0;
+      const userCount = await getUserCount();
+      const isFirstUser = userCount === 0;
       let grantAdmin = false;
 
       if (isFirstUser) {

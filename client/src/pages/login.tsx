@@ -68,13 +68,17 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       if (data.showWizard) {
         setShowWizard(true);
         setWizardStep(0);
+      } else {
+        login.mutate();
       }
-      login.mutate();
     },
     onError: (error: any) => {
       toast({ description: error.message || "Registration failed", variant: "destructive" });
     },
   });
+
+  const isSetup = needsSetup?.needsSetup || isSignUpMode;
+  const isPending = login.isPending || register.isPending;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,9 +109,6 @@ export default function Login({ onLoginSuccess }: LoginProps) {
       </div>
     );
   }
-
-  const isSetup = needsSetup?.needsSetup || isSignUpMode;
-  const isPending = login.isPending || register.isPending;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -444,7 +445,10 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
                 <Button 
                   className="w-full" 
-                  onClick={() => setShowWizard(false)}
+                  onClick={() => {
+                    setShowWizard(false);
+                    login.mutate();
+                  }}
                   data-testid="button-wizard-done"
                 >
                   Got it, let's go!
