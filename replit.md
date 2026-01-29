@@ -66,12 +66,12 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - [x] PincherFooter component - omnipresent AI chat widget
 - [x] Page-aware context display (badge shows current page)
 
-### PHASE 2: Page Reorganization (Next)
-- [ ] Dashboard: Portfolio overview, alerts feed, swap history
-- [ ] Watchlist: Monitored wallets, community wallets
-- [ ] Trading: Holdings, copy trading settings
-- [ ] Token: Per-token details, AI analysis
-- [ ] Settings: API keys, notifications, admin
+### PHASE 2: Page Reorganization ✅
+- [x] Dashboard: Portfolio overview, alerts feed, swap history (side-by-side layout)
+- [x] Watchlist: Monitored wallets, community wallets
+- [x] Trading: Holdings display with PnL, copy trading settings
+- [x] Token: Per-token details, Miss Pincher's AI analysis, token metrics
+- [x] Settings: API keys, notifications, account, admin panel
 
 ### PHASE 3: Pincher Backend Enhancements
 - [ ] Channel awareness (telegram/web tone adjustment)

@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3 } from "lucide-react";
 import { Link } from "wouter";
 import type { TokenSnapshot } from "@shared/schema";
 
@@ -127,18 +127,97 @@ export default function TokenPage() {
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Token Details</CardTitle>
-          <CardDescription>Analysis and trading options</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-3">
-            <Button data-testid="button-swap">Swap</Button>
-            <Button variant="outline" data-testid="button-send">Send</Button>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Trading Options</CardTitle>
+            <CardDescription>Execute trades on this token</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-3">
+              <Button data-testid="button-swap">Swap</Button>
+              <Button variant="outline" data-testid="button-send">Send</Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Shell className="h-5 w-5 text-primary" />
+              Miss Pincher's Take
+            </CardTitle>
+            <CardDescription>AI-powered token analysis</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-5/6" />
+              </div>
+            ) : snapshot?.aiAnalysis ? (
+              <div className="space-y-4">
+                <p className="text-sm whitespace-pre-wrap">{snapshot.aiAnalysis}</p>
+                {snapshot.aiScore && (
+                  <div className="flex items-center gap-4 pt-2 border-t">
+                    <div className="flex items-center gap-2">
+                      <Flame className="h-4 w-4 text-orange-500" />
+                      <span className="text-sm text-muted-foreground">Heat Score:</span>
+                      <Badge variant={snapshot.aiScore >= 70 ? "default" : snapshot.aiScore >= 40 ? "secondary" : "destructive"}>
+                        {snapshot.aiScore}/100
+                      </Badge>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-4 text-muted-foreground">
+                <Shell className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">No analysis available yet.</p>
+                <p className="text-xs mt-1">Ask me about this token in the chat!</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {snapshot && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5" />
+              Token Metrics
+            </CardTitle>
+            <CardDescription>Additional market data</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Droplets className="h-3 w-3" />
+                  Liquidity
+                </p>
+                <p className="font-medium" data-testid="text-liquidity">
+                  ${snapshot.liquidity?.toLocaleString() || "N/A"}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">24h Volume</p>
+                <p className="font-medium" data-testid="text-volume">
+                  ${snapshot.volume24h?.toLocaleString() || "N/A"}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">FDV</p>
+                <p className="font-medium" data-testid="text-fdv">
+                  ${snapshot.fdv?.toLocaleString() || "N/A"}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
