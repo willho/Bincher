@@ -1,11 +1,215 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, userSettings, cachedAlerts, adminSettings } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
 import { getHoldersCached } from "./price-aggregator";
+
+// In-memory store for pending admin instructions (expires after 5 minutes)
+const pendingAdminInstructions: Map<number, { instruction: string; expiresAt: number }> = new Map();
+const ADMIN_CODEWORD = "Admin1112";
+const PENDING_INSTRUCTION_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Check if user is admin
+async function isUserAdmin(userId: number): Promise<boolean> {
+  const user = await db.select({ isAdmin: users.isAdmin })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return user[0]?.isAdmin === true;
+}
+
+// Handle admin commands in chat - returns response if handled, undefined if not an admin command
+async function handleAdminCommand(userId: number, message: string): Promise<string | undefined> {
+  const upperMessage = message.toUpperCase().trim();
+  
+  // Check for confirmation of pending instruction
+  if (upperMessage === 'CONFIRM' || upperMessage === 'YES') {
+    const pending = pendingAdminInstructions.get(userId);
+    if (pending && Date.now() < pending.expiresAt) {
+      pendingAdminInstructions.delete(userId);
+      
+      // Verify admin status again before saving
+      const isAdmin = await isUserAdmin(userId);
+      if (!isAdmin) {
+        return "Nice try. You're not an admin.";
+      }
+      
+      await setAdminInstructions(pending.instruction, userId);
+      console.log(`[ADMIN] User ${userId} set new admin instructions`);
+      return "Locked in. I'll keep that in mind going forward.";
+    }
+    // No pending instruction, let normal chat handle it
+    return undefined;
+  }
+  
+  // Check for codeword trigger
+  if (message.includes(ADMIN_CODEWORD)) {
+    const isAdmin = await isUserAdmin(userId);
+    if (!isAdmin) {
+      // Don't reveal the codeword was recognized - just deflect
+      return "I don't discuss how I work. Let's get back to trading.";
+    }
+    
+    // Extract the instruction (everything after the codeword)
+    const instruction = message.replace(ADMIN_CODEWORD, '').replace(/^[:\s]+/, '').trim();
+    
+    if (!instruction) {
+      return "Got the signal, but you didn't include any instruction. Try again with what you want me to remember.";
+    }
+    
+    // Store pending instruction and ask for confirmation
+    pendingAdminInstructions.set(userId, {
+      instruction,
+      expiresAt: Date.now() + PENDING_INSTRUCTION_TTL,
+    });
+    
+    console.log(`[ADMIN] User ${userId} initiated admin instruction: "${instruction.slice(0, 50)}..."`);
+    return `Got it. Want me to add this to my permanent instructions?\n\n"${instruction}"\n\nReply 'confirm' to lock it in.`;
+  }
+  
+  // Check for "show instructions" command (admin only)
+  if (upperMessage.includes('SHOW') && upperMessage.includes('INSTRUCTION') && upperMessage.includes(ADMIN_CODEWORD.toUpperCase())) {
+    const isAdmin = await isUserAdmin(userId);
+    if (!isAdmin) {
+      return "I don't discuss how I work. Let's get back to trading.";
+    }
+    
+    const current = await getAdminInstructions();
+    if (current) {
+      return `Current admin instructions:\n\n"${current}"`;
+    }
+    return "No admin instructions currently set.";
+  }
+  
+  // Check for "clear instructions" command (admin only)
+  if (upperMessage.includes('CLEAR') && upperMessage.includes('INSTRUCTION') && upperMessage.includes(ADMIN_CODEWORD.toUpperCase())) {
+    const isAdmin = await isUserAdmin(userId);
+    if (!isAdmin) {
+      return "I don't discuss how I work. Let's get back to trading.";
+    }
+    
+    // Set pending clear instruction
+    pendingAdminInstructions.set(userId, {
+      instruction: '',  // Empty means clear
+      expiresAt: Date.now() + PENDING_INSTRUCTION_TTL,
+    });
+    
+    return "You want me to clear all admin instructions? Reply 'confirm' to wipe them.";
+  }
+  
+  return undefined; // Not an admin command
+}
+
+// In-memory store for pending insight consent (expires after 5 minutes)
+const pendingInsightConsent: Map<number, { tokenMint: string; tokenSymbol: string; summary: string; sentiment: string; expiresAt: number }> = new Map();
+
+// Store a community insight (after user consent)
+export async function storeCommunityInsight(
+  userId: number,
+  tokenMint: string,
+  tokenSymbol: string,
+  sentiment: string,
+  summary: string,
+  credibility: string = 'unknown'
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + (7 * 24 * 60 * 60); // Expires in 7 days
+  
+  await db.insert(communityInsights).values({
+    tokenMint,
+    tokenSymbol,
+    sentiment,
+    summary,
+    sourceUserId: userId,
+    consentedAt: now,
+    sourceCredibility: credibility,
+    createdAt: now,
+    expiresAt,
+    isActive: true,
+  });
+  
+  console.log(`[COMMUNITY] User ${userId} shared insight for ${tokenSymbol}: "${summary.slice(0, 50)}..."`);
+}
+
+// Get community insights for a token (excluding the requesting user's own insights)
+export async function getCommunityInsights(tokenMint: string, excludeUserId: number): Promise<{ sentiment: string; summary: string; credibility: string | null }[]> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  // Query with sourceUserId to filter in JS (drizzle doesn't have != operator easily)
+  const rawInsights = await db.select({
+    sentiment: communityInsights.sentiment,
+    summary: communityInsights.summary,
+    credibility: communityInsights.sourceCredibility,
+    sourceUserId: communityInsights.sourceUserId,
+    expiresAt: communityInsights.expiresAt,
+  })
+    .from(communityInsights)
+    .where(and(
+      eq(communityInsights.tokenMint, tokenMint),
+      eq(communityInsights.isActive, true),
+    ))
+    .orderBy(desc(communityInsights.createdAt))
+    .limit(10);
+  
+  // Filter out the user's own insights and expired ones, then strip identifying fields
+  return rawInsights
+    .filter(i => i.sourceUserId !== excludeUserId) // Exclude user's own insights
+    .filter(i => !i.expiresAt || i.expiresAt > now) // Exclude expired insights
+    .slice(0, 5)
+    .map(({ sentiment, summary, credibility }) => ({ sentiment, summary, credibility })); // Strip sourceUserId before returning
+}
+
+// Handle insight consent flow
+async function handleInsightConsent(userId: number, message: string): Promise<string | undefined> {
+  const upperMessage = message.toUpperCase().trim();
+  
+  // Check for consent confirmation
+  if ((upperMessage === 'YES' || upperMessage === 'SHARE IT' || upperMessage.includes('SHARE')) && pendingInsightConsent.has(userId)) {
+    const pending = pendingInsightConsent.get(userId)!;
+    if (Date.now() < pending.expiresAt) {
+      pendingInsightConsent.delete(userId);
+      
+      await storeCommunityInsight(
+        userId,
+        pending.tokenMint,
+        pending.tokenSymbol,
+        pending.sentiment,
+        pending.summary
+      );
+      
+      return "Got it. I'll pass that along anonymously if anyone else asks about this token. Your wallet and username stay private.";
+    }
+  }
+  
+  // Check for decline
+  if ((upperMessage === 'NO' || upperMessage === 'NAH' || upperMessage.includes('KEEP IT PRIVATE')) && pendingInsightConsent.has(userId)) {
+    pendingInsightConsent.delete(userId);
+    return "No worries. Keeping that between us.";
+  }
+  
+  return undefined;
+}
+
+// Ask user if they want to share an insight (called when AI detects quality alpha)
+export function setPendingInsightConsent(
+  userId: number,
+  tokenMint: string,
+  tokenSymbol: string,
+  sentiment: string,
+  summary: string
+): void {
+  pendingInsightConsent.set(userId, {
+    tokenMint,
+    tokenSymbol,
+    sentiment,
+    summary,
+    expiresAt: Date.now() + PENDING_INSTRUCTION_TTL,
+  });
+}
+
 import { 
   buildPincherSystemPrompt, 
   type PincherContext, 
@@ -729,6 +933,48 @@ export async function chatWithAI(
   channel: 'web' | 'telegram' = 'web'
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
+  
+  // Check for admin commands BEFORE saving to chat history (to keep codeword out of logs)
+  const adminResponse = await handleAdminCommand(userId, userMessage);
+  if (adminResponse) {
+    // Save sanitized message to history (remove codeword)
+    const sanitizedMessage = userMessage.replace(ADMIN_CODEWORD, '[ADMIN]');
+    await db.insert(aiChatMessages).values({
+      userId,
+      role: "user",
+      content: sanitizedMessage,
+      channel,
+      createdAt: now,
+    });
+    await db.insert(aiChatMessages).values({
+      userId,
+      role: "assistant",
+      content: adminResponse,
+      channel,
+      createdAt: now,
+    });
+    return adminResponse;
+  }
+  
+  // Check for insight consent response
+  const consentResponse = await handleInsightConsent(userId, userMessage);
+  if (consentResponse) {
+    await db.insert(aiChatMessages).values({
+      userId,
+      role: "user",
+      content: userMessage,
+      channel,
+      createdAt: now,
+    });
+    await db.insert(aiChatMessages).values({
+      userId,
+      role: "assistant",
+      content: consentResponse,
+      channel,
+      createdAt: now,
+    });
+    return consentResponse;
+  }
   
   await db.insert(aiChatMessages).values({
     userId,

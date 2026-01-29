@@ -306,6 +306,25 @@ export const adminSettings = pgTable("admin_settings", {
   updatedBy: integer("updated_by"),
 });
 
+// Community insights - anonymous token opinions shared across users with consent
+export const communityInsights = pgTable("community_insights", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  // Vague sentiment summary - no identifying details
+  sentiment: text("sentiment").notNull(), // e.g., "bullish", "bearish", "cautious"
+  summary: text("summary").notNull(), // Anonymized insight text
+  // Consent and source tracking (user ID never exposed in retrieval)
+  sourceUserId: integer("source_user_id").notNull(),
+  consentedAt: integer("consented_at").notNull(),
+  // Quality/credibility indicators (no user-identifying details)
+  sourceCredibility: text("source_credibility"), // "new_trader", "experienced", "successful_track_record"
+  // Lifecycle
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at"), // Insights can expire to stay fresh
+  isActive: boolean("is_active").default(true),
+});
+
 // Password reset tokens - time-limited, single-use tokens for secure password recovery
 export const passwordResetTokens = pgTable("password_reset_tokens", {
   id: serial("id").primaryKey(),
@@ -330,6 +349,7 @@ export const insertTokenSnapshotSchema = createInsertSchema(tokenSnapshots).omit
 export const insertPriceAggregateSchema = createInsertSchema(priceAggregates).omit({ id: true });
 export const insertAiChatMessageSchema = createInsertSchema(aiChatMessages).omit({ id: true });
 export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({ id: true });
+export const insertCommunityInsightSchema = createInsertSchema(communityInsights).omit({ id: true });
 
 // Price aggregate types
 export type PriceAggregate = typeof priceAggregates.$inferSelect;
@@ -516,6 +536,10 @@ export const aiChatMessageSchema = z.object({
 
 export type AiChatMessage = z.infer<typeof aiChatMessageSchema>;
 export type InsertAiChatMessage = z.infer<typeof insertAiChatMessageSchema>;
+
+// Community insights types
+export type CommunityInsight = typeof communityInsights.$inferSelect;
+export type InsertCommunityInsight = z.infer<typeof insertCommunityInsightSchema>;
 
 // Admin messages table for announcements/alerts to users
 export const adminMessages = pgTable("admin_messages", {

@@ -79,6 +79,16 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - [x] Cached alerts (AI generates once, system delivers) - cachedAlerts table, getCachedAlert/generateAndCacheAlert functions
 - [x] Admin instructions injection - adminSettings table, setAdminInstructions, admin endpoint POST /api/admin/pincher-instructions
 
+### PHASE 4: Security & Community Features ✅
+- [x] Anti-prompt-injection security rules - Comprehensive defense against system prompt leakage, override attempts
+- [x] Data isolation rules - Never reveal other users' data, hot wallet status, or cross-user information
+- [x] Conversational admin instructions - Admin can set instructions by chatting with Pincher using secret codeword + confirmation
+- [x] Show/clear admin commands - Admin can view or wipe instructions via chat
+- [x] Capabilities documentation - Pincher can explain her features in plain language when asked
+- [x] Community insights table - Anonymous token opinions with consent-based sharing
+- [x] Insight consent flow - Pincher asks permission before sharing alpha anonymously
+- [x] Insight retrieval with disclaimers - Community opinions framed as unverified, possible manipulation
+
 ### Miss Pincher Personality
 - **Voice**: Dry wit, tough love, casual but serious when needed
 - **Crab Mystery**: Name/logo suspicious, denies being a crab, subtle slip-ups
