@@ -129,3 +129,26 @@ Miss Pincher can now control trading through natural conversation with explicit 
 - Server-side userConfirmed flag prevents LLM from bypassing confirmation
 - 3-minute expiry on pending trades
 - Automatic cleanup of expired trades every minute
+
+### PHASE 6: AI Health & Cost Optimization ✅
+- [x] AI health tracking system (ai-health.ts) - Tracks consecutive failures, availability status
+- [x] Health endpoint (/api/ai/health) - Returns availability, unavailable features, fallback messages
+- [x] Intent parser (intent-parser.ts) - Handles simple commands without AI calls
+- [x] Graceful degradation - When AI unavailable, manual controls still work
+- [x] Telegram fallback - Intent parser + fallback messages in Telegram bot
+- [x] Web fallback - Same behavior for web chat endpoint
+
+**AI Cost Optimization Strategy**:
+- Simple queries (balance, holdings, pending, enable/disable copy) handled by backend intent parser
+- AI only called for complex analysis and natural conversation
+- Health tracking records success/failure of each AI call
+- After 3 consecutive failures, AI marked as unavailable
+- 60-second cooldown before retrying after failures
+- All manual trading features remain functional when AI is down
+
+**Intent Parser Commands** (no AI needed):
+- `balance` / `check balance` - Hot wallet SOL balance
+- `holdings` / `portfolio` - Current token holdings with PnL
+- `pending` / `queued` - Pending buy orders
+- `enable copy` / `start copy` - Enable copy trading
+- `disable copy` / `stop copy` - Disable copy trading

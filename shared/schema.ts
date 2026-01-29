@@ -441,6 +441,15 @@ export const holdingSchema = z.object({
   reclaimedMilestones: z.array(z.number()).default([]),
   dumpAlertSent: z.boolean().default(false),
   tokenWalletPublicKey: z.string().optional(),
+  sourceSwapId: z.number().optional(),
+  sourceWalletAddress: z.string().optional(),
+  sourceWalletLabel: z.string().optional(),
+  sourceWalletBuyCount: z.number().optional(),
+  sourceWalletSellCount: z.number().optional(),
+  sourceWalletMaxHeldPct: z.number().optional(),
+  sourceWalletCurrentPct: z.number().optional(),
+  isDead: z.boolean().default(false),
+  isDust: z.boolean().default(false),
 });
 
 export type Holding = z.infer<typeof holdingSchema>;
@@ -466,6 +475,9 @@ export const pendingBuySchema = z.object({
   tokenWalletPublicKey: z.string().optional(),
   snapshotId: z.number().optional(),
   aiScore: z.number().optional(),
+  sourceSwapId: z.number().optional(),
+  sourceWalletAddress: z.string().optional(),
+  sourceWalletLabel: z.string().optional(),
 });
 
 export type PendingBuy = z.infer<typeof pendingBuySchema>;

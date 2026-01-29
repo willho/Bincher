@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { users, systemLogs, linkTokens, pincherDataRequests, monitoredWallets, holdings, swaps } from "@shared/schema";
-import { eq, desc, and, sql, lt } from "drizzle-orm";
+import { eq, desc, and, sql, lt, gt } from "drizzle-orm";
 import { chatWithAI } from "./ai";
 import crypto from "crypto";
 
@@ -153,7 +153,7 @@ export async function verifyAndLinkTelegram(
   const [linkToken] = await db
     .select()
     .from(linkTokens)
-    .where(and(eq(linkTokens.token, token), lt(now, linkTokens.expiresAt)))
+    .where(and(eq(linkTokens.token, token), gt(linkTokens.expiresAt, now)))
     .limit(1);
 
   if (!linkToken) {
@@ -427,6 +427,23 @@ async function handleCommand(chatId: string, command: string, args: string, user
 async function handleChatMessage(chatId: string, text: string, user: typeof users.$inferSelect) {
   try {
     await telegramRequest("sendChatAction", { chat_id: chatId, action: "typing" });
+    
+    const { handleMessage } = await import("./intent-parser");
+    const { isAIAvailable, getFallbackMessage } = await import("./ai-health");
+    
+    const intentResult = await handleMessage(user.id, text);
+    
+    if (intentResult.handled && intentResult.response) {
+      await sendMessage(chatId, intentResult.response);
+      return;
+    }
+    
+    if (!isAIAvailable()) {
+      const fallbackMsg = getFallbackMessage() + " Manual controls work on the web app.";
+      await sendMessage(chatId, fallbackMsg);
+      return;
+    }
+    
     const response = await chatWithAI(user.id, text, 'telegram');
     await sendMessage(chatId, response);
   } catch (e: any) {

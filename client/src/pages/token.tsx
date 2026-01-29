@@ -22,7 +22,7 @@ export default function TokenPage() {
       <div className="text-center py-12">
         <p className="text-muted-foreground">No token specified</p>
         <Link href="/trading">
-          <Button variant="link">Back to Trading</Button>
+          <Button variant="ghost">Back to Trading</Button>
         </Link>
       </div>
     );

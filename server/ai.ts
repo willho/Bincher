@@ -5,6 +5,7 @@ import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPref
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
+import { recordAISuccess, recordAIFailure, isAIAvailable, getFallbackMessage } from "./ai-health";
 import { getHoldersCached } from "./price-aggregator";
 import { fetchTokenMetadata } from "./helius";
 import { buyToken, sellToken, getTokenPrice } from "./jupiter";
@@ -45,7 +46,8 @@ function confirmPendingTrade(userId: number): { success: boolean; message: strin
 // Cleanup expired pending trades every minute
 setInterval(() => {
   const now = Date.now();
-  for (const [userId, trade] of pendingTrades.entries()) {
+  const entries = Array.from(pendingTrades.entries());
+  for (const [userId, trade] of entries) {
     if (now > trade.expiresAt) {
       pendingTrades.delete(userId);
       console.log(`[Trading] Expired pending ${trade.type} for user ${userId} (${trade.tokenSymbol})`);
@@ -1849,6 +1851,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
       temperature: 0.7,
     });
     await trackApiCall("openai", "chat"); // Track after successful response
+    recordAISuccess(); // Mark AI as healthy
 
     const message = response.choices[0]?.message;
     
@@ -1979,9 +1982,10 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
     });
 
     return assistantMessage;
-  } catch (error) {
+  } catch (error: any) {
     console.error("AI chat failed:", error);
-    return "Sorry, I'm having trouble connecting to the AI service right now.";
+    recordAIFailure(error?.message || "Unknown error");
+    return "Sorry, I'm having trouble connecting to the AI service right now. Use the Trading page for manual controls - all features still work!";
   }
 }
 

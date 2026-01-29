@@ -2061,6 +2061,26 @@ export async function registerRoutes(
 
   // ==================== AI Insights Routes ====================
 
+  // Get AI health status
+  app.get("/api/ai/health", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getAIHealth, getUnavailableFeatures, getAvailableFeatures, getFallbackMessage } = await import("./ai-health");
+      const health = getAIHealth();
+      res.json({
+        available: health.available,
+        lastCheck: health.lastCheck,
+        lastSuccessfulCall: health.lastSuccessfulCall,
+        consecutiveFailures: health.consecutiveFailures,
+        unavailableFeatures: getUnavailableFeatures(),
+        availableFeatures: getAvailableFeatures(),
+        fallbackMessage: health.available ? null : getFallbackMessage(),
+      });
+    } catch (error) {
+      console.error("Error getting AI health:", error);
+      res.status(500).json({ error: "Failed to get AI health" });
+    }
+  });
+
   // Get AI insights summary
   app.get("/api/ai/insights", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
@@ -2126,6 +2146,23 @@ export async function registerRoutes(
       if (!message || typeof message !== 'string') {
         return res.status(400).json({ error: "Message is required" });
       }
+      
+      const { handleMessage } = await import("./intent-parser");
+      const { isAIAvailable, getFallbackMessage } = await import("./ai-health");
+      
+      const intentResult = await handleMessage(req.userId!, message);
+      
+      if (intentResult.handled && intentResult.response) {
+        res.json({ response: intentResult.response });
+        return;
+      }
+      
+      if (!isAIAvailable()) {
+        const fallbackMsg = getFallbackMessage() + " Use the Trading page for full manual control.";
+        res.json({ response: fallbackMsg, aiUnavailable: true });
+        return;
+      }
+      
       const response = await chatWithAI(req.userId!, message, 'web');
       res.json({ response });
     } catch (error) {
