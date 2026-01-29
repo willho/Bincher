@@ -934,10 +934,18 @@ async function buildMarketMood(): Promise<MarketMood> {
 }
 
 // Build PincherContext for AI calls
+// Extract Solana token address from message (base58 address typically 32-44 chars)
+function extractTokenMintFromMessage(message: string): string | null {
+  // Match Solana addresses (base58 encoded, typically 32-44 characters)
+  const addressMatch = message.match(/\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/);
+  return addressMatch ? addressMatch[0] : null;
+}
+
 async function buildPincherContext(
   userId: number, 
   channel: 'web' | 'telegram' = 'web',
-  adminInstructions?: string
+  adminInstructions?: string,
+  userMessage?: string
 ): Promise<PincherContext> {
   const budgetStatus = await getBudgetStatus("openai");
   const marketMood = await buildMarketMood();
@@ -952,6 +960,32 @@ async function buildPincherContext(
   if (percentUsed > expectedPercent + 15) paceStatus = 'over';
   if (percentUsed < expectedPercent - 15) paceStatus = 'under';
   
+  // Try to extract token address from user message and fetch community insights
+  let communityInsights: PincherContext['communityInsights'] = undefined;
+  if (userMessage) {
+    const tokenMint = extractTokenMintFromMessage(userMessage);
+    if (tokenMint) {
+      try {
+        // Fetch current price for performance comparison
+        const metadata = await fetchTokenMetadata(tokenMint);
+        const currentPrice = metadata?.priceUsd ?? null;
+        
+        // Get community insights with performance data
+        const insights = await getCommunityInsights(tokenMint, userId, currentPrice);
+        if (insights.length > 0) {
+          communityInsights = insights.map(i => ({
+            sentiment: i.sentiment,
+            summary: i.summary,
+            ageText: i.ageText,
+            performanceText: i.performanceText,
+          }));
+        }
+      } catch (err) {
+        console.warn('[PINCHER] Failed to fetch community insights:', err);
+      }
+    }
+  }
+  
   return {
     userId,
     channel,
@@ -963,6 +997,7 @@ async function buildPincherContext(
       paceStatus,
     },
     adminInstructions,
+    communityInsights,
   };
 }
 
@@ -1072,9 +1107,9 @@ export async function chatWithAI(
   const userPrefs = await getUserPreferences(userId);
   const summaryFocus = userPrefs?.summaryFocus || "";
   
-  // Build the comprehensive Pincher context with channel awareness
+  // Build the comprehensive Pincher context with channel awareness and community insights
   const adminInstructions = await getAdminInstructions();
-  const pincherContext = await buildPincherContext(userId, channel, adminInstructions);
+  const pincherContext = await buildPincherContext(userId, channel, adminInstructions, userMessage);
   
   // Add cross-channel awareness to context
   const recentOtherChannel = crossChannelHistory.filter(m => m.channel !== channel).slice(-3);

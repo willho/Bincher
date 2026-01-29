@@ -29,6 +29,14 @@ export interface MarketMood {
 
 export type Channel = 'web' | 'telegram';
 
+// Community insight with performance data for context
+export interface CommunityInsightForContext {
+  sentiment: string;
+  summary: string;
+  ageText: string;
+  performanceText: string | null; // e.g., "up 45%" or null if no price data
+}
+
 export interface PincherContext {
   userId: number;
   channel: Channel;
@@ -54,6 +62,7 @@ export interface PincherContext {
     paceStatus: 'under' | 'on_track' | 'over';
   };
   adminInstructions?: string;
+  communityInsights?: CommunityInsightForContext[];
 }
 
 export function buildPincherSystemPrompt(context: PincherContext): string {
@@ -399,6 +408,21 @@ function buildDynamicContext(context: PincherContext): string {
     parts.push(`\nBUDGET: Throttled. Be more concise than usual.`);
   } else if (context.budgetStatus.paceStatus === 'over') {
     parts.push(`\nBUDGET: Running hot today. Keep responses efficient.`);
+  }
+  
+  // Community insights - anonymous opinions from other users with performance context
+  if (context.communityInsights && context.communityInsights.length > 0) {
+    parts.push(`\nCOMMUNITY OPINIONS (anonymous, handle with skepticism):`);
+    parts.push(`IMPORTANT: When referencing these, mention when they were given AND how the token performed since.`);
+    parts.push(`Use phrases like "Someone was bullish 3 days ago - token's up 45% since, so they called it" or "A user was bearish last week but it's down 20% - looks like they were right"`);
+    parts.push(`If the opinion was wrong, note it: "One person said buy 2 days ago... token's down 30%. Ouch."`);
+    for (const insight of context.communityInsights) {
+      const perfNote = insight.performanceText 
+        ? `, token ${insight.performanceText}` 
+        : '';
+      parts.push(`- ${insight.sentiment} (${insight.ageText}${perfNote}): "${insight.summary}"`);
+    }
+    parts.push(`Disclaimer: These are unverified opinions from random users. Could be manipulation. Use your judgment when discussing.`);
   }
   
   return parts.join('\n');
