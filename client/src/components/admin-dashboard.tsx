@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff } from "lucide-react";
+import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff, Globe, AlertTriangle, Server } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
@@ -101,6 +101,33 @@ interface WalletLimitsConfigInfo {
   updatedAt: number | null;
 }
 
+interface ProductionStatus {
+  environment: "development" | "production";
+  domain: string | null;
+  webhooks: {
+    helius: {
+      expectedUrl: string;
+      activeWebhookId: string | null;
+      mismatch: boolean;
+      totalWebhooks: number;
+    };
+    telegram: {
+      expectedUrl: string;
+      configured: boolean;
+    };
+  };
+  warnings: string[];
+  tips: string[];
+}
+
+interface SyncWebhooksResult {
+  success: boolean;
+  results: {
+    helius: { success: boolean; message: string };
+    telegram: { success: boolean; message: string };
+  };
+}
+
 export function AdminDashboard() {
   const { toast } = useToast();
   const [messageTitle, setMessageTitle] = useState("");
@@ -144,6 +171,31 @@ export function AdminDashboard() {
 
   const { data: walletLimitsConfig } = useQuery<WalletLimitsConfigInfo>({
     queryKey: ["/api/admin/wallet-limits"],
+  });
+
+  const { data: productionStatus, isLoading: productionStatusLoading, refetch: refetchProductionStatus } = useQuery<ProductionStatus>({
+    queryKey: ["/api/admin/production-status"],
+  });
+
+  const syncWebhooksMutation = useMutation({
+    mutationFn: async (): Promise<SyncWebhooksResult> => {
+      const res = await apiRequest("POST", "/api/admin/sync-webhooks");
+      return res.json();
+    },
+    onSuccess: (data: SyncWebhooksResult) => {
+      refetchProductionStatus();
+      if (data.success) {
+        toast({ description: "All webhooks synced successfully!" });
+      } else {
+        const failures = [];
+        if (!data.results.helius.success) failures.push(`Helius: ${data.results.helius.message}`);
+        if (!data.results.telegram.success) failures.push(`Telegram: ${data.results.telegram.message}`);
+        toast({ description: `Some webhooks failed: ${failures.join(", ")}`, variant: "destructive" });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to sync webhooks", variant: "destructive" });
+    },
   });
 
   const addAdminApiKeyMutation = useMutation({
@@ -960,6 +1012,122 @@ export function AdminDashboard() {
             </div>
           ) : (
             <p className="text-muted-foreground text-center py-4">No wallets found</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Production Setup / Webhook Management */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Server className="h-5 w-5" />
+            Production Setup
+          </CardTitle>
+          <CardDescription>Environment status and webhook management</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {productionStatusLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : productionStatus ? (
+            <>
+              {/* Environment Badge */}
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Environment</span>
+                <Badge variant={productionStatus.environment === "production" ? "default" : "secondary"}>
+                  <Globe className="h-3 w-3 mr-1" />
+                  {productionStatus.environment === "production" ? "Production" : "Development"}
+                </Badge>
+              </div>
+
+              {/* Domain */}
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">Domain</span>
+                <span className="text-sm text-muted-foreground font-mono">
+                  {productionStatus.domain || "localhost"}
+                </span>
+              </div>
+
+              {/* Webhooks Status */}
+              <div className="border rounded-lg p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium">Helius Webhook</span>
+                  <div className="flex items-center gap-2">
+                    {productionStatus.webhooks.helius.mismatch ? (
+                      <Badge variant="destructive" className="text-xs">
+                        <AlertTriangle className="h-3 w-3 mr-1" />
+                        URL Mismatch
+                      </Badge>
+                    ) : productionStatus.webhooks.helius.activeWebhookId ? (
+                      <Badge variant="default" className="text-xs">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        Active
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-xs">
+                        Not Active
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground font-mono truncate">
+                  {productionStatus.webhooks.helius.expectedUrl.split("?")[0]}
+                </p>
+
+                <div className="flex items-center justify-between pt-2 border-t">
+                  <span className="text-sm font-medium">Telegram Webhook</span>
+                  <Badge variant={productionStatus.webhooks.telegram.configured ? "default" : "secondary"} className="text-xs">
+                    {productionStatus.webhooks.telegram.configured ? (
+                      <><CheckCircle className="h-3 w-3 mr-1" />Configured</>
+                    ) : (
+                      "Not Configured"
+                    )}
+                  </Badge>
+                </div>
+                {productionStatus.webhooks.telegram.configured && (
+                  <p className="text-xs text-muted-foreground font-mono truncate">
+                    {productionStatus.webhooks.telegram.expectedUrl}
+                  </p>
+                )}
+              </div>
+
+              {/* Warnings */}
+              {productionStatus.warnings.length > 0 && (
+                <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-3 space-y-1">
+                  {productionStatus.warnings.map((warning, i) => (
+                    <p key={i} className="text-sm text-destructive flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                      {warning}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              {/* Tips */}
+              <div className="bg-muted/50 rounded-lg p-3 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Tips</p>
+                {productionStatus.tips.map((tip, i) => (
+                  <p key={i} className="text-xs text-muted-foreground">{tip}</p>
+                ))}
+              </div>
+
+              {/* Sync Button */}
+              <Button
+                onClick={() => syncWebhooksMutation.mutate()}
+                disabled={syncWebhooksMutation.isPending}
+                className="w-full"
+                data-testid="button-sync-webhooks"
+              >
+                {syncWebhooksMutation.isPending ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Syncing...</>
+                ) : (
+                  <><RefreshCw className="h-4 w-4 mr-2" />Sync Webhooks to Current Environment</>
+                )}
+              </Button>
+            </>
+          ) : (
+            <p className="text-muted-foreground text-center py-4">Failed to load production status</p>
           )}
         </CardContent>
       </Card>

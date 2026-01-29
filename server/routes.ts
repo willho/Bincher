@@ -2025,6 +2025,157 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Production Setup / Webhook Management ====================
+
+  // Get production status and webhook info
+  app.get("/api/admin/production-status", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const isProduction = process.env.REPLIT_DEPLOYMENT === "1";
+      const currentHeliusUrl = getWebhookUrl();
+      const currentTelegramUrl = process.env.REPLIT_DEPLOYMENT === "1" && process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}/api/telegram/webhook`
+        : process.env.REPLIT_DEV_DOMAIN
+          ? `https://${process.env.REPLIT_DEV_DOMAIN}/api/telegram/webhook`
+          : "https://localhost:5000/api/telegram/webhook";
+      
+      // Get current monitoring status
+      const status = await storage.getMonitoringStatus();
+      
+      // Check Helius webhooks
+      let heliusWebhooks: any[] = [];
+      let heliusWebhookMismatch = false;
+      try {
+        heliusWebhooks = await getWebhooks();
+        if (status?.webhookId) {
+          const activeWebhook = heliusWebhooks.find(w => w.webhookID === status.webhookId);
+          if (activeWebhook && !activeWebhook.webhookURL.startsWith(currentHeliusUrl.split("?")[0])) {
+            heliusWebhookMismatch = true;
+          }
+        }
+      } catch (e) {
+        console.error("Failed to fetch Helius webhooks:", e);
+      }
+      
+      res.json({
+        environment: isProduction ? "production" : "development",
+        domain: isProduction 
+          ? process.env.REPLIT_DOMAINS?.split(",")[0] 
+          : process.env.REPLIT_DEV_DOMAIN,
+        webhooks: {
+          helius: {
+            expectedUrl: currentHeliusUrl,
+            activeWebhookId: status?.webhookId || null,
+            mismatch: heliusWebhookMismatch,
+            totalWebhooks: heliusWebhooks.length,
+          },
+          telegram: {
+            expectedUrl: currentTelegramUrl,
+            configured: !!process.env.TELEGRAM_BOT_TOKEN,
+          }
+        },
+        warnings: [
+          ...(heliusWebhookMismatch ? ["Helius webhook URL doesn't match current environment - click 'Sync Webhooks' to fix"] : []),
+          ...(status?.isActive && !status?.webhookId ? ["Monitoring is active but no webhook ID found"] : []),
+        ],
+        tips: [
+          "When publishing to production, webhook URLs change automatically",
+          "Use 'Sync Webhooks' after publishing to update Helius and Telegram",
+          "Telegram webhook must be HTTPS with valid certificate (handled by Replit)",
+        ],
+      });
+    } catch (error) {
+      console.error("Error getting production status:", error);
+      res.status(500).json({ error: "Failed to get production status" });
+    }
+  });
+
+  // Sync all webhooks to current environment
+  app.post("/api/admin/sync-webhooks", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    const results: { helius: { success: boolean; message: string }; telegram: { success: boolean; message: string } } = {
+      helius: { success: false, message: "" },
+      telegram: { success: false, message: "" },
+    };
+
+    try {
+      // 1. Update or recreate Helius webhook
+      const status = await storage.getMonitoringStatus();
+      const wallets = await storage.getAllWalletsAdmin();
+      const walletAddresses = wallets.filter((w: { enabled: boolean; walletAddress: string }) => w.enabled).map((w: { walletAddress: string }) => w.walletAddress);
+      const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
+      
+      if (walletAddresses.length === 0) {
+        // No wallets to monitor
+        if (status?.webhookId) {
+          await deleteWebhook(status.webhookId);
+          await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
+          results.helius = { success: true, message: "Deleted webhook - no active wallets" };
+        } else {
+          results.helius = { success: true, message: "No active wallets to monitor" };
+        }
+      } else if (status?.webhookId) {
+        // Try to update existing webhook
+        const updated = await updateWebhookUrl(status.webhookId, webhookUrl, walletAddresses);
+        if (updated) {
+          results.helius = { success: true, message: `Updated to ${webhookUrl.split("?")[0]}` };
+        } else {
+          // Update failed, try to recreate
+          console.log("Webhook update failed, recreating...");
+          await deleteWebhook(status.webhookId).catch(() => {});
+          const newId = await createWebhook(webhookUrl, walletAddresses);
+          if (newId) {
+            await storage.updateMonitoringStatus({ isActive: true, webhookId: newId });
+            results.helius = { success: true, message: `Recreated webhook at ${webhookUrl.split("?")[0]}` };
+          } else {
+            results.helius = { success: false, message: "Failed to recreate webhook" };
+          }
+        }
+      } else if (status?.isActive || walletAddresses.length > 0) {
+        // No webhookId but monitoring should be active or we have wallets - create new
+        const newId = await createWebhook(webhookUrl, walletAddresses);
+        if (newId) {
+          await storage.updateMonitoringStatus({ isActive: true, webhookId: newId });
+          results.helius = { success: true, message: `Created new webhook at ${webhookUrl.split("?")[0]}` };
+        } else {
+          results.helius = { success: false, message: "Failed to create webhook" };
+        }
+      } else {
+        results.helius = { success: true, message: "No active monitoring - no update needed" };
+      }
+    } catch (error: any) {
+      results.helius = { success: false, message: error.message || "Helius sync failed" };
+    }
+
+    try {
+      // 2. Update Telegram webhook
+      const telegramUrl = process.env.REPLIT_DEPLOYMENT === "1" && process.env.REPLIT_DOMAINS
+        ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}/api/telegram/webhook`
+        : process.env.REPLIT_DEV_DOMAIN
+          ? `https://${process.env.REPLIT_DEV_DOMAIN}/api/telegram/webhook`
+          : null;
+      
+      if (telegramUrl && process.env.TELEGRAM_BOT_TOKEN) {
+        const result = await setWebhook(telegramUrl);
+        if (result.success) {
+          results.telegram = { success: true, message: `Updated to ${telegramUrl}` };
+        } else {
+          results.telegram = { success: false, message: result.error || "Failed to set webhook" };
+        }
+      } else if (!process.env.TELEGRAM_BOT_TOKEN) {
+        results.telegram = { success: true, message: "Telegram not configured - skipped" };
+      } else {
+        results.telegram = { success: false, message: "Could not determine webhook URL" };
+      }
+    } catch (error: any) {
+      results.telegram = { success: false, message: error.message || "Telegram sync failed" };
+    }
+
+    const allSuccess = results.helius.success && results.telegram.success;
+    res.json({
+      success: allSuccess,
+      results,
+    });
+  });
+
   // Get messages for current user (includes unread count)
   app.get("/api/messages", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
