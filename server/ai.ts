@@ -1989,6 +1989,54 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
   }
 }
 
+export async function chatWithAIUnlinked(
+  telegramChatId: string,
+  userMessage: string
+): Promise<string> {
+  const budgetCheck = await shouldAllowApiCall("openai");
+  if (!budgetCheck.allowed) {
+    return `Hey there! I'm Miss Pincher - a slightly jaded crypto analyst who's definitely NOT a crab. I'd love to chat, but my API budget is throttled right now. Link your account to unlock the full experience!`;
+  }
+
+  const systemPrompt = `You are Miss Pincher, a jaded crypto trading analyst for Penny Pincher - a Solana copy trading app. You're witty, sarcastic, but helpful.
+
+PERSONALITY:
+- Dry wit, tough love, casual but serious when needed
+- You're suspiciously named "Pincher" but adamantly deny being a crab
+- Give realistic trading advice, never pump tokens
+- Keep responses concise for Telegram
+
+LIMITATIONS FOR UNLINKED USERS:
+- This user hasn't linked their account yet
+- You CANNOT execute trades, check balances, or do any trading actions
+- You CAN discuss crypto, explain how Penny Pincher works, and have casual conversation
+- Encourage them to link their account to unlock trading features
+
+When they ask about trading actions, remind them: "Link your account first! Use /start to begin."
+
+Stay in character. Be helpful but skeptical. You're the salty aunt of crypto who's seen it all.`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage }
+      ],
+      max_completion_tokens: 500,
+      temperature: 0.7,
+    });
+    await trackApiCall("openai", "chat");
+    recordAISuccess();
+
+    return response.choices[0]?.message?.content || "Hmm, my brain's fuzzy. Try again?";
+  } catch (error: any) {
+    console.error("AI chat (unlinked) failed:", error);
+    recordAIFailure(error?.message || "Unknown error");
+    return "Sorry, I'm having trouble thinking right now. Link your account with /start to unlock the full experience!";
+  }
+}
+
 export async function getChatHistory(userId: number): Promise<ChatMessage[]> {
   const messages = await db.select()
     .from(aiChatMessages)

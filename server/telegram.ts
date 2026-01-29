@@ -456,6 +456,31 @@ async function handleChatMessage(chatId: string, text: string, user: typeof user
   }
 }
 
+async function handleUnlinkedChatMessage(chatId: string, text: string) {
+  try {
+    await telegramRequest("sendChatAction", { chat_id: chatId, action: "typing" });
+    
+    const { isAIAvailable, getFallbackMessage } = await import("./ai-health");
+    
+    if (!isAIAvailable()) {
+      const fallbackMsg = getFallbackMessage() + " Link your account to unlock trading features!";
+      await sendMessage(chatId, fallbackMsg);
+      return;
+    }
+    
+    const { chatWithAIUnlinked } = await import("./ai");
+    const response = await chatWithAIUnlinked(chatId, text);
+    await sendMessage(chatId, response);
+  } catch (e: any) {
+    await log("telegram", "chat_ai_unlinked", "error", {
+      errorMessage: e.message,
+      errorStack: e.stack,
+      context: { chatId },
+    });
+    await sendMessage(chatId, "Sorry, I'm having trouble thinking right now. Try again in a moment.");
+  }
+}
+
 export async function handleWebhookUpdate(update: any): Promise<void> {
   const start = Date.now();
 
@@ -478,7 +503,7 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
     } else if (user) {
       await handleChatMessage(chatId, text, user);
     } else {
-      await sendMessage(chatId, "Hey! Link your Penny Pincher account first. Go to Settings in the app and click 'Link Telegram'.");
+      await handleUnlinkedChatMessage(chatId, text);
     }
 
     await log("telegram", "webhook_update", "success", { latencyMs: Date.now() - start, userId: user?.id });
