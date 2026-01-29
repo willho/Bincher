@@ -6,6 +6,7 @@ import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferenc
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
 import { getHoldersCached } from "./price-aggregator";
+import { fetchTokenMetadata } from "./helius";
 
 // In-memory store for pending admin instructions (expires after 5 minutes)
 const pendingAdminInstructions: Map<number, { instruction: string; expiresAt: number }> = new Map();
@@ -118,6 +119,17 @@ export async function storeCommunityInsight(
   const now = Math.floor(Date.now() / 1000);
   const expiresAt = now + (7 * 24 * 60 * 60); // Expires in 7 days
   
+  // Fetch current token price to track performance over time
+  let priceAtShare: number | null = null;
+  try {
+    const metadata = await fetchTokenMetadata(tokenMint);
+    if (metadata?.priceUsd) {
+      priceAtShare = metadata.priceUsd;
+    }
+  } catch (err) {
+    console.warn(`[COMMUNITY] Could not fetch price for ${tokenSymbol}:`, err);
+  }
+  
   await db.insert(communityInsights).values({
     tokenMint,
     tokenSymbol,
@@ -126,12 +138,13 @@ export async function storeCommunityInsight(
     sourceUserId: userId,
     consentedAt: now,
     sourceCredibility: credibility,
+    priceAtShare,
     createdAt: now,
     expiresAt,
     isActive: true,
   });
   
-  console.log(`[COMMUNITY] User ${userId} shared insight for ${tokenSymbol}: "${summary.slice(0, 50)}..."`);
+  console.log(`[COMMUNITY] User ${userId} shared insight for ${tokenSymbol} at $${priceAtShare?.toFixed(6) || 'unknown'}: "${summary.slice(0, 50)}..."`);
 }
 
 // Get community insights for a token (excluding the requesting user's own insights)
@@ -1473,7 +1486,7 @@ export async function getAIInsights(): Promise<{
 }
 
 // Wallet scoring for community suggestions
-import { analyzeWalletTradingHistory, fetchTokenMetadata, type HistoricalSwap } from "./helius";
+import { analyzeWalletTradingHistory, type HistoricalSwap } from "./helius";
 
 export interface WalletScoreResult {
   score: number;
