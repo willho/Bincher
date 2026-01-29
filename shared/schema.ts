@@ -319,6 +319,8 @@ export const communityInsights = pgTable("community_insights", {
   consentedAt: integer("consented_at").notNull(),
   // Quality/credibility indicators (no user-identifying details)
   sourceCredibility: text("source_credibility"), // "new_trader", "experienced", "successful_track_record"
+  // Price tracking - to compare insight against token performance
+  priceAtShare: real("price_at_share"), // USD price when insight was shared
   // Lifecycle
   createdAt: integer("created_at").notNull(),
   expiresAt: integer("expires_at"), // Insights can expire to stay fresh
