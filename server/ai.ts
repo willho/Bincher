@@ -1,17 +1,57 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
 import { getHoldersCached } from "./price-aggregator";
 import { fetchTokenMetadata } from "./helius";
+import { buyToken, sellToken, getTokenPrice } from "./jupiter";
+import { getHotWalletBalance, getTradeConfig, updateTradeConfig, getHoldings, getPendingBuys, getOrCreateHotWallet } from "./wallet";
 
 // In-memory store for pending admin instructions (expires after 5 minutes)
 const pendingAdminInstructions: Map<number, { instruction: string; expiresAt: number }> = new Map();
 const ADMIN_CODEWORD = "Admin1112";
 const PENDING_INSTRUCTION_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Pending trade confirmations - Miss Pincher proposes, user confirms
+interface PendingTrade {
+  type: 'buy' | 'sell';
+  tokenMint: string;
+  tokenSymbol: string;
+  amount: number; // SOL for buys, token amount for sells
+  proposedAt: number;
+  expiresAt: number;
+  userConfirmed: boolean; // Server-side: must be true before execution
+}
+const pendingTrades: Map<number, PendingTrade> = new Map();
+const PENDING_TRADE_TTL = 3 * 60 * 1000; // 3 minutes to confirm
+
+// Server-side confirmation: must be called before execute can proceed
+function confirmPendingTrade(userId: number): { success: boolean; message: string } {
+  const pending = pendingTrades.get(userId);
+  if (!pending) {
+    return { success: false, message: "No pending trade to confirm." };
+  }
+  if (Date.now() > pending.expiresAt) {
+    pendingTrades.delete(userId);
+    return { success: false, message: "Trade proposal expired. Need to propose again." };
+  }
+  pending.userConfirmed = true;
+  return { success: true, message: `Confirmed ${pending.type} for ${pending.tokenSymbol}. Executing...` };
+}
+
+// Cleanup expired pending trades every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, trade] of pendingTrades.entries()) {
+    if (now > trade.expiresAt) {
+      pendingTrades.delete(userId);
+      console.log(`[Trading] Expired pending ${trade.type} for user ${userId} (${trade.tokenSymbol})`);
+    }
+  }
+}, 60000);
 
 // Check if user is admin
 async function isUserAdmin(userId: number): Promise<boolean> {
@@ -721,6 +761,218 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  // Trading Action Tools
+  {
+    type: "function",
+    function: {
+      name: "propose_buy",
+      description: "Propose buying a token with SOL from the user's hot wallet. ALWAYS propose first and wait for user confirmation before executing. Use when user asks to buy a token.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenMint: {
+            type: "string",
+            description: "The Solana token mint address to buy"
+          },
+          tokenSymbol: {
+            type: "string",
+            description: "The token symbol (e.g., 'BONK', 'PEPE')"
+          },
+          solAmount: {
+            type: "number",
+            description: "Amount of SOL to spend (default 0.1 if not specified)"
+          }
+        },
+        required: ["tokenMint", "tokenSymbol"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "propose_sell",
+      description: "Propose selling a token from user's holdings. ALWAYS propose first and wait for user confirmation. Use when user asks to sell or exit a position.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenMint: {
+            type: "string",
+            description: "The Solana token mint address to sell"
+          },
+          tokenSymbol: {
+            type: "string",
+            description: "The token symbol"
+          },
+          percentToSell: {
+            type: "number",
+            description: "Percentage of holdings to sell (1-100). Default 100 for full exit."
+          }
+        },
+        required: ["tokenMint", "tokenSymbol"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "execute_pending_trade",
+      description: "Execute a trade that was previously proposed and user confirmed. Only call this after user says 'yes', 'do it', 'confirm', 'go ahead', or similar confirmation.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_pending_trade",
+      description: "Cancel a pending trade proposal. Use when user says 'no', 'cancel', 'nevermind', or rejects the trade.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_wallet_balance",
+      description: "Check the user's hot wallet SOL balance. Use when user asks about balance, funds, or how much they can spend.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_holdings_summary",
+      description: "Get a summary of user's current token holdings with P&L. Use when user asks about their bags, portfolio, positions, or what they own.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_pending_orders",
+      description: "Get list of pending buy orders queued for execution. Use when user asks about pending trades, queued buys, or what's waiting.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  // Copy Trading Configuration Tools
+  {
+    type: "function",
+    function: {
+      name: "set_copy_trading",
+      description: "Enable, disable, or configure copy trading settings. Use when user wants to turn on/off auto-copy, set buy amounts, delays, or take-profit levels.",
+      parameters: {
+        type: "object",
+        properties: {
+          enabled: {
+            type: "boolean",
+            description: "Enable or disable copy trading"
+          },
+          buyPercentage: {
+            type: "number",
+            description: "Percentage of detected trade value to copy (1-100)"
+          },
+          minDelayMinutes: {
+            type: "number",
+            description: "Minimum delay before executing copy trade (minutes)"
+          },
+          maxDelayMinutes: {
+            type: "number",
+            description: "Maximum delay before executing copy trade (minutes)"
+          },
+          reclaimMultiplier: {
+            type: "number",
+            description: "Take-profit multiplier (e.g., 4 means sell at 4x)"
+          },
+          dumpAlertThreshold: {
+            type: "number",
+            description: "Alert when token dumps by this percentage (e.g., 50 = -50%)"
+          }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_copy_trading_settings",
+      description: "Get current copy trading configuration. Use when user asks about their settings, current config, or how copy trading is set up.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  // Wallet Monitoring Tools
+  {
+    type: "function",
+    function: {
+      name: "enable_wallet_copy",
+      description: "Enable copying trades from a specific monitored wallet. Use when user wants to start copying a wallet or enable copy trading for a wallet.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletAddress: {
+            type: "string",
+            description: "The Solana wallet address to copy trades from"
+          },
+          label: {
+            type: "string",
+            description: "Optional friendly name for the wallet"
+          }
+        },
+        required: ["walletAddress"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "disable_wallet_copy",
+      description: "Disable copying trades from a specific wallet. Use when user wants to stop copying a wallet but keep monitoring it.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletAddress: {
+            type: "string",
+            description: "The wallet address to stop copying"
+          }
+        },
+        required: ["walletAddress"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_monitored_wallets",
+      description: "List all wallets the user is monitoring with their copy status. Use when user asks what wallets they're watching or copying.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
   }
 ];
 
@@ -881,6 +1133,385 @@ async function executePreferenceUpdate(
 ): Promise<{ success: boolean; message: string }> {
   return updateUserPreferences(userId, args);
 }
+
+// ============= TRADING TOOL EXECUTION FUNCTIONS =============
+
+// Propose a buy - stores pending trade for confirmation
+async function executeProposeBuy(
+  userId: number,
+  args: { tokenMint: string; tokenSymbol: string; solAmount?: number }
+): Promise<{ success: boolean; message: string }> {
+  const solAmount = args.solAmount || 0.1;
+  
+  // Check wallet exists
+  const wallet = await getOrCreateHotWallet(userId);
+  if (!wallet) {
+    return { success: false, message: "No hot wallet configured. User needs to set one up first." };
+  }
+  
+  // Check balance
+  const balance = await getHotWalletBalance(userId);
+  if (balance < solAmount) {
+    return { 
+      success: false, 
+      message: `Insufficient balance: ${balance.toFixed(4)} SOL available, need ${solAmount} SOL` 
+    };
+  }
+  
+  // Get current price
+  const price = await getTokenPrice(args.tokenMint);
+  const priceStr = price ? `$${price.toFixed(8)}` : 'unknown price';
+  
+  // Store pending trade - requires explicit confirmation before execute
+  pendingTrades.set(userId, {
+    type: 'buy',
+    tokenMint: args.tokenMint,
+    tokenSymbol: args.tokenSymbol,
+    amount: solAmount,
+    proposedAt: Date.now(),
+    expiresAt: Date.now() + PENDING_TRADE_TTL,
+    userConfirmed: false,
+  });
+  
+  return {
+    success: true,
+    message: `PENDING_TRADE: Buy ${args.tokenSymbol} with ${solAmount} SOL at ${priceStr}. Balance: ${balance.toFixed(4)} SOL. AWAITING CONFIRMATION.`
+  };
+}
+
+// Propose a sell - stores pending trade for confirmation
+async function executeProposeSell(
+  userId: number,
+  args: { tokenMint: string; tokenSymbol: string; percentToSell?: number }
+): Promise<{ success: boolean; message: string }> {
+  const percentToSell = args.percentToSell || 100;
+  
+  // Check if user has holdings
+  const userHoldings = await getHoldings(userId);
+  const holding = userHoldings.find(h => h.tokenMint === args.tokenMint);
+  
+  if (!holding) {
+    return { success: false, message: `User doesn't own any ${args.tokenSymbol}` };
+  }
+  
+  const amountToSell = (holding.currentAmount * percentToSell) / 100;
+  const price = await getTokenPrice(args.tokenMint);
+  const estimatedValue = price ? amountToSell * price : null;
+  const valueStr = estimatedValue ? `~$${estimatedValue.toFixed(2)}` : 'unknown value';
+  
+  // Store pending trade - requires explicit confirmation before execute
+  pendingTrades.set(userId, {
+    type: 'sell',
+    tokenMint: args.tokenMint,
+    tokenSymbol: args.tokenSymbol,
+    amount: amountToSell,
+    proposedAt: Date.now(),
+    expiresAt: Date.now() + PENDING_TRADE_TTL,
+    userConfirmed: false,
+  });
+  
+  return {
+    success: true,
+    message: `PENDING_TRADE: Sell ${percentToSell}% of ${args.tokenSymbol} (${amountToSell.toLocaleString()} tokens, ${valueStr}). AWAITING CONFIRMATION.`
+  };
+}
+
+// Execute a confirmed pending trade - requires server-side confirmation first
+async function executeConfirmedTrade(userId: number): Promise<{ success: boolean; message: string }> {
+  const pending = pendingTrades.get(userId);
+  
+  if (!pending) {
+    return { success: false, message: "No pending trade to execute. Nothing was proposed." };
+  }
+  
+  if (Date.now() > pending.expiresAt) {
+    pendingTrades.delete(userId);
+    return { success: false, message: "Trade proposal expired. Need to propose again." };
+  }
+  
+  // Server-side security: require explicit confirmation before execution
+  if (!pending.userConfirmed) {
+    return { success: false, message: "Trade not confirmed by user. User must explicitly confirm first." };
+  }
+  
+  pendingTrades.delete(userId);
+  
+  if (pending.type === 'buy') {
+    const result = await buyToken(userId, pending.tokenMint, pending.amount);
+    if (result.success) {
+      return {
+        success: true,
+        message: `BUY EXECUTED: Bought ${pending.tokenSymbol} for ${pending.amount} SOL. Signature: ${result.signature?.slice(0, 20)}...`
+      };
+    } else {
+      return { success: false, message: `Buy failed: ${result.error}` };
+    }
+  } else {
+    const result = await sellToken(userId, pending.tokenMint, pending.amount);
+    if (result.success) {
+      return {
+        success: true,
+        message: `SELL EXECUTED: Sold ${pending.tokenSymbol}. Signature: ${result.signature?.slice(0, 20)}...`
+      };
+    } else {
+      return { success: false, message: `Sell failed: ${result.error}` };
+    }
+  }
+}
+
+// Cancel pending trade
+function executeCancelTrade(userId: number): { success: boolean; message: string } {
+  const pending = pendingTrades.get(userId);
+  if (!pending) {
+    return { success: true, message: "No pending trade to cancel." };
+  }
+  pendingTrades.delete(userId);
+  return { success: true, message: `Cancelled pending ${pending.type} for ${pending.tokenSymbol}.` };
+}
+
+// Check wallet balance
+async function executeCheckBalance(userId: number): Promise<{ success: boolean; message: string }> {
+  const wallet = await getOrCreateHotWallet(userId);
+  if (!wallet) {
+    return { success: false, message: "No hot wallet configured." };
+  }
+  const balance = await getHotWalletBalance(userId);
+  return {
+    success: true,
+    message: `Hot wallet balance: ${balance.toFixed(4)} SOL. Address: ${wallet.publicKey.slice(0, 8)}...${wallet.publicKey.slice(-6)}`
+  };
+}
+
+// Get holdings summary
+async function executeGetHoldings(userId: number): Promise<{ success: boolean; message: string }> {
+  const userHoldings = await getHoldings(userId);
+  
+  if (userHoldings.length === 0) {
+    return { success: true, message: "No token holdings. User hasn't bought anything yet." };
+  }
+  
+  const summaries: string[] = [];
+  let totalValueUsd = 0;
+  let totalCostUsd = 0;
+  
+  for (const h of userHoldings.slice(0, 10)) {
+    const currentPrice = await getTokenPrice(h.tokenMint);
+    const currentValue = currentPrice ? h.currentAmount * currentPrice : null;
+    const costBasis = h.solSpent * 200; // Rough SOL to USD
+    const multiplier = h.lastPrice && h.buyPrice ? (h.lastPrice / h.buyPrice) : 1;
+    const pnlStr = multiplier >= 1 ? `+${((multiplier - 1) * 100).toFixed(0)}%` : `${((multiplier - 1) * 100).toFixed(0)}%`;
+    
+    if (currentValue) totalValueUsd += currentValue;
+    totalCostUsd += costBasis;
+    
+    summaries.push(`${h.tokenSymbol}: ${h.currentAmount.toLocaleString()} tokens (${pnlStr}, spent ${h.solSpent.toFixed(3)} SOL)`);
+  }
+  
+  const remainingCount = userHoldings.length - 10;
+  if (remainingCount > 0) {
+    summaries.push(`...and ${remainingCount} more positions`);
+  }
+  
+  return {
+    success: true,
+    message: `Holdings (${userHoldings.length} positions):\n${summaries.join('\n')}`
+  };
+}
+
+// Get pending orders
+async function executeGetPendingOrders(userId: number): Promise<{ success: boolean; message: string }> {
+  const pending = await getPendingBuys(userId);
+  
+  if (pending.length === 0) {
+    return { success: true, message: "No pending buy orders in queue." };
+  }
+  
+  const summaries = pending.slice(0, 10).map(p => {
+    const status = p.status || 'active';
+    const scheduled = new Date(p.scheduledBuyAt * 1000).toLocaleTimeString();
+    return `${p.tokenSymbol}: ${p.solAmount?.toFixed(3) || '?'} SOL, status: ${status}, scheduled: ${scheduled}`;
+  });
+  
+  return {
+    success: true,
+    message: `Pending orders (${pending.length}):\n${summaries.join('\n')}`
+  };
+}
+
+// Set copy trading config
+async function executeSetCopyTrading(
+  userId: number,
+  args: {
+    enabled?: boolean;
+    buyPercentage?: number;
+    minDelayMinutes?: number;
+    maxDelayMinutes?: number;
+    reclaimMultiplier?: number;
+    dumpAlertThreshold?: number;
+  }
+): Promise<{ success: boolean; message: string }> {
+  const updates: any = {};
+  const changes: string[] = [];
+  
+  if (args.enabled !== undefined) {
+    updates.enabled = args.enabled;
+    changes.push(`copy trading ${args.enabled ? 'ENABLED' : 'DISABLED'}`);
+  }
+  if (args.buyPercentage !== undefined) {
+    updates.buyPercentage = Math.min(100, Math.max(1, args.buyPercentage));
+    changes.push(`buy percentage set to ${updates.buyPercentage}%`);
+  }
+  if (args.minDelayMinutes !== undefined) {
+    updates.minDelayMinutes = args.minDelayMinutes;
+    changes.push(`min delay set to ${args.minDelayMinutes} minutes`);
+  }
+  if (args.maxDelayMinutes !== undefined) {
+    updates.maxDelayMinutes = args.maxDelayMinutes;
+    changes.push(`max delay set to ${args.maxDelayMinutes} minutes`);
+  }
+  if (args.reclaimMultiplier !== undefined) {
+    updates.reclaimMultiplier = args.reclaimMultiplier;
+    changes.push(`take-profit set at ${args.reclaimMultiplier}x`);
+  }
+  if (args.dumpAlertThreshold !== undefined) {
+    updates.dumpAlertThreshold = args.dumpAlertThreshold;
+    changes.push(`dump alert at -${args.dumpAlertThreshold}%`);
+  }
+  
+  if (Object.keys(updates).length === 0) {
+    return { success: false, message: "No settings specified to change." };
+  }
+  
+  await updateTradeConfig(userId, updates);
+  
+  return {
+    success: true,
+    message: `Copy trading updated: ${changes.join(', ')}`
+  };
+}
+
+// Get current copy trading settings
+async function executeGetCopyTradingSettings(userId: number): Promise<{ success: boolean; message: string }> {
+  const config = await getTradeConfig(userId);
+  
+  return {
+    success: true,
+    message: `Copy Trading Settings:
+- Status: ${config.enabled ? 'ENABLED' : 'DISABLED'}
+- Buy percentage: ${config.buyPercentage}%
+- Delay: ${config.minDelayMinutes}-${config.maxDelayMinutes} minutes
+- Take-profit: ${config.reclaimMultiplier}x
+- Dump alert: -${config.dumpAlertThreshold}%
+- Min buy score: ${config.minBuyScore ?? 'none (all tokens)'}`
+  };
+}
+
+// Enable wallet copy trading
+async function executeEnableWalletCopy(
+  userId: number,
+  args: { walletAddress: string; label?: string }
+): Promise<{ success: boolean; message: string }> {
+  // Check if wallet is already being monitored
+  const existing = await db.select()
+    .from(monitoredWallets)
+    .where(and(
+      eq(monitoredWallets.userId, userId),
+      eq(monitoredWallets.walletAddress, args.walletAddress)
+    ))
+    .limit(1);
+  
+  if (existing.length > 0) {
+    // Update to enable copy trading
+    await db.update(monitoredWallets)
+      .set({ copyTradeEnabled: true, label: args.label || existing[0].label })
+      .where(eq(monitoredWallets.id, existing[0].id));
+    return {
+      success: true,
+      message: `Copy trading enabled for wallet ${args.label || args.walletAddress.slice(0, 8)}...`
+    };
+  } else {
+    return {
+      success: false,
+      message: `Wallet ${args.walletAddress.slice(0, 8)}... is not being monitored. Need to add it first.`
+    };
+  }
+}
+
+// Disable wallet copy trading
+async function executeDisableWalletCopy(
+  userId: number,
+  args: { walletAddress: string }
+): Promise<{ success: boolean; message: string }> {
+  const existing = await db.select()
+    .from(monitoredWallets)
+    .where(and(
+      eq(monitoredWallets.userId, userId),
+      eq(monitoredWallets.walletAddress, args.walletAddress)
+    ))
+    .limit(1);
+  
+  if (existing.length === 0) {
+    return { success: false, message: `Wallet not found in monitored list.` };
+  }
+  
+  await db.update(monitoredWallets)
+    .set({ copyTradeEnabled: false })
+    .where(eq(monitoredWallets.id, existing[0].id));
+  
+  return {
+    success: true,
+    message: `Copy trading disabled for wallet ${existing[0].label || args.walletAddress.slice(0, 8)}...`
+  };
+}
+
+// List monitored wallets
+async function executeListMonitoredWallets(userId: number): Promise<{ success: boolean; message: string }> {
+  const wallets = await db.select()
+    .from(monitoredWallets)
+    .where(eq(monitoredWallets.userId, userId));
+  
+  if (wallets.length === 0) {
+    return { success: true, message: "No wallets being monitored." };
+  }
+  
+  const summaries = wallets.map(w => {
+    const copyStatus = w.copyTradeEnabled ? '[COPY ON]' : '[watch only]';
+    const label = w.label || w.walletAddress.slice(0, 8) + '...';
+    return `${copyStatus} ${label}`;
+  });
+  
+  return {
+    success: true,
+    message: `Monitored wallets (${wallets.length}):\n${summaries.join('\n')}`
+  };
+}
+
+// Check if message is a trade confirmation
+function isTradeConfirmation(message: string): boolean {
+  const confirmPhrases = ['yes', 'do it', 'confirm', 'go ahead', 'yep', 'yeah', 'ok', 'execute', 'send it', 'lets go', "let's go", 'approved', 'buy', 'sell'];
+  const lower = message.toLowerCase().trim();
+  return confirmPhrases.some(phrase => lower === phrase || lower.startsWith(phrase + ' ') || lower.endsWith(' ' + phrase));
+}
+
+// Check if message is a trade rejection
+function isTradeRejection(message: string): boolean {
+  const rejectPhrases = ['no', 'cancel', 'nevermind', 'never mind', 'nope', 'nah', 'stop', 'abort', 'dont', "don't", 'wait'];
+  const lower = message.toLowerCase().trim();
+  return rejectPhrases.some(phrase => lower === phrase || lower.startsWith(phrase + ' ') || lower.endsWith(' ' + phrase));
+}
+
+// Get pending trade for context
+function getPendingTradeContext(userId: number): string | null {
+  const pending = pendingTrades.get(userId);
+  if (!pending || Date.now() > pending.expiresAt) {
+    if (pending) pendingTrades.delete(userId);
+    return null;
+  }
+  const timeLeft = Math.floor((pending.expiresAt - Date.now()) / 1000);
+  return `PENDING TRADE: ${pending.type.toUpperCase()} ${pending.tokenSymbol} for ${pending.amount} ${pending.type === 'buy' ? 'SOL' : 'tokens'}. Expires in ${timeLeft}s. Awaiting confirmation.`;
+}
+
+// ============= END TRADING TOOL FUNCTIONS =============
 
 // Build default user relationship for new users
 function getDefaultRelationship(): UserRelationship {
@@ -1080,6 +1711,21 @@ export async function chatWithAI(
     return consentResponse;
   }
   
+  // Server-side trade confirmation detection
+  // When user confirms and there's a pending trade, set the confirmation flag
+  const pendingTrade = pendingTrades.get(userId);
+  if (pendingTrade && !pendingTrade.userConfirmed) {
+    const confirmPatterns = /^(yes|yep|yeah|yea|do it|confirm|confirmed|go|go ahead|execute|proceed|ok|okay|sure|send it|let's go|lets go|lfg)$/i;
+    const msgTrimmed = userMessage.trim().toLowerCase().replace(/[!.]+$/, '');
+    if (confirmPatterns.test(msgTrimmed)) {
+      // User explicitly confirmed - set server-side confirmation flag
+      const confirmResult = confirmPendingTrade(userId);
+      if (confirmResult.success) {
+        console.log(`[Trading] User ${userId} confirmed pending ${pendingTrade.type} for ${pendingTrade.tokenSymbol}`);
+      }
+    }
+  }
+  
   await db.insert(aiChatMessages).values({
     userId,
     role: "user",
@@ -1120,13 +1766,49 @@ export async function chatWithAI(
   // Generate the personality-driven system prompt
   let systemPrompt = buildPincherSystemPrompt(pincherContext);
   
+  // Check for pending trade
+  const pendingTradeCtx = getPendingTradeContext(userId);
+  
   // Add actions and dynamic stats
   systemPrompt += `
 
 ACTIONS YOU CAN TAKE:
-- Refresh/rescore a specific token: use refresh_token_score
-- Refresh all token scores: use refresh_all_scores  
-- Update user preferences: use update_user_preferences (when they want to mute tokens, set thresholds, change summary focus, etc.)
+
+TRADING (always propose first, execute after confirmation):
+- propose_buy: Propose buying a token (specify tokenMint, tokenSymbol, and optionally solAmount)
+- propose_sell: Propose selling holdings (specify tokenMint, tokenSymbol, optionally percentToSell)
+- execute_pending_trade: ONLY use after user confirms with "yes", "do it", "confirm", etc.
+- cancel_pending_trade: When user says "no", "cancel", "nevermind"
+- check_wallet_balance: Check user's hot wallet SOL balance
+- get_holdings_summary: Show user's current token holdings and P&L
+- get_pending_orders: Show pending buy orders in queue
+
+COPY TRADING CONFIGURATION:
+- set_copy_trading: Enable/disable and configure copy trading settings
+- get_copy_trading_settings: Show current copy trading configuration
+- enable_wallet_copy: Enable copy trading for a monitored wallet
+- disable_wallet_copy: Disable copy trading for a wallet (keep monitoring)
+- list_monitored_wallets: Show all monitored wallets and their copy status
+
+TOKEN ANALYSIS:
+- refresh_token_score: Refresh/rescore a specific token
+- refresh_all_scores: Refresh all token scores
+
+PREFERENCES:
+- update_user_preferences: Mute tokens, set thresholds, change summary focus
+
+${pendingTradeCtx ? `
+PENDING TRADE AWAITING CONFIRMATION:
+${pendingTradeCtx}
+If user's message is confirmation ("yes", "do it", "go ahead", etc.) - use execute_pending_trade.
+If user's message is rejection ("no", "cancel", "wait") - use cancel_pending_trade.
+` : ''}
+
+TRADING RULES:
+1. ALWAYS propose a trade first using propose_buy or propose_sell
+2. WAIT for explicit confirmation before calling execute_pending_trade
+3. Tell user what you're about to do and ask if they want to proceed
+4. After proposing, remind them to say "yes" or "do it" to confirm
 
 When users ask you to focus on different things in summaries, mute tokens, or change their alert settings - use update_user_preferences.
 
@@ -1176,16 +1858,62 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
       
       for (const toolCall of message.tool_calls) {
         try {
-          const args = JSON.parse(toolCall.function.arguments);
+          // Type guard for standard function tool calls
+          if (!('function' in toolCall)) continue;
+          const funcCall = toolCall as { function: { name: string; arguments: string }; id: string };
+          const args = JSON.parse(funcCall.function.arguments);
+          const toolName = funcCall.function.name;
           
-          if (toolCall.function.name === "refresh_token_score") {
+          if (toolName === "refresh_token_score") {
             const result = await executeScoreRefresh(args.tokenIdentifier);
             toolResults.push(result.message);
-          } else if (toolCall.function.name === "refresh_all_scores") {
+          } else if (toolName === "refresh_all_scores") {
             const result = await executeBatchScoreRefresh(args.limit || 10);
             toolResults.push(result.message);
-          } else if (toolCall.function.name === "update_user_preferences") {
+          } else if (toolName === "update_user_preferences") {
             const result = await executePreferenceUpdate(userId, args);
+            toolResults.push(result.message);
+          }
+          // Trading Action Tools
+          else if (toolName === "propose_buy") {
+            const result = await executeProposeBuy(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "propose_sell") {
+            const result = await executeProposeSell(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "execute_pending_trade") {
+            const result = await executeConfirmedTrade(userId);
+            toolResults.push(result.message);
+          } else if (toolName === "cancel_pending_trade") {
+            const result = executeCancelTrade(userId);
+            toolResults.push(result.message);
+          } else if (toolName === "check_wallet_balance") {
+            const result = await executeCheckBalance(userId);
+            toolResults.push(result.message);
+          } else if (toolName === "get_holdings_summary") {
+            const result = await executeGetHoldings(userId);
+            toolResults.push(result.message);
+          } else if (toolName === "get_pending_orders") {
+            const result = await executeGetPendingOrders(userId);
+            toolResults.push(result.message);
+          }
+          // Copy Trading Configuration Tools
+          else if (toolName === "set_copy_trading") {
+            const result = await executeSetCopyTrading(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "get_copy_trading_settings") {
+            const result = await executeGetCopyTradingSettings(userId);
+            toolResults.push(result.message);
+          }
+          // Wallet Monitoring Tools
+          else if (toolName === "enable_wallet_copy") {
+            const result = await executeEnableWalletCopy(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "disable_wallet_copy") {
+            const result = await executeDisableWalletCopy(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "list_monitored_wallets") {
+            const result = await executeListMonitoredWallets(userId);
             toolResults.push(result.message);
           }
         } catch (parseError) {
@@ -1617,7 +2345,7 @@ export async function scoreWallet(walletAddress: string): Promise<WalletScoreRes
     let totalRealizedPnl = 0;
     let tradeCount = 0;
 
-    for (const [, summary] of history.tokenSummaries) {
+    for (const [, summary] of Array.from(history.tokenSummaries)) {
       // Only count tokens with both buys and sells (realized trades)
       if (summary.totalBuys > 0 && summary.totalSells > 0) {
         tradeCount++;

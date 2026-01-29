@@ -42,6 +42,8 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   label: text("label"),
   enabled: boolean("enabled").default(true),
   createdAt: integer("created_at").notNull(),
+  // Copy trading - whether to auto-copy this wallet's trades
+  copyTradeEnabled: boolean("copy_trade_enabled").default(false),
   // Community sharing fields
   isShared: boolean("is_shared").default(false),
   shareStatus: text("share_status").default("none"), // none, pending, approved, rejected

@@ -632,10 +632,12 @@ export async function registerRoutes(
           }
         }
 
+        // Get the monitored wallet details (used for alerts and copy trading)
+        const sourceWallet = await storage.getMonitoredWalletByAddress(swapWalletAddress);
+        
         // Send Telegram swap alert
-        const sourceWalletForAlert = await storage.getMonitoredWalletByAddress(swapWalletAddress);
         sendTelegramSwapAlert(userId, {
-          walletLabel: sourceWalletForAlert?.label || "Wallet",
+          walletLabel: sourceWallet?.label || "Wallet",
           walletAddress: swapWalletAddress,
           tokenSymbol: swap.type === "BUY" ? swap.toTokenSymbol : swap.fromTokenSymbol,
           tokenMint: swap.type === "BUY" ? swap.toToken : swap.fromToken,
@@ -646,13 +648,14 @@ export async function registerRoutes(
         }).catch(err => console.error("Telegram alert error:", err));
 
         // Copy trading: Queue pending buy if this is a BUY (SOL/USDC -> Token)
+        // Check both global copy trading setting AND wallet-specific copy trade setting
         const tradeConf = await getTradeConfig(userId);
-        if (tradeConf.enabled && isBuy) {
+        const walletCopyEnabled = sourceWallet?.copyTradeEnabled === true;
+        
+        // Global copy trading must be enabled, AND this specific wallet must have copy trading enabled
+        if (tradeConf.enabled && walletCopyEnabled && isBuy) {
           const alreadyBought = await hasTokenBeenBought(userId, swap.toToken);
           if (!alreadyBought) {
-            // Get the monitored wallet details for source tracking
-            const sourceWallet = await storage.getMonitoredWalletByAddress(swapWalletAddress);
-            
             const pendingBuy = await addPendingBuy(
               userId,
               swap.toToken,
@@ -667,11 +670,13 @@ export async function registerRoutes(
               }
             );
             if (pendingBuy) {
-              console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol, "for user:", userId);
+              console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol, "for user:", userId, "from wallet:", sourceWallet?.label || swapWalletAddress);
             }
           } else {
             console.log("Copy trade: Token already bought/pending, skipping", swap.toTokenSymbol);
           }
+        } else if (tradeConf.enabled && isBuy && !walletCopyEnabled) {
+          console.log("Copy trade: Wallet", sourceWallet?.label || swapWalletAddress, "doesn't have copy trading enabled, skipping");
         }
 
         // Update status
