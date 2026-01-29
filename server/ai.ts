@@ -147,8 +147,54 @@ export async function storeCommunityInsight(
   console.log(`[COMMUNITY] User ${userId} shared insight for ${tokenSymbol} at $${priceAtShare?.toFixed(6) || 'unknown'}: "${summary.slice(0, 50)}..."`);
 }
 
-// Get community insights for a token (excluding the requesting user's own insights)
-export async function getCommunityInsights(tokenMint: string, excludeUserId: number): Promise<{ sentiment: string; summary: string; credibility: string | null }[]> {
+// Community insight with price performance data
+export interface CommunityInsightWithPerformance {
+  sentiment: string;
+  summary: string;
+  credibility: string | null;
+  createdAt: number;
+  priceAtShare: number | null;
+  ageText: string; // e.g., "3 days ago"
+  performanceText: string | null; // e.g., "up 45%" or null if no price data
+}
+
+// Format relative time for insight age
+function formatInsightAge(createdAtTimestamp: number): string {
+  const now = Math.floor(Date.now() / 1000);
+  const seconds = now - createdAtTimestamp;
+  
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    return `${mins} ${mins === 1 ? "minute" : "minutes"} ago`;
+  }
+  if (seconds < 86400) {
+    const hours = Math.floor(seconds / 3600);
+    return `${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+  }
+  const days = Math.floor(seconds / 86400);
+  return `${days} ${days === 1 ? "day" : "days"} ago`;
+}
+
+// Calculate price performance since insight was shared
+function formatPricePerformance(priceAtShare: number | null, currentPrice: number | null): string | null {
+  if (!priceAtShare || !currentPrice || priceAtShare <= 0) return null;
+  
+  const changePercent = ((currentPrice - priceAtShare) / priceAtShare) * 100;
+  const direction = changePercent >= 0 ? "up" : "down";
+  const absChange = Math.abs(changePercent);
+  
+  if (absChange < 1) return "flat since";
+  if (absChange >= 1000) return `${direction} ${(absChange / 100).toFixed(0)}x since`;
+  return `${direction} ${absChange.toFixed(0)}% since`;
+}
+
+// Get community insights for a token with performance data
+export async function getCommunityInsights(
+  tokenMint: string, 
+  excludeUserId: number,
+  currentPrice?: number | null
+): Promise<CommunityInsightWithPerformance[]> {
   const now = Math.floor(Date.now() / 1000);
   
   // Query with sourceUserId to filter in JS (drizzle doesn't have != operator easily)
@@ -158,6 +204,8 @@ export async function getCommunityInsights(tokenMint: string, excludeUserId: num
     credibility: communityInsights.sourceCredibility,
     sourceUserId: communityInsights.sourceUserId,
     expiresAt: communityInsights.expiresAt,
+    createdAt: communityInsights.createdAt,
+    priceAtShare: communityInsights.priceAtShare,
   })
     .from(communityInsights)
     .where(and(
@@ -167,12 +215,20 @@ export async function getCommunityInsights(tokenMint: string, excludeUserId: num
     .orderBy(desc(communityInsights.createdAt))
     .limit(10);
   
-  // Filter out the user's own insights and expired ones, then strip identifying fields
+  // Filter out the user's own insights and expired ones, then add performance data
   return rawInsights
     .filter(i => i.sourceUserId !== excludeUserId) // Exclude user's own insights
     .filter(i => !i.expiresAt || i.expiresAt > now) // Exclude expired insights
     .slice(0, 5)
-    .map(({ sentiment, summary, credibility }) => ({ sentiment, summary, credibility })); // Strip sourceUserId before returning
+    .map(({ sentiment, summary, credibility, createdAt, priceAtShare }) => ({
+      sentiment,
+      summary,
+      credibility,
+      createdAt,
+      priceAtShare,
+      ageText: formatInsightAge(createdAt),
+      performanceText: formatPricePerformance(priceAtShare, currentPrice ?? null),
+    }));
 }
 
 // Handle insight consent flow
