@@ -95,3 +95,37 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - **Trading Soul**: Realistic advice, score-weighted responses
 - **Relationship Tracking**: Affinity scores, keeps receipts for clap backs
 - **Professional Core**: Never sabotages function, alerts/analysis stay accurate
+
+### PHASE 5: AI Trading Control ✅
+- [x] Trading action tools: propose_buy, propose_sell with permission confirmation flow
+- [x] Server-side confirmation enforcement: userConfirmed flag required before execution
+- [x] Configuration tools: set_copy_trading, get_copy_trading_settings
+- [x] Wallet monitoring tools: enable_wallet_copy, disable_wallet_copy, list_monitored_wallets
+- [x] Query tools: check_wallet_balance, get_holdings_summary, get_pending_orders
+- [x] 3-minute expiry on pending trades with automatic cleanup
+- [x] Webhook copy trading checks BOTH global setting AND wallet-specific copyTradeEnabled
+- [x] Take-profit automation in price-monitor.ts (reclaim at 4x, progressive at 10x/100x/1000x)
+
+### Miss Pincher Trading Capabilities
+Miss Pincher can now control trading through natural conversation with explicit permission:
+
+**Trading Flow (Propose → Confirm → Execute)**:
+1. User: "buy some BONK"
+2. Pincher: Proposes buy with amount and price, asks for confirmation
+3. User: "yes" / "do it" / "confirm"
+4. Server: Sets userConfirmed flag (server-side enforcement)
+5. Pincher: Calls execute_pending_trade, executes trade
+
+**Available Actions**:
+- **propose_buy/propose_sell**: Propose trades (requires explicit confirmation)
+- **execute_pending_trade**: Execute after user confirms
+- **cancel_pending_trade**: Cancel pending proposal
+- **set_copy_trading**: Configure copy trading (enable/disable, buy amounts, slippage)
+- **enable/disable_wallet_copy**: Toggle copy trading per wallet
+- **check_wallet_balance, get_holdings_summary, get_pending_orders**: Query state
+
+**Security Model**:
+- All trades require explicit user confirmation ("yes", "do it", "confirm", etc.)
+- Server-side userConfirmed flag prevents LLM from bypassing confirmation
+- 3-minute expiry on pending trades
+- Automatic cleanup of expired trades every minute
