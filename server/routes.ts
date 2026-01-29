@@ -48,7 +48,7 @@ import { holdings, monitoredWallets } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
-import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences } from "./ai";
+import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions } from "./ai";
 import { 
   isWalletInTop100, 
   getHolderTier, 
@@ -1738,6 +1738,25 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Admin Pincher Instructions ====================
+  
+  // Set Miss Pincher's instructions (admin only)
+  app.post("/api/admin/pincher-instructions", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { instructions } = req.body;
+      
+      if (typeof instructions !== 'string') {
+        return res.status(400).json({ error: "Instructions must be a string" });
+      }
+      
+      await setAdminInstructions(instructions, req.userId!);
+      res.json({ success: true, message: "Pincher instructions updated" });
+    } catch (error) {
+      console.error("Error setting pincher instructions:", error);
+      res.status(500).json({ error: "Failed to set instructions" });
+    }
+  });
+
   // ==================== API Budget Routes (Admin Only) ====================
   
   // Get all API budget statuses
@@ -2102,7 +2121,7 @@ export async function registerRoutes(
       if (!message || typeof message !== 'string') {
         return res.status(400).json({ error: "Message is required" });
       }
-      const response = await chatWithAI(req.userId!, message);
+      const response = await chatWithAI(req.userId!, message, 'web');
       res.json({ response });
     } catch (error) {
       console.error("Error in AI chat:", error);

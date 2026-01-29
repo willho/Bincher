@@ -427,7 +427,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
 async function handleChatMessage(chatId: string, text: string, user: typeof users.$inferSelect) {
   try {
     await telegramRequest("sendChatAction", { chat_id: chatId, action: "typing" });
-    const response = await chatWithAI(user.id, text);
+    const response = await chatWithAI(user.id, text, 'telegram');
     await sendMessage(chatId, response);
   } catch (e: any) {
     await log("telegram", "chat_ai", "error", {

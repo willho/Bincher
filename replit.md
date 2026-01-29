@@ -73,11 +73,11 @@ A PostgreSQL database stores all application data, including user accounts, sess
 - [x] Token: Per-token details, Miss Pincher's AI analysis, token metrics
 - [x] Settings: API keys, notifications, account, admin panel
 
-### PHASE 3: Pincher Backend Enhancements
-- [ ] Channel awareness (telegram/web tone adjustment)
-- [ ] Cross-channel context queries
-- [ ] Cached alerts (AI generates once, system delivers)
-- [ ] Admin instructions injection
+### PHASE 3: Pincher Backend Enhancements ✅
+- [x] Channel awareness (telegram/web tone adjustment) - PincherContext includes channel, buildChannelContext adjusts tone
+- [x] Cross-channel context queries - getCrossChannelHistory queries all channels, added to system prompt
+- [x] Cached alerts (AI generates once, system delivers) - cachedAlerts table, getCachedAlert/generateAndCacheAlert functions
+- [x] Admin instructions injection - adminSettings table, setAdminInstructions, admin endpoint POST /api/admin/pincher-instructions
 
 ### Miss Pincher Personality
 - **Voice**: Dry wit, tough love, casual but serious when needed

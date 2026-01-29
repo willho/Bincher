@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, userSettings, cachedAlerts, adminSettings } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
@@ -661,7 +661,11 @@ async function buildMarketMood(): Promise<MarketMood> {
 }
 
 // Build PincherContext for AI calls
-async function buildPincherContext(userId: number): Promise<PincherContext> {
+async function buildPincherContext(
+  userId: number, 
+  channel: 'web' | 'telegram' = 'web',
+  adminInstructions?: string
+): Promise<PincherContext> {
   const budgetStatus = await getBudgetStatus("openai");
   const marketMood = await buildMarketMood();
   
@@ -677,6 +681,7 @@ async function buildPincherContext(userId: number): Promise<PincherContext> {
   
   return {
     userId,
+    channel,
     relationship,
     marketMood,
     budgetStatus: {
@@ -684,12 +689,44 @@ async function buildPincherContext(userId: number): Promise<PincherContext> {
       isThrottled: budgetStatus.isPaused,
       paceStatus,
     },
+    adminInstructions,
   };
+}
+
+// Get admin instructions from settings
+async function getAdminInstructions(): Promise<string | undefined> {
+  try {
+    const [setting] = await db.select()
+      .from(adminSettings)
+      .where(eq(adminSettings.key, 'pincher_instructions'))
+      .limit(1);
+    return setting?.value || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Set admin instructions (for admin use)
+export async function setAdminInstructions(instructions: string, adminUserId: number): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  await db.insert(adminSettings)
+    .values({
+      key: 'pincher_instructions',
+      value: instructions,
+      updatedAt: now,
+      updatedBy: adminUserId,
+    })
+    .onConflictDoUpdate({
+      target: adminSettings.key,
+      set: { value: instructions, updatedAt: now, updatedBy: adminUserId },
+    });
 }
 
 export async function chatWithAI(
   userId: number,
-  userMessage: string
+  userMessage: string,
+  channel: 'web' | 'telegram' = 'web'
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   
@@ -697,16 +734,22 @@ export async function chatWithAI(
     userId,
     role: "user",
     content: userMessage,
+    channel,
     createdAt: now,
   });
 
-  const history = await db.select()
-    .from(aiChatMessages)
-    .where(eq(aiChatMessages.userId, userId))
-    .orderBy(desc(aiChatMessages.createdAt))
-    .limit(20);
+  // Get cross-channel history to maintain context across web and telegram
+  const crossChannelHistory = await getCrossChannelHistory(userId, 20);
   
-  history.reverse();
+  // Filter to get only messages for building the conversation history
+  const history = crossChannelHistory.map(m => ({
+    id: 0,
+    userId,
+    role: m.role,
+    content: m.content,
+    channel: m.channel,
+    createdAt: m.createdAt,
+  }));
 
   const snapshots = await getAllSnapshots();
   const snapshotsWithOutcomes = await getSnapshotsWithOutcomes();
@@ -714,8 +757,15 @@ export async function chatWithAI(
   const userPrefs = await getUserPreferences(userId);
   const summaryFocus = userPrefs?.summaryFocus || "";
   
-  // Build the comprehensive Pincher context
-  const pincherContext = await buildPincherContext(userId);
+  // Build the comprehensive Pincher context with channel awareness
+  const adminInstructions = await getAdminInstructions();
+  const pincherContext = await buildPincherContext(userId, channel, adminInstructions);
+  
+  // Add cross-channel awareness to context
+  const recentOtherChannel = crossChannelHistory.filter(m => m.channel !== channel).slice(-3);
+  const crossChannelNote = recentOtherChannel.length > 0 
+    ? `\n\nCROSS-CHANNEL CONTEXT: User has also been chatting on ${recentOtherChannel[0].channel === 'telegram' ? 'Telegram' : 'Web'}. Recent topics there: ${recentOtherChannel.map(m => m.content.slice(0, 50)).join(' | ')}`
+    : '';
   
   // Generate the personality-driven system prompt
   let systemPrompt = buildPincherSystemPrompt(pincherContext);
@@ -740,6 +790,7 @@ RECENT TOKENS (last 5):
 ${snapshots.slice(0, 5).map(s => `- ${s.tokenSymbol}: score ${s.aiScore || 'N/A'}, MC $${s.marketCap ? Math.round(s.marketCap / 1000) + 'K' : 'N/A'}${s.hasTwitter ? ', has Twitter' : ''}${s.finalMultiplier ? `, ${s.finalMultiplier.toFixed(1)}x` : ''}`).join('\n')}
 
 ${snapshotsWithOutcomes.length > 0 ? `PERFORMANCE SUMMARY: ${snapshotsWithOutcomes.length} tokens with outcomes, avg multiplier ${(snapshotsWithOutcomes.reduce((a, s) => a + (s.finalMultiplier || 0), 0) / snapshotsWithOutcomes.length).toFixed(1)}x` : ''}
+${crossChannelNote}
 
 Stay in character. Be helpful but skeptical. Give opinions, not financial advice.`;
 
@@ -812,6 +863,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
           userId,
           role: "assistant",
           content: assistantMessage,
+          channel,
           createdAt: Math.floor(Date.now() / 1000),
         });
         return assistantMessage;
@@ -831,6 +883,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
         userId,
         role: "assistant",
         content: assistantMessage,
+        channel,
         createdAt: Math.floor(Date.now() / 1000),
       });
       
@@ -843,6 +896,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
       userId,
       role: "assistant",
       content: assistantMessage,
+      channel,
       createdAt: Math.floor(Date.now() / 1000),
     });
 
@@ -876,6 +930,144 @@ export function getPincherWelcomeMessage(relationship?: UserRelationship): strin
   }
   // Default welcome for new users
   return getPincherWelcome(getDefaultRelationship());
+}
+
+// Cached Alerts System - AI generates once, system delivers to all channels
+export interface CachedAlertResult {
+  webMessage: string;
+  telegramMessage: string;
+}
+
+export async function getCachedAlert(
+  alertType: string,
+  eventKey: string
+): Promise<CachedAlertResult | null> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const [cached] = await db.select()
+    .from(cachedAlerts)
+    .where(and(
+      eq(cachedAlerts.alertType, alertType),
+      eq(cachedAlerts.eventKey, eventKey),
+      gte(cachedAlerts.expiresAt, now)
+    ))
+    .limit(1);
+  
+  if (cached) {
+    return {
+      webMessage: cached.webMessage,
+      telegramMessage: cached.telegramMessage,
+    };
+  }
+  
+  return null;
+}
+
+export async function generateAndCacheAlert(
+  alertType: string,
+  eventKey: string,
+  context: {
+    tokenSymbol?: string;
+    tokenMint?: string;
+    metadata?: Record<string, unknown>;
+    promptContext: string;
+  },
+  expiresInSeconds: number = 3600
+): Promise<CachedAlertResult> {
+  const existing = await getCachedAlert(alertType, eventKey);
+  if (existing) return existing;
+  
+  const budgetCheck = await shouldAllowApiCall("openai");
+  if (!budgetCheck.allowed) {
+    const fallback = {
+      webMessage: `${context.tokenSymbol || 'Token'} alert: ${alertType}`,
+      telegramMessage: `${context.tokenSymbol || 'Token'} alert: ${alertType}`,
+    };
+    return fallback;
+  }
+  
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `You are Miss Pincher, a jaded crypto trader who generates alert messages.
+Generate TWO versions of the same alert:
+1. WEB: Slightly more detailed, can be 1-2 sentences
+2. TELEGRAM: Ultra concise, one punchy line for mobile
+
+Format your response as JSON:
+{"web": "...", "telegram": "..."}
+
+Keep your signature dry wit. Be informative but brief. No emojis.`
+        },
+        {
+          role: "user",
+          content: context.promptContext
+        }
+      ],
+      max_completion_tokens: 200,
+      temperature: 0.7,
+    });
+    await trackApiCall("openai", "cached_alert");
+    
+    const content = response.choices[0]?.message?.content || "";
+    let parsed: { web: string; telegram: string };
+    
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      parsed = {
+        web: content.slice(0, 200),
+        telegram: content.slice(0, 100),
+      };
+    }
+    
+    const now = Math.floor(Date.now() / 1000);
+    
+    await db.insert(cachedAlerts).values({
+      alertType,
+      eventKey,
+      webMessage: parsed.web,
+      telegramMessage: parsed.telegram,
+      tokenMint: context.tokenMint || null,
+      tokenSymbol: context.tokenSymbol || null,
+      metadata: context.metadata ? JSON.stringify(context.metadata) : null,
+      createdAt: now,
+      expiresAt: now + expiresInSeconds,
+    });
+    
+    return {
+      webMessage: parsed.web,
+      telegramMessage: parsed.telegram,
+    };
+  } catch (error) {
+    console.error("Failed to generate cached alert:", error);
+    return {
+      webMessage: `${context.tokenSymbol || 'Token'} alert: ${alertType}`,
+      telegramMessage: `${context.tokenSymbol || 'Token'} alert: ${alertType}`,
+    };
+  }
+}
+
+// Cross-channel context query - get recent messages from any channel
+export async function getCrossChannelHistory(
+  userId: number,
+  limit: number = 10
+): Promise<{ role: string; content: string; channel: string; createdAt: number }[]> {
+  const messages = await db.select()
+    .from(aiChatMessages)
+    .where(eq(aiChatMessages.userId, userId))
+    .orderBy(desc(aiChatMessages.createdAt))
+    .limit(limit);
+  
+  return messages.reverse().map(m => ({
+    role: m.role,
+    content: m.content,
+    channel: m.channel || 'web',
+    createdAt: m.createdAt,
+  }));
 }
 
 export async function logTokenEvent(

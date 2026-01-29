@@ -281,7 +281,29 @@ export const aiChatMessages = pgTable("ai_chat_messages", {
   userId: integer("user_id").notNull(),
   role: text("role").notNull(),
   content: text("content").notNull(),
+  channel: text("channel").default("web"),
   createdAt: integer("created_at").notNull(),
+});
+
+export const cachedAlerts = pgTable("cached_alerts", {
+  id: serial("id").primaryKey(),
+  alertType: text("alert_type").notNull(),
+  eventKey: text("event_key").notNull(),
+  webMessage: text("web_message").notNull(),
+  telegramMessage: text("telegram_message").notNull(),
+  tokenMint: text("token_mint"),
+  tokenSymbol: text("token_symbol"),
+  metadata: text("metadata"),
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+});
+
+export const adminSettings = pgTable("admin_settings", {
+  id: serial("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  value: text("value").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  updatedBy: integer("updated_by"),
 });
 
 // Password reset tokens - time-limited, single-use tokens for secure password recovery

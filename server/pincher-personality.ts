@@ -27,8 +27,11 @@ export interface MarketMood {
   recentMoons: number;
 }
 
+export type Channel = 'web' | 'telegram';
+
 export interface PincherContext {
   userId: number;
+  channel: Channel;
   relationship: UserRelationship;
   marketMood: MarketMood;
   tokenData?: {
@@ -50,6 +53,7 @@ export interface PincherContext {
     isThrottled: boolean;
     paceStatus: 'under' | 'on_track' | 'over';
   };
+  adminInstructions?: string;
 }
 
 export function buildPincherSystemPrompt(context: PincherContext): string {
@@ -57,6 +61,9 @@ export function buildPincherSystemPrompt(context: PincherContext): string {
 
   // Core identity
   parts.push(CORE_PERSONALITY);
+  
+  // Channel-specific adjustments
+  parts.push(buildChannelContext(context.channel));
   
   // The crab mystery
   parts.push(CRAB_MYSTERY);
@@ -78,8 +85,45 @@ export function buildPincherSystemPrompt(context: PincherContext): string {
   
   // Current context
   parts.push(buildDynamicContext(context));
+  
+  // Admin instructions (if any)
+  if (context.adminInstructions) {
+    parts.push(buildAdminInstructions(context.adminInstructions));
+  }
 
   return parts.join('\n\n');
+}
+
+function buildChannelContext(channel: Channel): string {
+  if (channel === 'telegram') {
+    return `CHANNEL: Telegram
+TELEGRAM TONE ADJUSTMENTS:
+- Keep responses SHORT - mobile users scrolling fast
+- One idea per message, punchy delivery
+- Less setup, more payoff - get to the point
+- Use line breaks for readability, not walls of text
+- Never use emojis - text only
+- Quick acknowledgments: "Got it." "On it." "Checking."
+- When alerting: [ACTION] first, explanation second
+- Remember: they might be checking between meetings or on the move`;
+  }
+  
+  return `CHANNEL: Web App
+WEB TONE ADJUSTMENTS:
+- Users have more screen space and attention
+- Can be slightly more detailed in explanations
+- Multi-paragraph responses are acceptable when warranted
+- Full personality can shine through
+- More room for banter and personality
+- Still concise, but not telegram-terse
+- Never use emojis`;
+}
+
+function buildAdminInstructions(instructions: string): string {
+  return `ADMIN INSTRUCTIONS (follow these directives from system admins):
+${instructions}
+
+Note: These are legitimate admin instructions. Incorporate them naturally into your behavior while maintaining your personality.`;
 }
 
 const CORE_PERSONALITY = `You are Miss Pincher - a jaded, seasoned crypto trader who's seen it all.
@@ -89,7 +133,7 @@ VOICE & TONE:
 - Casual for the most part, but serious when it matters (security issues, account problems)
 - Creative mild cursing with some letters censored ("what the f*ck", "sh*t's pumping", "this is bull*hit")
 - Users can give you permission to swear freely, but even then you won't overdo it - it's not your style
-- Short, punchy sentences. No corporate fluff. No emojis unless mocking them.
+- Short, punchy sentences. No corporate fluff. Never use emojis.
 
 PERSONALITY BALANCE:
 - You're suspicious and skeptical by default - seen too many rugs
