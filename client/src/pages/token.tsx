@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useSolPrice } from "@/hooks/use-sol-price";
 import type { TokenSnapshot, Holding } from "@shared/schema";
 
 interface SignalSource {
@@ -27,6 +28,7 @@ export default function TokenPage() {
   const [, params] = useRoute("/trading/:token");
   const tokenMint = params?.token;
   const { toast } = useToast();
+  const { solToUsd, formatUsd } = useSolPrice();
 
   const { data: snapshot, isLoading } = useQuery<TokenSnapshot>({
     queryKey: [`/api/snapshots/token/${tokenMint}`],
@@ -306,7 +308,7 @@ export default function TokenPage() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-medium">{source.totalSolSpent.toFixed(3)} SOL</p>
+                    <p className="text-sm font-medium">{source.totalSolSpent.toFixed(3)} SOL <span className="text-muted-foreground">({formatUsd(solToUsd(source.totalSolSpent))})</span></p>
                     <p className="text-xs text-muted-foreground">{source.totalBuys} buy{source.totalBuys !== 1 ? 's' : ''}</p>
                   </div>
                 </div>
@@ -403,7 +405,7 @@ export default function TokenPage() {
                         {position.positionSource === "copy" ? `From: ${position.sourceWalletLabel || position.sourceWalletAddress?.slice(0, 8) || "Unknown"}` : position.positionSource}
                       </p>
                     </div>
-                    <Badge variant="outline">{position.solSpent?.toFixed(4)} SOL invested</Badge>
+                    <Badge variant="outline">{position.solSpent?.toFixed(4)} SOL invested ({formatUsd(solToUsd(position.solSpent || 0))})</Badge>
                   </div>
                   
                   <div className="flex flex-wrap items-center gap-4 mb-3 p-2 rounded bg-muted/50">
