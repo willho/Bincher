@@ -27,14 +27,21 @@ import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
 import NotFound from "@/pages/not-found";
 import { PincherFooter } from "@/components/pincher-footer";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet } from "lucide-react";
+import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, List, Brain } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { SidebarGroupLabel } from "@/components/ui/sidebar";
 import { apiRequest } from "@/lib/queryClient";
 
-const navItems = [
+const overviewItems = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { title: "Watchlist", href: "/watchlist", icon: Eye },
-  { title: "Trading", href: "/trading", icon: TrendingUp },
+];
+
+const tradingItems = [
+  { title: "Trading", href: "/trading", icon: TrendingUp, description: "Hot Wallet & Positions" },
+  { title: "Watchlist", href: "/watchlist", icon: Eye, description: "Signal Wallets" },
+];
+
+const systemItems = [
   { title: "Settings", href: "/settings", icon: Settings },
 ];
 
@@ -58,11 +65,62 @@ function AppSidebar() {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
+          <SidebarGroupLabel>Overview</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => {
+              {overviewItems.map((item) => {
+                const isActive = location === item.href || location === "/";
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton 
+                      asChild 
+                      data-active={isActive}
+                      className="data-[active=true]:bg-sidebar-accent"
+                    >
+                      <Link href={item.href} data-testid={`link-nav-${item.title.toLowerCase()}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Trading</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {tradingItems.map((item) => {
                 const isActive = location === item.href || 
                   (item.href === "/trading" && location.startsWith("/trading/"));
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton 
+                      asChild 
+                      data-active={isActive}
+                      className="data-[active=true]:bg-sidebar-accent"
+                    >
+                      <Link href={item.href} data-testid={`link-nav-${item.title.toLowerCase()}`}>
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>System</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {systemItems.map((item) => {
+                const isActive = location === item.href;
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton 

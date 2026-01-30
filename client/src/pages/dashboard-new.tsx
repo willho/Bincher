@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, Bell, Coins, DollarSign, TrendingUp, Wallet, Zap } from "lucide-react";
+import { Activity, ArrowRight, Bell, Coins, DollarSign, Eye, Settings, TrendingUp, Wallet, Zap } from "lucide-react";
 import { Alerts } from "@/components/alerts";
 import type { Swap, Holding } from "@shared/schema";
 
@@ -253,6 +255,37 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Quick Actions</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/trading">
+              <Button variant="outline" size="sm" data-testid="link-quick-trading">
+                <TrendingUp className="h-4 w-4 mr-2" />
+                Hot Wallet & Positions
+                <ArrowRight className="h-3 w-3 ml-2" />
+              </Button>
+            </Link>
+            <Link href="/watchlist">
+              <Button variant="outline" size="sm" data-testid="link-quick-watchlist">
+                <Eye className="h-4 w-4 mr-2" />
+                Signal Wallets
+                <ArrowRight className="h-3 w-3 ml-2" />
+              </Button>
+            </Link>
+            <Link href="/settings">
+              <Button variant="outline" size="sm" data-testid="link-quick-settings">
+                <Settings className="h-4 w-4 mr-2" />
+                Settings
+                <ArrowRight className="h-3 w-3 ml-2" />
+              </Button>
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
