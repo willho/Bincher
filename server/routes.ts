@@ -45,7 +45,7 @@ import {
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
 import { holdings, monitoredWallets } from "@shared/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNotNull, desc } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions } from "./ai";
@@ -2480,6 +2480,72 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error scoring token:", error);
       res.status(500).json({ error: "Failed to score token" });
+    }
+  });
+
+  app.get("/api/snapshots/token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getSnapshotByToken } = await import("./ai");
+      const snapshot = await getSnapshotByToken(req.params.tokenMint as string);
+      if (!snapshot) {
+        return res.status(404).json({ error: "No snapshot found for this token" });
+      }
+      res.json(snapshot);
+    } catch (error) {
+      console.error("Error getting snapshot by token:", error);
+      res.status(500).json({ error: "Failed to get snapshot" });
+    }
+  });
+
+  app.get("/api/token/:tokenMint/signal-sources", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tokenMint = req.params.tokenMint as string;
+      
+      const signalSources = await db.select({
+        walletAddress: holdings.sourceWalletAddress,
+        walletLabel: monitoredWallets.label,
+        signalWalletId: holdings.signalWalletId,
+        buyTimestamp: holdings.buyTimestamp,
+        buyPrice: holdings.buyPrice,
+        solSpent: holdings.solSpent,
+        tokenSymbol: holdings.tokenSymbol,
+      })
+        .from(holdings)
+        .leftJoin(monitoredWallets, eq(holdings.signalWalletId, monitoredWallets.id))
+        .where(
+          and(
+            eq(holdings.tokenMint, tokenMint),
+            eq(holdings.userId, req.userId!),
+            isNotNull(holdings.sourceWalletAddress)
+          )
+        )
+        .orderBy(desc(holdings.buyTimestamp));
+      
+      const uniqueSources = signalSources.reduce((acc, source) => {
+        const key = source.walletAddress || '';
+        if (!acc.has(key)) {
+          acc.set(key, {
+            walletAddress: source.walletAddress,
+            walletLabel: source.walletLabel,
+            firstSignal: source.buyTimestamp,
+            totalBuys: 1,
+            totalSolSpent: source.solSpent,
+          });
+        } else {
+          const existing = acc.get(key)!;
+          existing.totalBuys++;
+          existing.totalSolSpent += source.solSpent;
+          if (source.buyTimestamp < existing.firstSignal) {
+            existing.firstSignal = source.buyTimestamp;
+          }
+        }
+        return acc;
+      }, new Map<string, { walletAddress: string | null; walletLabel: string | null; firstSignal: number; totalBuys: number; totalSolSpent: number }>());
+      
+      res.json(Array.from(uniqueSources.values()));
+    } catch (error) {
+      console.error("Error getting signal sources:", error);
+      res.status(500).json({ error: "Failed to get signal sources" });
     }
   });
 

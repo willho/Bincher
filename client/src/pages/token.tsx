@@ -4,18 +4,41 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3 } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock } from "lucide-react";
 import { Link } from "wouter";
 import type { TokenSnapshot } from "@shared/schema";
+
+interface SignalSource {
+  walletAddress: string | null;
+  walletLabel: string | null;
+  firstSignal: number;
+  totalBuys: number;
+  totalSolSpent: number;
+}
 
 export default function TokenPage() {
   const [, params] = useRoute("/trading/:token");
   const tokenMint = params?.token;
 
   const { data: snapshot, isLoading } = useQuery<TokenSnapshot>({
-    queryKey: ["/api/snapshots/token", tokenMint],
+    queryKey: [`/api/snapshots/token/${tokenMint}`],
     enabled: !!tokenMint,
   });
+
+  const { data: signalSources, isLoading: isLoadingSources } = useQuery<SignalSource[]>({
+    queryKey: [`/api/token/${tokenMint}/signal-sources`],
+    enabled: !!tokenMint,
+  });
+
+  function formatTimeAgo(timestamp: number): string {
+    const now = Math.floor(Date.now() / 1000);
+    const diff = now - timestamp;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 2592000) return `${Math.floor(diff / 86400)}d ago`;
+    return new Date(timestamp * 1000).toLocaleDateString();
+  }
 
   if (!tokenMint) {
     return (
@@ -181,6 +204,55 @@ export default function TokenPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Wallet className="h-5 w-5" />
+            Signal Sources
+          </CardTitle>
+          <CardDescription>Wallets that signaled this token</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoadingSources ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : signalSources && signalSources.length > 0 ? (
+            <div className="space-y-3">
+              {signalSources.map((source, index) => (
+                <div key={index} className="flex items-center justify-between p-3 rounded-lg bg-muted/50" data-testid={`signal-source-${index}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Wallet className="h-4 w-4 text-primary" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-sm">
+                        {source.walletLabel || (source.walletAddress ? `${source.walletAddress.slice(0, 6)}...${source.walletAddress.slice(-4)}` : "Unknown")}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Clock className="h-3 w-3" />
+                        <span>First signal: {formatTimeAgo(source.firstSignal)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium">{source.totalSolSpent.toFixed(3)} SOL</p>
+                    <p className="text-xs text-muted-foreground">{source.totalBuys} buy{source.totalBuys !== 1 ? 's' : ''}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-muted-foreground">
+              <Wallet className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No signal sources found</p>
+              <p className="text-xs mt-1">This token wasn't copy-traded from a monitored wallet</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {snapshot && (
         <Card>
