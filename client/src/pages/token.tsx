@@ -5,9 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Save } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Save, Zap, CircleDot, CirclePause, CircleOff } from "lucide-react";
 import { Link } from "wouter";
 import { useState } from "react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { TokenSnapshot, Holding } from "@shared/schema";
@@ -56,6 +59,20 @@ export default function TokenPage() {
     },
     onError: () => {
       toast({ title: "Failed to update settings", variant: "destructive" });
+    }
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ holdingId, data }: { holdingId: number; data: { positionStatus?: string; autonomyEnabled?: boolean } }) => {
+      return apiRequest("PATCH", `/api/holdings/${holdingId}/status`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/positions/${tokenMint}`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/holdings"] });
+      toast({ title: "Position updated" });
+    },
+    onError: () => {
+      toast({ title: "Failed to update position", variant: "destructive" });
     }
   });
 
@@ -348,22 +365,82 @@ export default function TokenPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Target className="h-5 w-5" />
-              Position Risk Settings
+              Position Settings
             </CardTitle>
-            <CardDescription>Configure take-profit and stop-loss for your positions</CardDescription>
+            <CardDescription>Configure status, autonomy, and risk parameters for your positions</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {positions.map((position) => (
+              {positions.map((position) => {
+                const positionStatus = position.positionStatus || (position.currentAmount > 0 ? "active" : "inactive");
+                const statusIcon = {
+                  active: <CircleDot className="h-3 w-3 text-green-500" />,
+                  pending: <CirclePause className="h-3 w-3 text-yellow-500" />,
+                  inactive: <CircleOff className="h-3 w-3 text-muted-foreground" />,
+                }[positionStatus];
+                
+                return (
                 <div key={position.id} className="p-4 rounded-lg border bg-muted/30">
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <p className="font-medium">{position.tokenSymbol}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium">{position.tokenSymbol}</p>
+                        <Badge 
+                          variant={positionStatus === "active" ? "default" : positionStatus === "pending" ? "secondary" : "outline"}
+                          className="text-xs"
+                        >
+                          {statusIcon}
+                          <span className="ml-1 capitalize">{positionStatus}</span>
+                        </Badge>
+                        {position.autonomyEnabled && (
+                          <Badge variant="outline" className="text-xs text-primary border-primary/30">
+                            <Zap className="h-3 w-3 mr-1" />
+                            Auto
+                          </Badge>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground">
                         {position.positionSource === "copy" ? `From: ${position.sourceWalletLabel || position.sourceWalletAddress?.slice(0, 8) || "Unknown"}` : position.positionSource}
                       </p>
                     </div>
                     <Badge variant="outline">{position.solSpent?.toFixed(4)} SOL invested</Badge>
+                  </div>
+                  
+                  <div className="flex flex-wrap items-center gap-4 mb-3 p-2 rounded bg-muted/50">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground">Status:</Label>
+                      <Select 
+                        value={positionStatus} 
+                        onValueChange={(value) => updateStatusMutation.mutate({ 
+                          holdingId: position.id, 
+                          data: { positionStatus: value } 
+                        })}
+                      >
+                        <SelectTrigger className="w-[110px] h-7 text-xs" data-testid={`select-status-${position.id}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="active">Active</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="inactive">Inactive</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor={`autonomy-${position.id}`} className="text-xs text-muted-foreground">
+                        Autonomy:
+                      </Label>
+                      <Switch
+                        id={`autonomy-${position.id}`}
+                        checked={position.autonomyEnabled ?? false}
+                        onCheckedChange={(checked) => updateStatusMutation.mutate({
+                          holdingId: position.id,
+                          data: { autonomyEnabled: checked }
+                        })}
+                        data-testid={`switch-autonomy-${position.id}`}
+                      />
+                    </div>
                   </div>
 
                   {editingPosition === position.id ? (
@@ -444,7 +521,8 @@ export default function TokenPage() {
                     </div>
                   )}
                 </div>
-              ))}
+              );
+              })}
             </div>
           </CardContent>
         </Card>
