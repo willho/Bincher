@@ -149,7 +149,7 @@ export function ApiKeysSettings() {
           ) : limits ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Monitored Wallets</span>
+                <span className="text-sm text-muted-foreground">Signal Wallets</span>
                 <span className="font-medium">{limits.current} / {limits.limit}</span>
               </div>
               <Progress value={walletUsagePercent} className="h-2" />

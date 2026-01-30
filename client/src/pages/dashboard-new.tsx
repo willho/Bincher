@@ -296,7 +296,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle>Recent Activity</CardTitle>
-            <CardDescription>Latest swap transactions from monitored wallets</CardDescription>
+            <CardDescription>Latest swap transactions from signal wallets</CardDescription>
           </CardHeader>
           <CardContent>
             {swapsLoading ? (

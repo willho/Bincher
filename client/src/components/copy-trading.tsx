@@ -290,7 +290,7 @@ export function CopyTrading() {
             Copy Trading
           </CardTitle>
           <CardDescription>
-            Automatically copy trades from the monitored wallet
+            Automatically copy trades from your signal wallets
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -537,7 +537,7 @@ export function CopyTrading() {
                     <div>
                       <Label className="text-base">Enable Copy Trading</Label>
                       <p className="text-sm text-muted-foreground">
-                        Automatically buy tokens when monitored wallet buys
+                        Automatically buy tokens when signal wallet buys
                       </p>
                     </div>
                     <Switch

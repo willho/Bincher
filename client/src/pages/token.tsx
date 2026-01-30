@@ -318,7 +318,7 @@ export default function TokenPage() {
             <div className="text-center py-4 text-muted-foreground">
               <Wallet className="h-8 w-8 mx-auto mb-2 opacity-50" />
               <p className="text-sm">No signal sources found</p>
-              <p className="text-xs mt-1">This token wasn't copy-traded from a monitored wallet</p>
+              <p className="text-xs mt-1">This token wasn't copy-traded from a signal wallet</p>
             </div>
           )}
         </CardContent>

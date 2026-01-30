@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -9,8 +9,9 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X, Share2, Users, Clock, CheckCircle, XCircle, Brain } from "lucide-react";
+import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X, Share2, Users, Clock, CheckCircle, XCircle, Brain, Activity, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import type { Swap } from "@shared/schema";
 
 interface MonitoredWallet {
   id: number;
@@ -25,6 +26,12 @@ interface MonitoredWallet {
   aiScoreDetails: string | null;
 }
 
+interface WalletStats {
+  totalSwaps: number;
+  last7Days: number;
+  lastSwapTime: number | null;
+}
+
 export function MonitoredWallets() {
   const [newWalletAddress, setNewWalletAddress] = useState("");
   const [newWalletLabel, setNewWalletLabel] = useState("");
@@ -35,6 +42,33 @@ export function MonitoredWallets() {
   const { data: wallets, isLoading } = useQuery<MonitoredWallet[]>({
     queryKey: ["/api/monitored-wallets"],
   });
+
+  const { data: swaps } = useQuery<Swap[]>({
+    queryKey: ["/api/swaps"],
+  });
+
+  const walletStats = useMemo(() => {
+    if (!wallets || !swaps) return {};
+    
+    const now = Math.floor(Date.now() / 1000);
+    const weekAgo = now - 604800;
+    
+    const stats: Record<string, WalletStats> = {};
+    
+    for (const wallet of wallets) {
+      const walletSwaps = swaps.filter(s => s.source === wallet.walletAddress);
+      const recent7d = walletSwaps.filter(s => s.timestamp > weekAgo);
+      const sortedByTime = [...walletSwaps].sort((a, b) => b.timestamp - a.timestamp);
+      
+      stats[wallet.walletAddress] = {
+        totalSwaps: walletSwaps.length,
+        last7Days: recent7d.length,
+        lastSwapTime: sortedByTime[0]?.timestamp || null,
+      };
+    }
+    
+    return stats;
+  }, [wallets, swaps]);
 
   const addWallet = useMutation({
     mutationFn: (data: { walletAddress: string; label?: string }) =>
@@ -129,6 +163,17 @@ export function MonitoredWallets() {
     return "text-red-500";
   };
 
+  const formatTimeAgo = (timestamp: number) => {
+    const now = Math.floor(Date.now() / 1000);
+    const diff = now - timestamp;
+    
+    if (diff < 60) return "just now";
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+    return `${Math.floor(diff / 604800)}w ago`;
+  };
+
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -164,7 +209,7 @@ export function MonitoredWallets() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Wallet className="h-5 w-5" />
-            Monitored Wallets
+            Signal Wallets
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -179,10 +224,10 @@ export function MonitoredWallets() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Wallet className="h-5 w-5" />
-          Monitored Wallets
+          Signal Wallets
         </CardTitle>
         <CardDescription>
-          Add Solana wallet addresses to monitor for swaps. All your wallets are monitored for copy trading.
+          Add Solana wallet addresses to follow for trade signals. All your signal wallets are monitored for copy trading.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -224,134 +269,172 @@ export function MonitoredWallets() {
 
         {wallets && wallets.length > 0 && (
           <div className="space-y-2 pt-4 border-t">
-            <Label>Your Monitored Wallets</Label>
-            {wallets.map((wallet) => (
-              <div
-                key={wallet.id}
-                data-testid={`wallet-item-${wallet.id}`}
-                className="flex flex-col gap-2 p-3 bg-muted/50 rounded-lg"
-              >
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 min-w-0">
-                    {editingId === wallet.id ? (
-                      <div className="flex items-center gap-2">
-                        <Input
-                          value={editLabel}
-                          onChange={(e) => setEditLabel(e.target.value)}
-                          placeholder="Enter label"
-                          className="h-8"
-                          data-testid={`input-edit-label-${wallet.id}`}
-                        />
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => saveEdit(wallet.id)}
-                          data-testid={`button-save-label-${wallet.id}`}
-                        >
-                          <Check className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => setEditingId(null)}
-                          data-testid={`button-cancel-edit-${wallet.id}`}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
+            <Label>Your Signal Wallets</Label>
+            {wallets.map((wallet) => {
+              const stats = walletStats[wallet.walletAddress];
+              return (
+                <div
+                  key={wallet.id}
+                  data-testid={`wallet-item-${wallet.id}`}
+                  className="flex flex-col gap-2 p-3 bg-muted/50 rounded-lg"
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      {editingId === wallet.id ? (
+                        <div className="flex items-center gap-2">
+                          <Input
+                            value={editLabel}
+                            onChange={(e) => setEditLabel(e.target.value)}
+                            placeholder="Enter label"
+                            className="h-8"
+                            data-testid={`input-edit-label-${wallet.id}`}
+                          />
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => saveEdit(wallet.id)}
+                            data-testid={`button-save-label-${wallet.id}`}
+                          >
+                            <Check className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => setEditingId(null)}
+                            data-testid={`button-cancel-edit-${wallet.id}`}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium truncate">
+                              {wallet.label || "Unnamed Wallet"}
+                            </span>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-6 w-6"
+                              onClick={() => startEditing(wallet)}
+                              data-testid={`button-edit-wallet-${wallet.id}`}
+                            >
+                              <Edit2 className="h-3 w-3" />
+                            </Button>
+                            {wallet.aiScore !== null && (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Badge variant="outline" className={`gap-1 ${getScoreColor(wallet.aiScore)}`}>
+                                    <Brain className="h-3 w-3" />
+                                    {wallet.aiScore}
+                                  </Badge>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>AI Trading Score based on historical performance</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            )}
+                            {getShareStatusBadge(wallet)}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-muted-foreground font-mono truncate">
+                              {wallet.walletAddress.slice(0, 8)}...{wallet.walletAddress.slice(-6)}
+                            </span>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-6 w-6"
+                              onClick={() => copyToClipboard(wallet.walletAddress)}
+                              data-testid={`button-copy-address-${wallet.id}`}
+                            >
+                              <Copy className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    <Switch
+                      checked={wallet.enabled ?? true}
+                      onCheckedChange={(enabled) =>
+                        updateWallet.mutate({ id: wallet.id, enabled })
+                      }
+                      data-testid={`switch-wallet-enabled-${wallet.id}`}
+                    />
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => deleteWallet.mutate(wallet.id)}
+                      disabled={deleteWallet.isPending}
+                      data-testid={`button-delete-wallet-${wallet.id}`}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+
+                  {stats && (
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground pt-1 border-t border-muted/50">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-1" data-testid={`stat-total-${wallet.id}`}>
+                            <Activity className="h-3 w-3" />
+                            <span>{stats.totalSwaps} total</span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>Total swaps detected</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-1" data-testid={`stat-7d-${wallet.id}`}>
+                            <TrendingUp className="h-3 w-3" />
+                            <span>{stats.last7Days} / 7d</span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>Swaps in last 7 days</TooltipContent>
+                      </Tooltip>
+                      {stats.lastSwapTime && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="flex items-center gap-1" data-testid={`stat-last-${wallet.id}`}>
+                              <Clock className="h-3 w-3" />
+                              <span>{formatTimeAgo(stats.lastSwapTime)}</span>
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>Last activity</TooltipContent>
+                        </Tooltip>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 pt-1 border-t border-muted">
+                    {!wallet.isShared || wallet.shareStatus === "none" ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1 text-xs"
+                        onClick={() => shareWallet.mutate(wallet.id)}
+                        disabled={shareWallet.isPending}
+                        data-testid={`button-share-wallet-${wallet.id}`}
+                      >
+                        <Share2 className="h-3 w-3" />
+                        Share with Community
+                      </Button>
                     ) : (
-                      <>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium truncate">
-                            {wallet.label || "Unnamed Wallet"}
-                          </span>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-6 w-6"
-                            onClick={() => startEditing(wallet)}
-                            data-testid={`button-edit-wallet-${wallet.id}`}
-                          >
-                            <Edit2 className="h-3 w-3" />
-                          </Button>
-                          {wallet.aiScore !== null && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Badge variant="outline" className={`gap-1 ${getScoreColor(wallet.aiScore)}`}>
-                                  <Brain className="h-3 w-3" />
-                                  {wallet.aiScore}
-                                </Badge>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>AI Trading Score based on historical performance</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          )}
-                          {getShareStatusBadge(wallet)}
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span className="text-xs text-muted-foreground font-mono truncate">
-                            {wallet.walletAddress.slice(0, 8)}...{wallet.walletAddress.slice(-6)}
-                          </span>
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            className="h-6 w-6"
-                            onClick={() => copyToClipboard(wallet.walletAddress)}
-                            data-testid={`button-copy-address-${wallet.id}`}
-                          >
-                            <Copy className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1 text-xs text-muted-foreground"
+                        onClick={() => unshareWallet.mutate(wallet.id)}
+                        disabled={unshareWallet.isPending}
+                        data-testid={`button-unshare-wallet-${wallet.id}`}
+                      >
+                        <X className="h-3 w-3" />
+                        Cancel Sharing
+                      </Button>
                     )}
                   </div>
-                  <Switch
-                    checked={wallet.enabled ?? true}
-                    onCheckedChange={(enabled) =>
-                      updateWallet.mutate({ id: wallet.id, enabled })
-                    }
-                    data-testid={`switch-wallet-enabled-${wallet.id}`}
-                  />
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    onClick={() => deleteWallet.mutate(wallet.id)}
-                    disabled={deleteWallet.isPending}
-                    data-testid={`button-delete-wallet-${wallet.id}`}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
                 </div>
-                <div className="flex items-center gap-2 pt-1 border-t border-muted">
-                  {!wallet.isShared || wallet.shareStatus === "none" ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1 text-xs"
-                      onClick={() => shareWallet.mutate(wallet.id)}
-                      disabled={shareWallet.isPending}
-                      data-testid={`button-share-wallet-${wallet.id}`}
-                    >
-                      <Share2 className="h-3 w-3" />
-                      Share with Community
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="gap-1 text-xs text-muted-foreground"
-                      onClick={() => unshareWallet.mutate(wallet.id)}
-                      disabled={unshareWallet.isPending}
-                      data-testid={`button-unshare-wallet-${wallet.id}`}
-                    >
-                      <X className="h-3 w-3" />
-                      Cancel Sharing
-                    </Button>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 

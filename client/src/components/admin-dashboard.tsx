@@ -994,7 +994,7 @@ export function AdminDashboard() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Wallet className="h-5 w-5" />
-            All Monitored Wallets
+            All Signal Wallets
           </CardTitle>
           <CardDescription>View all wallets across all users</CardDescription>
         </CardHeader>
