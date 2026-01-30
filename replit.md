@@ -36,7 +36,9 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - **Whale Detection**: Caches top-100 holder lists and detects whale activity, broadcasting events via WebSocket.
 - **Enhanced Heat Scoring**: Token heat scores incorporate whale activity (20% weighted), recent buys, price volatility, user attention, and recency.
 - **Telegram Integration (Two-Way)**: A webhook-based bot for alerts (swap, whale, emerging whale) and routing non-command messages to Miss Pincher AI.
-- **Notifications Architecture**: Prioritizes Telegram, with email as a secondary option.
+- **Notifications Architecture**: Multi-provider email support (Resend, SendGrid, Mailgun, SMTP) with Telegram as priority. Users provide their own email service API keys via Settings > Alerts tab.
+- **AI Filter Creation**: Natural language filter creation via Miss Pincher chat (e.g., "only buy tokens above 500k market cap"). Filters stored in `trade_filters` table.
+- **USD Conversions**: Live SOL-to-USD conversion throughout the UI using cached price data.
 - **AI Budget System**: Manages AI interactions ($1/day per user) with throttling, heat-gated analysis, and cached alerts for optimization.
 - **AI Trading Control**: Miss Pincher can propose and execute trades, and manage copy trading configurations through natural language, requiring explicit user confirmation for all trade executions.
 - **AI Health & Cost Optimization**: Includes an AI health tracking system, an intent parser for simple commands (reducing AI calls), and graceful degradation to ensure manual controls remain functional if AI is unavailable.
