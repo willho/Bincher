@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, Bell, TrendingUp, Wallet } from "lucide-react";
+import { Activity, Bell, Coins, DollarSign, TrendingUp, Wallet, Zap } from "lucide-react";
 import { Alerts } from "@/components/alerts";
-import type { Swap } from "@shared/schema";
+import type { Swap, Holding } from "@shared/schema";
 
 interface ExtendedStatus {
   walletAddress: string;
@@ -13,6 +13,13 @@ interface ExtendedStatus {
   totalSwapsDetected: number;
   webhookId?: string;
   monitoredWalletsCount?: number;
+}
+
+interface HotWalletInfo {
+  exists: boolean;
+  publicKey?: string;
+  balance?: number;
+  createdAt?: number;
 }
 
 export default function DashboardPage() {
@@ -30,6 +37,37 @@ export default function DashboardPage() {
     refetchInterval: 60000,
   });
 
+  const { data: hotWallet, isLoading: walletLoading } = useQuery<HotWalletInfo>({
+    queryKey: ["/api/copy-trade/wallet"],
+  });
+
+  const { data: holdings, isLoading: holdingsLoading } = useQuery<Holding[]>({
+    queryKey: ["/api/copy-trade/holdings"],
+  });
+
+  const solPrice = 180;
+  const solBalance = hotWallet?.balance || 0;
+  const solValueUsd = solBalance * solPrice;
+  
+  const activeHoldings = holdings?.filter(h => 
+    h.currentAmount > 0 && !h.isDead && !h.isDust && h.lastPrice
+  ) || [];
+  
+  const holdingsValueUsd = activeHoldings.reduce((total, h) => {
+    const tokenValue = (h.currentAmount * (h.lastPrice || 0));
+    return total + tokenValue;
+  }, 0);
+  
+  const totalValueUsd = solValueUsd + holdingsValueUsd;
+  const autonomyEnabledCount = holdings?.filter(h => h.autonomyEnabled).length || 0;
+
+  const formatUsd = (value: number) => {
+    if (value < 0.01) return "$0.00";
+    if (value < 1) return `$${value.toFixed(2)}`;
+    if (value < 1000) return `$${value.toFixed(2)}`;
+    return `$${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -37,6 +75,105 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Dashboard</h1>
           <p className="text-muted-foreground">Portfolio overview and recent activity</p>
         </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card className="bg-gradient-to-br from-green-500/10 to-green-600/5 border-green-500/20">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2 text-green-700 dark:text-green-300">
+              <DollarSign className="h-4 w-4" />
+              Total Value
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {walletLoading || holdingsLoading ? (
+              <Skeleton className="h-8 w-24" />
+            ) : (
+              <div>
+                <p className="text-2xl font-bold text-green-700 dark:text-green-300" data-testid="text-total-value">
+                  {formatUsd(totalValueUsd)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {solBalance.toFixed(3)} SOL + {activeHoldings.length} tokens
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <Wallet className="h-4 w-4" />
+              SOL Balance
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {walletLoading ? (
+              <Skeleton className="h-8 w-20" />
+            ) : hotWallet?.exists ? (
+              <div>
+                <p className="text-2xl font-bold" data-testid="text-sol-balance">
+                  {solBalance.toFixed(3)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {formatUsd(solValueUsd)}
+                </p>
+              </div>
+            ) : (
+              <Badge variant="secondary" data-testid="badge-no-wallet">No Wallet</Badge>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <Coins className="h-4 w-4" />
+              Token Holdings
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {holdingsLoading ? (
+              <Skeleton className="h-8 w-20" />
+            ) : (
+              <div>
+                <p className="text-2xl font-bold" data-testid="text-holdings-value">
+                  {formatUsd(holdingsValueUsd)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {activeHoldings.length} active position{activeHoldings.length !== 1 ? "s" : ""}
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-2">
+              <Zap className="h-4 w-4" />
+              Auto-Trading
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {holdingsLoading ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <div className="flex items-center gap-2">
+                <p className="text-2xl font-bold" data-testid="text-autonomy-count">
+                  {autonomyEnabledCount}
+                </p>
+                {autonomyEnabledCount > 0 && (
+                  <Badge variant="default" className="text-xs">Active</Badge>
+                )}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground mt-1">
+              positions with autonomy
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -83,7 +220,7 @@ export default function DashboardPage() {
           <CardHeader className="pb-2">
             <CardDescription className="flex items-center gap-2">
               <Wallet className="h-4 w-4" />
-              Wallets
+              Signal Wallets
             </CardDescription>
           </CardHeader>
           <CardContent>
