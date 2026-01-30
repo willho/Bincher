@@ -201,6 +201,7 @@ export const holdings = pgTable("holdings", {
   autoMirrorSells: boolean("auto_mirror_sells").default(false), // Mirror signal wallet sells
   positionSource: text("position_source").default("copy"), // "copy" | "manual" | "autonomous" | "swing"
   signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet that signaled
+  signalBuyAmountTokens: real("signal_buy_amount_tokens"), // Original tokens signal wallet bought (for proportional mirroring)
   entryReason: text("entry_reason"), // AI-generated or user note about why position was taken
 });
 
@@ -234,6 +235,7 @@ export const pendingBuys = pgTable("pending_buys", {
   sourceWalletAddress: text("source_wallet_address"),
   sourceWalletLabel: text("source_wallet_label"),
   signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet for copy trades
+  signalBuyAmountTokens: real("signal_buy_amount_tokens"), // Original tokens signal wallet bought (for proportional mirroring)
   copyTiming: text("copy_timing").default("delayed"), // "immediate" | "delayed" | "triggered" - controls execution behavior
 });
 

@@ -44,7 +44,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets } from "@shared/schema";
+import { holdings, monitoredWallets, swaps } from "@shared/schema";
 import { eq, and, isNotNull, desc } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -857,13 +857,31 @@ export async function registerRoutes(
               
             } else if (!isBuy && position.autoMirrorSells) {
               // Auto-mirror SELL: Signal wallet is selling a token we hold from them
-              // Sell proportionally based on what they sold
-              console.log(`Auto-mirror SELL detected: ${sourceWallet.label} sold ${swap.fromTokenSymbol}, mirroring sell for position ${position.id}`);
+              // Mirror proportionally based on signal wallet's original buy vs current sell
+              console.log(`Auto-mirror SELL detected: ${sourceWallet.label} sold ${swap.fromTokenSymbol}, mirroring for position ${position.id}`);
               
-              // Calculate sell proportion (what % of their position did they sell?)
-              // We'll sell the same percentage of our position
-              // For simplicity, sell 100% if they sold any - can be refined later
-              const sellPercent = 100; // Full sell for now
+              // Get the original swap that triggered our copy trade
+              let signalOriginalBuyAmount: number | null = null;
+              if (position.sourceSwapId) {
+                const [sourceSwap] = await db.select().from(swaps)
+                  .where(eq(swaps.id, position.sourceSwapId))
+                  .limit(1);
+                if (sourceSwap && sourceSwap.toAmount) {
+                  signalOriginalBuyAmount = sourceSwap.toAmount;
+                }
+              }
+              
+              const sellAmountTokens = parseFloat(swap.fromAmount?.toString() || "0");
+              
+              // Calculate sell percentage: what % of their original position did they sell?
+              let sellPercent = 100; // Default to full sell
+              if (signalOriginalBuyAmount && signalOriginalBuyAmount > 0 && sellAmountTokens > 0) {
+                // sellPercent = (tokens they're selling / tokens they originally bought) * 100
+                sellPercent = Math.min(100, Math.max(10, (sellAmountTokens / signalOriginalBuyAmount) * 100));
+                console.log(`Auto-mirror: Signal sold ${sellAmountTokens.toLocaleString()} of ${signalOriginalBuyAmount.toLocaleString()} original tokens (${sellPercent.toFixed(1)}%)`);
+              } else {
+                console.log(`Auto-mirror: No original buy data, defaulting to 100% sell`);
+              }
               
               try {
                 const { executeAutoMirrorSell } = await import("./price-monitor");
@@ -871,9 +889,9 @@ export async function registerRoutes(
                   userId,
                   position,
                   sellPercent,
-                  `Signal wallet ${sourceWallet.label} sold`
+                  `Signal wallet ${sourceWallet.label} sold ${sellPercent.toFixed(0)}%`
                 );
-                console.log(`Auto-mirror: Executed sell for ${position.tokenSymbol}`);
+                console.log(`Auto-mirror: Executed ${sellPercent.toFixed(1)}% sell for ${position.tokenSymbol}`);
               } catch (error) {
                 console.error(`Auto-mirror sell failed for ${position.tokenSymbol}:`, error);
               }
