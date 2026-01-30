@@ -38,6 +38,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   } | null>(null);
   const [healthCheckLoading, setHealthCheckLoading] = useState(false);
   const [healthCheckError, setHealthCheckError] = useState(false);
+  const [selectedNetwork, setSelectedNetwork] = useState<"mainnet" | "devnet">("devnet");
 
   const { data: needsSetup, isLoading: checkingSetup } = useQuery<{ needsSetup: boolean }>({
     queryKey: ["/api/auth/check-setup"],
@@ -76,27 +77,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     onSuccess: async (data: any) => {
       if (data.showWizard) {
         setShowWizard(true);
-        setWizardStep(0);
-        setHealthCheckLoading(true);
-        setHealthCheckError(false);
-        try {
-          const response = await fetch('/api/health-check', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ heliusApiKey })
-          });
-          if (response.ok) {
-            const results = await response.json();
-            setHealthChecks(results);
-          } else {
-            setHealthCheckError(true);
-          }
-        } catch (e) {
-          console.error('Health check failed:', e);
-          setHealthCheckError(true);
-        } finally {
-          setHealthCheckLoading(false);
-        }
+        setWizardStep(0); // Step 0 = network selection
       } else {
         login.mutate();
       }
@@ -437,7 +418,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               Welcome, Admin!
             </DialogTitle>
             <DialogDescription>
-              System checks complete. Here's your setup status.
+              {wizardStep === 0 ? "Choose your network environment to get started." : "System checks complete. Here's your setup status."}
             </DialogDescription>
           </DialogHeader>
           
@@ -449,6 +430,100 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                   <div>
                     <p className="font-medium">Account Created</p>
                     <p className="text-sm text-muted-foreground">You're now the admin with full access</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <p className="text-sm font-medium">Select Network</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedNetwork("devnet")}
+                      className={`p-4 rounded-lg border-2 text-left transition-all ${
+                        selectedNetwork === "devnet"
+                          ? "border-primary bg-primary/10"
+                          : "border-muted hover-elevate"
+                      }`}
+                      data-testid="button-select-devnet"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className={`w-3 h-3 rounded-full ${selectedNetwork === "devnet" ? "bg-primary" : "bg-muted-foreground/30"}`} />
+                        <span className="font-medium">Devnet</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Test with fake SOL. Recommended for setup.</p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedNetwork("mainnet")}
+                      className={`p-4 rounded-lg border-2 text-left transition-all ${
+                        selectedNetwork === "mainnet"
+                          ? "border-primary bg-primary/10"
+                          : "border-muted hover-elevate"
+                      }`}
+                      data-testid="button-select-mainnet"
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className={`w-3 h-3 rounded-full ${selectedNetwork === "mainnet" ? "bg-primary" : "bg-muted-foreground/30"}`} />
+                        <span className="font-medium">Mainnet</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Real trading with real SOL.</p>
+                    </button>
+                  </div>
+                  {selectedNetwork === "devnet" && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3" />
+                      You can switch to mainnet later in Settings.
+                    </p>
+                  )}
+                </div>
+
+                <Button
+                  className="w-full"
+                  onClick={async () => {
+                    setWizardStep(1);
+                    setHealthCheckLoading(true);
+                    setHealthCheckError(false);
+                    try {
+                      await fetch('/api/admin/network-mode', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ mode: selectedNetwork })
+                      });
+                      const response = await fetch('/api/health-check', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ heliusApiKey, networkMode: selectedNetwork })
+                      });
+                      if (response.ok) {
+                        const results = await response.json();
+                        setHealthChecks(results);
+                      } else {
+                        setHealthCheckError(true);
+                      }
+                    } catch (e) {
+                      console.error('Setup failed:', e);
+                      setHealthCheckError(true);
+                    } finally {
+                      setHealthCheckLoading(false);
+                    }
+                  }}
+                  data-testid="button-continue-setup"
+                >
+                  Continue Setup
+                </Button>
+              </div>
+            )}
+
+            {wizardStep === 1 && (
+              <div className="space-y-4">
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
+                  <CheckCircle className="h-5 w-5 text-green-500 mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium">Network: {selectedNetwork === "devnet" ? "Devnet (Testing)" : "Mainnet (Live)"}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {selectedNetwork === "devnet" ? "Using test SOL for development" : "Real trading environment"}
+                    </p>
                   </div>
                 </div>
 
@@ -605,6 +680,11 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                         )}
                         {healthChecks && !healthChecks.email.ok && (
                           <li>Add <strong>RESEND_API_KEY</strong> secret for email notifications</li>
+                        )}
+                        {selectedNetwork === "devnet" && (
+                          <li>
+                            Get test SOL from <a href="https://faucet.solana.com/" target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">Solana Faucet</a>
+                          </li>
                         )}
                         <li>Use <strong>Production Setup</strong> in Admin tab to sync webhooks</li>
                         <li>Add wallets to monitor in the <strong>Watchlist</strong></li>

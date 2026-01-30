@@ -1,9 +1,21 @@
 import type { HeliusWebhookPayload, InsertSwap, TokenMetadata } from "@shared/schema";
 import { trackApiCall, shouldAllowApiCall } from "./api-budget";
-
-// Import for DexScreener budget tracking (fetchTokenMetadata uses DexScreener)
+import { getNetworkMode, getHeliusRpcUrl, getHeliusApiUrl } from "./network-mode";
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
+
+// Get the current Helius RPC URL based on network mode
+export async function getHeliusRpcEndpoint(apiKey?: string): Promise<string> {
+  const key = apiKey || HELIUS_API_KEY || "";
+  const mode = await getNetworkMode();
+  return getHeliusRpcUrl(key, mode);
+}
+
+// Get the current Helius API base URL based on network mode  
+export async function getHeliusApiEndpoint(): Promise<string> {
+  const mode = await getNetworkMode();
+  return getHeliusApiUrl(mode);
+}
 
 // Token mint addresses for base currencies
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -109,9 +121,10 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
   }
 
   try {
+    const rpcUrl = await getHeliusRpcEndpoint();
     const [holdersResponse, supplyResponse] = await Promise.all([
       fetch(
-        `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`,
+        rpcUrl,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -124,7 +137,7 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
         }
       ),
       fetch(
-        `https://mainnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`,
+        rpcUrl,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -292,7 +305,8 @@ export async function createWebhook(webhookUrl: string, walletAddresses: string[
   const addresses = walletAddresses;
 
   try {
-    const response = await fetch(`https://api.helius.xyz/v0/webhooks?api-key=${HELIUS_API_KEY}`, {
+    const apiBase = await getHeliusApiEndpoint();
+    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${HELIUS_API_KEY}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -322,7 +336,8 @@ export async function deleteWebhook(webhookId: string): Promise<boolean> {
   if (!HELIUS_API_KEY) return false;
   
   try {
-    const response = await fetch(`https://api.helius.xyz/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
+    const apiBase = await getHeliusApiEndpoint();
+    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
       method: "DELETE",
     });
     return response.ok;
@@ -336,7 +351,8 @@ export async function getWebhooks(): Promise<any[]> {
   if (!HELIUS_API_KEY) return [];
   
   try {
-    const response = await fetch(`https://api.helius.xyz/v0/webhooks?api-key=${HELIUS_API_KEY}`);
+    const apiBase = await getHeliusApiEndpoint();
+    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${HELIUS_API_KEY}`);
     if (!response.ok) return [];
     return await response.json();
   } catch (error) {
@@ -384,7 +400,8 @@ export async function fetchWalletSwapHistory(walletAddress: string, limit: numbe
 
   try {
     // Use Helius parsed transaction history API
-    const response = await fetch(`https://api.helius.xyz/v0/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&type=SWAP&limit=${limit}`);
+    const apiBase = await getHeliusApiEndpoint();
+    const response = await fetch(`${apiBase}/v0/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&type=SWAP&limit=${limit}`);
     
     if (!response.ok) {
       console.error("Failed to fetch wallet history:", await response.text());
@@ -593,7 +610,8 @@ export async function updateWebhookUrl(webhookId: string, newUrl: string, wallet
   const addresses = walletAddresses;
   
   try {
-    const response = await fetch(`https://api.helius.xyz/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
+    const apiBase = await getHeliusApiEndpoint();
+    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

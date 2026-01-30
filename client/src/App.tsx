@@ -27,7 +27,8 @@ import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
 import NotFound from "@/pages/not-found";
 import { PincherFooter } from "@/components/pincher-footer";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell } from "lucide-react";
+import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { apiRequest } from "@/lib/queryClient";
 
 const navItems = [
@@ -104,6 +105,11 @@ function AuthenticatedApp() {
     queryKey: ["/api/auth/session"],
     staleTime: 0,
   });
+
+  const { data: networkMode } = useQuery<{ mode: "mainnet" | "devnet"; faucetUrl: string | null }>({
+    queryKey: ["/api/network-mode"],
+    enabled: !!session?.authenticated,
+  });
   
   useEffect(() => {
     if (authKey > 0) {
@@ -139,6 +145,12 @@ function AuthenticatedApp() {
         <div className="flex flex-col flex-1 min-w-0">
           <header className="flex items-center gap-4 p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
+            {networkMode?.mode === "devnet" && (
+              <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/30" data-testid="badge-devnet">
+                <TestTube className="h-3 w-3 mr-1" />
+                Devnet
+              </Badge>
+            )}
           </header>
           <main className="flex-1 p-6 overflow-auto pb-20">
             <Switch>

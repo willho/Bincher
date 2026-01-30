@@ -177,6 +177,24 @@ export function AdminDashboard() {
     queryKey: ["/api/admin/production-status"],
   });
 
+  const { data: networkMode, isLoading: networkModeLoading } = useQuery<{ mode: "mainnet" | "devnet"; faucetUrl: string | null }>({
+    queryKey: ["/api/network-mode"],
+  });
+
+  const setNetworkModeMutation = useMutation({
+    mutationFn: async (mode: "mainnet" | "devnet") => {
+      const res = await apiRequest("POST", "/api/admin/network-mode", { mode });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/network-mode"] });
+      toast({ description: `Switched to ${data.mode === "devnet" ? "Devnet (Testing)" : "Mainnet (Live)"}` });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "Failed to change network", variant: "destructive" });
+    },
+  });
+
   const syncWebhooksMutation = useMutation({
     mutationFn: async (): Promise<SyncWebhooksResult> => {
       const res = await apiRequest("POST", "/api/admin/sync-webhooks");
@@ -1012,6 +1030,76 @@ export function AdminDashboard() {
             </div>
           ) : (
             <p className="text-muted-foreground text-center py-4">No wallets found</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Network Mode (Devnet/Mainnet) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Globe className="h-5 w-5" />
+            Network Mode
+          </CardTitle>
+          <CardDescription>Switch between test and live Solana networks</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {networkModeLoading ? (
+            <Skeleton className="h-12 w-full" />
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium">Current Network</span>
+                    <Badge variant={networkMode?.mode === "devnet" ? "secondary" : "default"}>
+                      {networkMode?.mode === "devnet" ? "Devnet (Testing)" : "Mainnet (Live)"}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {networkMode?.mode === "devnet" 
+                      ? "Using test SOL for development and testing" 
+                      : "Real trading with real SOL"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Devnet</span>
+                  <Switch
+                    checked={networkMode?.mode === "mainnet"}
+                    onCheckedChange={(checked) => setNetworkModeMutation.mutate(checked ? "mainnet" : "devnet")}
+                    disabled={setNetworkModeMutation.isPending}
+                    data-testid="switch-network-mode"
+                  />
+                  <span className="text-sm text-muted-foreground">Mainnet</span>
+                </div>
+              </div>
+              
+              {networkMode?.mode === "devnet" && (
+                <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-medium">Need test SOL?</p>
+                    <p className="text-xs text-muted-foreground">Get free devnet SOL for testing</p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => window.open("https://faucet.solana.com/", "_blank")}
+                    data-testid="button-open-faucet"
+                  >
+                    Open Faucet
+                  </Button>
+                </div>
+              )}
+
+              {networkMode?.mode === "mainnet" && (
+                <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                  <AlertTriangle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                  <p className="text-sm text-destructive">
+                    Live trading mode. All transactions use real SOL.
+                  </p>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

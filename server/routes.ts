@@ -69,6 +69,7 @@ import {
   log as telegramLog,
 } from "./telegram";
 import { isAIAvailable } from "./ai-health";
+import { getNetworkMode, setNetworkMode, getSolanaFaucetUrl, type NetworkMode } from "./network-mode";
 
 let wss: WebSocketServer;
 
@@ -195,7 +196,7 @@ export async function registerRoutes(
   const ADMIN_CODEWORD = "Admin1112";
 
   // Health check function for install wizard
-  async function runInstallHealthChecks(heliusApiKey: string): Promise<{
+  async function runInstallHealthChecks(heliusApiKey: string, networkMode?: "mainnet" | "devnet"): Promise<{
     helius: { ok: boolean; message: string };
     database: { ok: boolean; message: string };
     telegram: { ok: boolean; message: string };
@@ -210,9 +211,13 @@ export async function registerRoutes(
       ai: { ok: false, message: "Not available" },
     };
 
+    // Determine the network to test against
+    const network = networkMode || await getNetworkMode();
+    const heliusApiBase = network === "devnet" ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
+
     // Test Helius API key
     try {
-      const response = await fetch(`https://api.helius.xyz/v0/webhooks?api-key=${heliusApiKey}`);
+      const response = await fetch(`${heliusApiBase}/v0/webhooks?api-key=${heliusApiKey}`);
       if (response.ok) {
         results.helius = { ok: true, message: "API key valid" };
       } else if (response.status === 401) {
@@ -2115,16 +2120,44 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Network Mode (Devnet/Mainnet) ====================
+
+  app.get("/api/network-mode", async (req, res) => {
+    try {
+      const mode = await getNetworkMode();
+      res.json({ mode, faucetUrl: mode === "devnet" ? getSolanaFaucetUrl() : null });
+    } catch (error) {
+      console.error("Error getting network mode:", error);
+      res.status(500).json({ error: "Failed to get network mode" });
+    }
+  });
+
+  app.post("/api/admin/network-mode", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { mode } = req.body;
+      if (mode !== "devnet" && mode !== "mainnet") {
+        return res.status(400).json({ error: "Invalid mode. Use 'devnet' or 'mainnet'" });
+      }
+      
+      await setNetworkMode(mode as NetworkMode, req.userId!);
+      res.json({ success: true, mode, faucetUrl: mode === "devnet" ? getSolanaFaucetUrl() : null });
+    } catch (error) {
+      console.error("Error setting network mode:", error);
+      res.status(500).json({ error: "Failed to set network mode" });
+    }
+  });
+
   // ==================== Install Wizard Health Check ====================
   
   // Health check endpoint for install wizard (requires helius key in query for validation)
   app.post("/api/health-check", async (req, res) => {
     try {
-      const { heliusApiKey } = req.body;
+      const { heliusApiKey, networkMode } = req.body;
       if (!heliusApiKey) {
         return res.status(400).json({ error: "Helius API key required" });
       }
-      const results = await runInstallHealthChecks(heliusApiKey);
+      const validMode = networkMode === "devnet" || networkMode === "mainnet" ? networkMode : undefined;
+      const results = await runInstallHealthChecks(heliusApiKey, validMode);
       res.json(results);
     } catch (error) {
       console.error("Health check error:", error);
