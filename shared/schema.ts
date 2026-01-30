@@ -1339,3 +1339,50 @@ export const walletLimitsConfig = pgTable("wallet_limits_config", {
 export const insertWalletLimitsConfigSchema = createInsertSchema(walletLimitsConfig).omit({ id: true });
 export type WalletLimitsConfig = typeof walletLimitsConfig.$inferSelect;
 export type InsertWalletLimitsConfig = z.infer<typeof insertWalletLimitsConfigSchema>;
+
+// Familiar whales - cross-token tracking of whale wallets and their performance
+export const familiarWhales = pgTable("familiar_whales", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull().unique(),
+  firstSeenAt: integer("first_seen_at").notNull(),
+  lastSeenAt: integer("last_seen_at").notNull(),
+  totalTokensSeen: integer("total_tokens_seen").default(0), // unique tokens they've held
+  profitableExits: integer("profitable_exits").default(0), // exits where price > entry
+  totalExits: integer("total_exits").default(0),
+  avgExitMultiplier: real("avg_exit_multiplier").default(1), // avg return on exits
+  bestExitMultiplier: real("best_exit_multiplier").default(1),
+  avgHoldTimeMinutes: integer("avg_hold_time_minutes"), // avg time in position
+  earlyEntryCount: integer("early_entry_count").default(0), // times they entered before major pumps
+  // Derived metrics
+  successRate: real("success_rate").default(0), // profitableExits / totalExits
+  reliabilityScore: real("reliability_score").default(50), // 0-100 composite score
+  label: text("label"), // user-assigned or auto-generated label
+});
+
+export const insertFamiliarWhaleSchema = createInsertSchema(familiarWhales).omit({ id: true });
+export type FamiliarWhale = typeof familiarWhales.$inferSelect;
+export type InsertFamiliarWhale = z.infer<typeof insertFamiliarWhaleSchema>;
+
+// Whale token positions - track when whales enter/exit specific tokens
+export const whaleTokenPositions = pgTable("whale_token_positions", {
+  id: serial("id").primaryKey(),
+  whaleId: integer("whale_id").notNull(), // references familiarWhales.id
+  walletAddress: text("wallet_address").notNull(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  entryTimestamp: integer("entry_timestamp").notNull(),
+  entryRank: integer("entry_rank"), // their holder rank when they entered
+  entryPriceUsd: real("entry_price_usd"),
+  entryMarketCap: real("entry_market_cap"),
+  exitTimestamp: integer("exit_timestamp"),
+  exitPriceUsd: real("exit_price_usd"),
+  exitMarketCap: real("exit_market_cap"),
+  exitMultiplier: real("exit_multiplier"), // exitPrice / entryPrice
+  status: text("status").default("holding"), // holding, exited, partial_exit
+  peakMultiplier: real("peak_multiplier"), // highest multiplier during hold
+  holdTimeMinutes: integer("hold_time_minutes"),
+});
+
+export const insertWhaleTokenPositionSchema = createInsertSchema(whaleTokenPositions).omit({ id: true });
+export type WhaleTokenPosition = typeof whaleTokenPositions.$inferSelect;
+export type InsertWhaleTokenPosition = z.infer<typeof insertWhaleTokenPositionSchema>;

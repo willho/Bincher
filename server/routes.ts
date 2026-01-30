@@ -72,6 +72,7 @@ import {
 import { isAIAvailable } from "./ai-health";
 import { getNetworkMode, setNetworkMode, getSolanaFaucetUrl, type NetworkMode } from "./network-mode";
 import { markSignalWalletSold, updateScoreOnWhaleActivity, resolvePositionScoreSnapshots } from "./position-score";
+import { recordWhaleActivity, checkForFamiliarWhalesInToken, type FamiliarWhaleAlert } from "./familiar-whales";
 
 let wss: WebSocketServer;
 
@@ -642,6 +643,38 @@ export async function registerRoutes(
           updateScoreOnWhaleActivity(tokenForWhaleCheck).catch(err => 
             console.error(`[PositionScore] Error updating scores on whale activity:`, err)
           );
+          
+          // Record whale activity for familiar whale tracking
+          recordWhaleActivity({
+            walletAddress: swapWalletAddress,
+            tokenMint: tokenForWhaleCheck,
+            tokenSymbol: isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol,
+            action: isBuy ? "buy" : "sell",
+            rank: whaleCheck.rank,
+            priceUsd: undefined, // Would need DexScreener price here
+            marketCap: undefined,
+          }).then(alert => {
+            if (alert && wss) {
+              const familiarWhaleEvent = {
+                type: "FAMILIAR_WHALE",
+                tokenMint: tokenForWhaleCheck,
+                tokenSymbol: isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol,
+                walletAddress: swapWalletAddress,
+                isKnownSuccessful: alert.isKnownSuccessful,
+                successRate: alert.successRate,
+                tokensTraded: alert.tokensTraded,
+                message: alert.message,
+                timestamp: Date.now(),
+              };
+              const msg = JSON.stringify(familiarWhaleEvent);
+              wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                  client.send(msg);
+                }
+              });
+              console.log(`[FamiliarWhale] Alert: ${alert.message}`);
+            }
+          }).catch(err => console.error("[FamiliarWhale] Error:", err));
           
           // Broadcast whale event to connected clients
           if (wss) {
