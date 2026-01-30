@@ -58,6 +58,184 @@ setInterval(() => {
   }
 }, 60000);
 
+// Pending settings confirmations - Miss Pincher proposes, user confirms
+interface PendingSettings {
+  updates: {
+    enabled?: boolean;
+    buyPercentage?: number;
+    minDelayMinutes?: number;
+    maxDelayMinutes?: number;
+    reclaimMultiplier?: number;
+    dumpAlertThreshold?: number;
+    maxTradeUsd?: number;
+    maxDailySpendUsd?: number;
+    minReserveSol?: number;
+    stopLossPercent?: number;
+  };
+  summary: string;
+  riskWarnings: string[];
+  proposedAt: number;
+  expiresAt: number;
+  userConfirmed: boolean;
+}
+const pendingSettings: Map<number, PendingSettings> = new Map();
+const PENDING_SETTINGS_TTL = 3 * 60 * 1000; // 3 minutes to confirm
+
+// Cleanup expired pending settings
+setInterval(() => {
+  const now = Date.now();
+  const entries = Array.from(pendingSettings.entries());
+  for (const [userId, settings] of entries) {
+    if (now > settings.expiresAt) {
+      pendingSettings.delete(userId);
+      console.log(`[Settings] Expired pending settings for user ${userId}`);
+    }
+  }
+}, 60000);
+
+// Generate risk warnings based on settings changes
+function generateSettingsRiskWarnings(
+  updates: PendingSettings['updates'],
+  currentConfig: any
+): string[] {
+  const warnings: string[] = [];
+  
+  // Enabling copy trading
+  if (updates.enabled === true && !currentConfig.enabled) {
+    warnings.push("Enabling copy trading means trades will execute automatically when signal wallets trade.");
+  }
+  
+  // High buy percentage
+  if (updates.buyPercentage !== undefined && updates.buyPercentage > 50) {
+    warnings.push(`Using ${updates.buyPercentage}% of your balance per trade is aggressive - one bad trade could hurt.`);
+  }
+  
+  // No delay (immediate execution)
+  if (updates.minDelayMinutes !== undefined && updates.minDelayMinutes === 0 && updates.maxDelayMinutes === 0) {
+    warnings.push("Zero delay means instant execution - no time to cancel if signal wallet gets rugged.");
+  }
+  
+  // Low take-profit multiplier
+  if (updates.reclaimMultiplier !== undefined && updates.reclaimMultiplier < 2) {
+    warnings.push(`Taking profit at ${updates.reclaimMultiplier}x leaves less room for runners.`);
+  }
+  
+  // Very high take-profit (might never hit)
+  if (updates.reclaimMultiplier !== undefined && updates.reclaimMultiplier > 10) {
+    warnings.push(`${updates.reclaimMultiplier}x target is ambitious - most tokens never get there.`);
+  }
+  
+  // Low reserve
+  if (updates.minReserveSol !== undefined && updates.minReserveSol < 0.05) {
+    warnings.push("Low reserve could leave you unable to pay gas for emergency sells.");
+  }
+  
+  // High daily spend limit
+  if (updates.maxDailySpendUsd !== undefined && updates.maxDailySpendUsd > 1000) {
+    warnings.push(`$${updates.maxDailySpendUsd}/day limit is substantial - make sure you can afford potential losses.`);
+  }
+  
+  // Tight stop-loss
+  if (updates.stopLossPercent !== undefined && updates.stopLossPercent < 20) {
+    warnings.push(`${updates.stopLossPercent}% stop-loss is tight - normal volatility might trigger exits.`);
+  }
+  
+  // No stop-loss
+  if (updates.stopLossPercent === 0) {
+    warnings.push("Disabling stop-loss means positions can go to zero without automatic protection.");
+  }
+  
+  return warnings;
+}
+
+// Generate plain language summary of settings changes
+function generateSettingsSummary(updates: PendingSettings['updates']): string {
+  const parts: string[] = [];
+  
+  if (updates.enabled !== undefined) {
+    parts.push(updates.enabled ? "Turn ON copy trading" : "Turn OFF copy trading");
+  }
+  if (updates.buyPercentage !== undefined) {
+    parts.push(`Use ${updates.buyPercentage}% of balance per trade`);
+  }
+  if (updates.minDelayMinutes !== undefined || updates.maxDelayMinutes !== undefined) {
+    const min = updates.minDelayMinutes ?? 0;
+    const max = updates.maxDelayMinutes ?? min;
+    parts.push(min === max ? `Wait ${min} minutes before trading` : `Wait ${min}-${max} minutes before trading`);
+  }
+  if (updates.reclaimMultiplier !== undefined) {
+    parts.push(`Take profits at ${updates.reclaimMultiplier}x`);
+  }
+  if (updates.dumpAlertThreshold !== undefined) {
+    parts.push(`Alert when token drops ${updates.dumpAlertThreshold}%`);
+  }
+  if (updates.maxTradeUsd !== undefined) {
+    parts.push(`Cap each trade at $${updates.maxTradeUsd}`);
+  }
+  if (updates.maxDailySpendUsd !== undefined) {
+    parts.push(`Limit daily spending to $${updates.maxDailySpendUsd}`);
+  }
+  if (updates.minReserveSol !== undefined) {
+    parts.push(`Keep ${updates.minReserveSol} SOL in reserve`);
+  }
+  if (updates.stopLossPercent !== undefined) {
+    if (updates.stopLossPercent === 0) {
+      parts.push("Disable stop-loss protection");
+    } else {
+      parts.push(`Auto-sell if down ${updates.stopLossPercent}%`);
+    }
+  }
+  
+  return parts.join("\n• ");
+}
+
+// Validate settings before proposing
+function validateSettingsUpdates(updates: PendingSettings['updates']): { valid: boolean; errors: string[] } {
+  const errors: string[] = [];
+  
+  if (updates.buyPercentage !== undefined) {
+    if (updates.buyPercentage < 1 || updates.buyPercentage > 100) {
+      errors.push("Buy percentage must be between 1 and 100");
+    }
+  }
+  
+  if (updates.minDelayMinutes !== undefined && updates.minDelayMinutes < 0) {
+    errors.push("Delay can't be negative");
+  }
+  
+  if (updates.maxDelayMinutes !== undefined && updates.maxDelayMinutes < 0) {
+    errors.push("Delay can't be negative");
+  }
+  
+  if (updates.minDelayMinutes !== undefined && updates.maxDelayMinutes !== undefined) {
+    if (updates.minDelayMinutes > updates.maxDelayMinutes) {
+      errors.push("Min delay can't be greater than max delay");
+    }
+  }
+  
+  if (updates.reclaimMultiplier !== undefined && updates.reclaimMultiplier < 1) {
+    errors.push("Take-profit multiplier must be at least 1");
+  }
+  
+  if (updates.maxTradeUsd !== undefined && updates.maxTradeUsd < 0) {
+    errors.push("Max trade can't be negative");
+  }
+  
+  if (updates.maxDailySpendUsd !== undefined && updates.maxDailySpendUsd < 0) {
+    errors.push("Daily spend limit can't be negative");
+  }
+  
+  if (updates.minReserveSol !== undefined && updates.minReserveSol < 0) {
+    errors.push("Reserve can't be negative");
+  }
+  
+  if (updates.stopLossPercent !== undefined && (updates.stopLossPercent < 0 || updates.stopLossPercent > 100)) {
+    errors.push("Stop-loss must be between 0 and 100 percent");
+  }
+  
+  return { valid: errors.length === 0, errors };
+}
+
 // Check if user is admin
 async function isUserAdmin(userId: number): Promise<boolean> {
   const user = await db.select({ isAdmin: users.isAdmin })
@@ -900,12 +1078,12 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
       }
     }
   },
-  // Copy Trading Configuration Tools
+  // Copy Trading Configuration Tools (with confirmation flow)
   {
     type: "function",
     function: {
-      name: "set_copy_trading",
-      description: "Enable, disable, or configure copy trading settings. Use when user wants to turn on/off auto-copy, set buy amounts, delays, or take-profit levels.",
+      name: "propose_settings",
+      description: "Propose copy trading settings changes. ALWAYS propose first and wait for user confirmation. Use when user wants to change any trading settings - buy amounts, delays, take-profit, stop-loss, budget limits, etc. This shows a summary and risk warnings before applying.",
       parameters: {
         type: "object",
         properties: {
@@ -915,7 +1093,7 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
           },
           buyPercentage: {
             type: "number",
-            description: "Percentage of detected trade value to copy (1-100)"
+            description: "Percentage of balance to use per trade (1-100)"
           },
           minDelayMinutes: {
             type: "number",
@@ -932,8 +1110,48 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
           dumpAlertThreshold: {
             type: "number",
             description: "Alert when token dumps by this percentage (e.g., 50 = -50%)"
+          },
+          maxTradeUsd: {
+            type: "number",
+            description: "Maximum USD value for a single trade"
+          },
+          maxDailySpendUsd: {
+            type: "number",
+            description: "Maximum total USD to spend per day"
+          },
+          minReserveSol: {
+            type: "number",
+            description: "Minimum SOL to keep in reserve (never trade below this)"
+          },
+          stopLossPercent: {
+            type: "number",
+            description: "Auto-sell when position drops this percentage (0 to disable)"
           }
         },
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "confirm_settings",
+      description: "Apply previously proposed settings after user confirms. Only call when user says 'yes', 'confirm', 'apply', 'do it' or similar confirmation.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_settings",
+      description: "Cancel pending settings proposal. Use when user says 'no', 'cancel', 'nevermind' or rejects the changes.",
+      parameters: {
+        type: "object",
+        properties: {},
         required: []
       }
     }
@@ -1416,55 +1634,135 @@ async function executeGetPendingOrders(userId: number): Promise<{ success: boole
 }
 
 // Set copy trading config
-async function executeSetCopyTrading(
+// Propose settings changes (with validation and risk warnings)
+async function executeProposeSettings(
   userId: number,
-  args: {
-    enabled?: boolean;
-    buyPercentage?: number;
-    minDelayMinutes?: number;
-    maxDelayMinutes?: number;
-    reclaimMultiplier?: number;
-    dumpAlertThreshold?: number;
-  }
+  args: PendingSettings['updates']
 ): Promise<{ success: boolean; message: string }> {
-  const updates: any = {};
-  const changes: string[] = [];
-  
-  if (args.enabled !== undefined) {
-    updates.enabled = args.enabled;
-    changes.push(`copy trading ${args.enabled ? 'ENABLED' : 'DISABLED'}`);
-  }
-  if (args.buyPercentage !== undefined) {
-    updates.buyPercentage = Math.min(100, Math.max(1, args.buyPercentage));
-    changes.push(`buy percentage set to ${updates.buyPercentage}%`);
-  }
-  if (args.minDelayMinutes !== undefined) {
-    updates.minDelayMinutes = args.minDelayMinutes;
-    changes.push(`min delay set to ${args.minDelayMinutes} minutes`);
-  }
-  if (args.maxDelayMinutes !== undefined) {
-    updates.maxDelayMinutes = args.maxDelayMinutes;
-    changes.push(`max delay set to ${args.maxDelayMinutes} minutes`);
-  }
-  if (args.reclaimMultiplier !== undefined) {
-    updates.reclaimMultiplier = args.reclaimMultiplier;
-    changes.push(`take-profit set at ${args.reclaimMultiplier}x`);
-  }
-  if (args.dumpAlertThreshold !== undefined) {
-    updates.dumpAlertThreshold = args.dumpAlertThreshold;
-    changes.push(`dump alert at -${args.dumpAlertThreshold}%`);
-  }
-  
-  if (Object.keys(updates).length === 0) {
+  // Check if any settings were provided
+  const updateKeys = Object.keys(args).filter(k => (args as any)[k] !== undefined);
+  if (updateKeys.length === 0) {
     return { success: false, message: "No settings specified to change." };
   }
   
+  // Validate the settings
+  const validation = validateSettingsUpdates(args);
+  if (!validation.valid) {
+    return { 
+      success: false, 
+      message: `Invalid settings:\n• ${validation.errors.join('\n• ')}` 
+    };
+  }
+  
+  // Get current config for risk assessment
+  const currentConfig = await getTradeConfig(userId);
+  
+  // Generate summary and warnings
+  const summary = generateSettingsSummary(args);
+  const riskWarnings = generateSettingsRiskWarnings(args, currentConfig);
+  
+  // Store pending settings
+  const now = Date.now();
+  pendingSettings.set(userId, {
+    updates: args,
+    summary,
+    riskWarnings,
+    proposedAt: now,
+    expiresAt: now + PENDING_SETTINGS_TTL,
+    userConfirmed: false
+  });
+  
+  // Build response message
+  let message = `Here's what I'll change:\n• ${summary}`;
+  
+  if (riskWarnings.length > 0) {
+    message += `\n\nThings to consider:\n• ${riskWarnings.join('\n• ')}`;
+  }
+  
+  message += `\n\nSay "confirm" to apply these settings, or "cancel" to keep current settings.`;
+  
+  return { success: true, message };
+}
+
+// Confirm and apply pending settings
+async function executeConfirmSettings(userId: number): Promise<{ success: boolean; message: string }> {
+  const pending = pendingSettings.get(userId);
+  
+  if (!pending) {
+    return { success: false, message: "No pending settings to confirm. Tell me what you want to change." };
+  }
+  
+  if (Date.now() > pending.expiresAt) {
+    pendingSettings.delete(userId);
+    return { success: false, message: "Settings proposal expired. Tell me what you want to change again." };
+  }
+  
+  // Apply the settings
+  const updates: any = {};
+  const changes: string[] = [];
+  
+  if (pending.updates.enabled !== undefined) {
+    updates.enabled = pending.updates.enabled;
+    changes.push(pending.updates.enabled ? 'copy trading ENABLED' : 'copy trading DISABLED');
+  }
+  if (pending.updates.buyPercentage !== undefined) {
+    updates.buyPercentage = Math.min(100, Math.max(1, pending.updates.buyPercentage));
+    changes.push(`buy percentage: ${updates.buyPercentage}%`);
+  }
+  if (pending.updates.minDelayMinutes !== undefined) {
+    updates.minDelayMinutes = pending.updates.minDelayMinutes;
+    changes.push(`min delay: ${pending.updates.minDelayMinutes}m`);
+  }
+  if (pending.updates.maxDelayMinutes !== undefined) {
+    updates.maxDelayMinutes = pending.updates.maxDelayMinutes;
+    changes.push(`max delay: ${pending.updates.maxDelayMinutes}m`);
+  }
+  if (pending.updates.reclaimMultiplier !== undefined) {
+    updates.reclaimMultiplier = pending.updates.reclaimMultiplier;
+    changes.push(`take-profit: ${pending.updates.reclaimMultiplier}x`);
+  }
+  if (pending.updates.dumpAlertThreshold !== undefined) {
+    updates.dumpAlertThreshold = pending.updates.dumpAlertThreshold;
+    changes.push(`dump alert: -${pending.updates.dumpAlertThreshold}%`);
+  }
+  if (pending.updates.maxTradeUsd !== undefined) {
+    updates.maxTradeUsd = pending.updates.maxTradeUsd;
+    changes.push(`max trade: $${pending.updates.maxTradeUsd}`);
+  }
+  if (pending.updates.maxDailySpendUsd !== undefined) {
+    updates.maxDailySpendUsd = pending.updates.maxDailySpendUsd;
+    changes.push(`daily limit: $${pending.updates.maxDailySpendUsd}`);
+  }
+  if (pending.updates.minReserveSol !== undefined) {
+    updates.minReserveSol = pending.updates.minReserveSol;
+    changes.push(`reserve: ${pending.updates.minReserveSol} SOL`);
+  }
+  if (pending.updates.stopLossPercent !== undefined) {
+    updates.stopLossPercent = pending.updates.stopLossPercent;
+    changes.push(pending.updates.stopLossPercent === 0 ? 'stop-loss: OFF' : `stop-loss: ${pending.updates.stopLossPercent}%`);
+  }
+  
   await updateTradeConfig(userId, updates);
+  pendingSettings.delete(userId);
+  
+  console.log(`[Settings] User ${userId} applied settings: ${changes.join(', ')}`);
   
   return {
     success: true,
-    message: `Copy trading updated: ${changes.join(', ')}`
+    message: `Done. Settings updated: ${changes.join(', ')}`
   };
+}
+
+// Cancel pending settings
+function executeCancelSettings(userId: number): { success: boolean; message: string } {
+  const pending = pendingSettings.get(userId);
+  
+  if (!pending) {
+    return { success: false, message: "Nothing to cancel - no pending settings." };
+  }
+  
+  pendingSettings.delete(userId);
+  return { success: true, message: "Cancelled. Your settings stay as they were." };
 }
 
 // Get current copy trading settings
@@ -1912,8 +2210,10 @@ TRADING (always propose first, execute after confirmation):
 - get_holdings_summary: Show user's current token holdings and P&L
 - get_pending_orders: Show pending buy orders in queue
 
-COPY TRADING CONFIGURATION:
-- set_copy_trading: Enable/disable and configure copy trading settings
+COPY TRADING CONFIGURATION (always propose first, then confirm):
+- propose_settings: Propose settings changes with summary and risk warnings (ALWAYS use this first)
+- confirm_settings: Apply proposed settings after user confirms
+- cancel_settings: Cancel pending settings proposal
 - get_copy_trading_settings: Show current copy trading configuration
 - enable_wallet_copy: Enable copy trading for a monitored wallet
 - disable_wallet_copy: Disable copy trading for a wallet (keep monitoring)
@@ -2027,9 +2327,15 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             const result = await executeGetPendingOrders(userId);
             toolResults.push(result.message);
           }
-          // Copy Trading Configuration Tools
-          else if (toolName === "set_copy_trading") {
-            const result = await executeSetCopyTrading(userId, args);
+          // Copy Trading Configuration Tools (with confirmation flow)
+          else if (toolName === "propose_settings") {
+            const result = await executeProposeSettings(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "confirm_settings") {
+            const result = await executeConfirmSettings(userId);
+            toolResults.push(result.message);
+          } else if (toolName === "cancel_settings") {
+            const result = executeCancelSettings(userId);
             toolResults.push(result.message);
           } else if (toolName === "get_copy_trading_settings") {
             const result = await executeGetCopyTradingSettings(userId);
