@@ -673,14 +673,36 @@ export async function refreshScore(snapshotId: number): Promise<ScoreResult | nu
 export async function updateSnapshotOutcome(
   snapshotId: number,
   finalMultiplier: number,
-  holdTimeMinutes: number
+  holdTimeMinutes: number,
+  sourceWalletAddress?: string
 ): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
+  
+  const [snapshot] = await db.select().from(tokenSnapshots)
+    .where(eq(tokenSnapshots.id, snapshotId))
+    .limit(1);
+  
   await db.update(tokenSnapshots).set({
     finalMultiplier,
     holdTimeMinutes,
     outcomeUpdatedAt: now,
   }).where(eq(tokenSnapshots.id, snapshotId));
+  
+  const walletToUpdate = sourceWalletAddress || (snapshot?.sourceWallets?.[0] as string | undefined);
+  
+  if (walletToUpdate) {
+    try {
+      const { updateSignalWalletProfile } = await import("./signal-wallet-profiler");
+      await updateSignalWalletProfile(
+        walletToUpdate,
+        finalMultiplier,
+        holdTimeMinutes,
+        snapshot?.marketCap ?? undefined
+      );
+    } catch (error) {
+      console.error("Failed to update signal wallet profile:", error);
+    }
+  }
 }
 
 export interface ChatMessage {

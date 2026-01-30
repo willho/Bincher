@@ -361,6 +361,21 @@ async function createMilestoneEvent(
   });
   
   console.log(`Milestone event: ${title}`);
+  
+  if ((eventType === "reclaim_executed" || eventType === "progressive_reclaim") && holding.sourceWalletAddress) {
+    try {
+      const { updateSignalWalletProfile } = await import("./signal-wallet-profiler");
+      const holdTimeMinutes = Math.floor((now - holding.buyTimestamp) / 60);
+      await updateSignalWalletProfile(
+        holding.sourceWalletAddress,
+        multiplier,
+        holdTimeMinutes
+      );
+      console.log(`Updated signal wallet profile for ${holding.sourceWalletAddress}: ${multiplier.toFixed(2)}x in ${holdTimeMinutes}min`);
+    } catch (error) {
+      console.error("Failed to update signal wallet profile:", error);
+    }
+  }
 }
 
 async function createDumpAlertEvent(

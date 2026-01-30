@@ -1170,6 +1170,37 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/signal-wallet-profile/:address", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getSignalWalletProfile, getProfileSummary } = await import("./signal-wallet-profiler");
+      const profile = await getSignalWalletProfile(req.params.address);
+      
+      if (!profile) {
+        return res.json({ profile: null, summary: "No trading history recorded" });
+      }
+      
+      const summary = getProfileSummary(profile);
+      res.json({ profile, summary });
+    } catch (error) {
+      console.error("Error getting signal wallet profile:", error);
+      res.status(500).json({ error: "Failed to get signal wallet profile" });
+    }
+  });
+
+  app.get("/api/position-config-suggestion/:address", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { suggestPositionConfig } = await import("./signal-wallet-profiler");
+      const tokenScore = req.query.tokenScore ? parseInt(req.query.tokenScore as string) : undefined;
+      const hasWhaleActivity = req.query.hasWhaleActivity === "true";
+      
+      const suggestion = await suggestPositionConfig(req.params.address, tokenScore, hasWhaleActivity);
+      res.json(suggestion);
+    } catch (error) {
+      console.error("Error getting position config suggestion:", error);
+      res.status(500).json({ error: "Failed to get position config suggestion" });
+    }
+  });
+
   app.post("/api/monitored-wallets", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const { walletAddress, label } = req.body;
