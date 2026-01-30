@@ -4,10 +4,19 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Activity, Bell, TrendingUp, Wallet } from "lucide-react";
 import { Alerts } from "@/components/alerts";
-import type { MonitoringStatus, Swap } from "@shared/schema";
+import type { Swap } from "@shared/schema";
+
+interface ExtendedStatus {
+  walletAddress: string;
+  isActive: boolean;
+  lastUpdated: number;
+  totalSwapsDetected: number;
+  webhookId?: string;
+  monitoredWalletsCount?: number;
+}
 
 export default function DashboardPage() {
-  const { data: status, isLoading: statusLoading } = useQuery<MonitoringStatus>({
+  const { data: status, isLoading: statusLoading } = useQuery<ExtendedStatus>({
     queryKey: ["/api/status"],
     refetchInterval: 30000,
   });
