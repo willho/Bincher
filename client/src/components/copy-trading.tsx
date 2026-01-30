@@ -570,6 +570,59 @@ export function CopyTrading() {
                       />
                     </div>
                   </div>
+                  
+                  <div className="border-t pt-4 mt-4">
+                    <h4 className="font-medium mb-3">Trading Budget Limits</h4>
+                    <p className="text-xs text-muted-foreground mb-4">
+                      Protect your wallet with spending limits and reserve requirements
+                    </p>
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <div>
+                        <Label>Max Per Trade ($)</Label>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Cap single trade to this USD value
+                        </p>
+                        <Input
+                          type="number"
+                          placeholder="No limit"
+                          value={config?.maxTradeUsd || ""}
+                          onChange={(e) => updateConfig.mutate({ maxTradeUsd: e.target.value ? parseFloat(e.target.value) : undefined })}
+                          data-testid="input-max-trade-usd"
+                        />
+                      </div>
+                      <div>
+                        <Label>Max Daily Spend ($)</Label>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Stop trading after this daily spend
+                        </p>
+                        <Input
+                          type="number"
+                          placeholder="No limit"
+                          value={config?.maxDailySpendUsd || ""}
+                          onChange={(e) => updateConfig.mutate({ maxDailySpendUsd: e.target.value ? parseFloat(e.target.value) : undefined })}
+                          data-testid="input-max-daily-spend"
+                        />
+                        {config?.dailySpentUsd ? (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Spent today: ${config.dailySpentUsd.toFixed(2)}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div>
+                        <Label>Min Reserve (SOL)</Label>
+                        <p className="text-xs text-muted-foreground mb-2">
+                          Keep at least this SOL in wallet
+                        </p>
+                        <Input
+                          type="number"
+                          placeholder="No reserve"
+                          value={config?.minReserveSol || ""}
+                          onChange={(e) => updateConfig.mutate({ minReserveSol: e.target.value ? parseFloat(e.target.value) : undefined })}
+                          data-testid="input-min-reserve-sol"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </>

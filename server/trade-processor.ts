@@ -135,14 +135,82 @@ export async function executePendingBuy(
     }
 
     const balance = await getHotWalletBalance(userId);
+    const config = await getTradeConfig(userId);
     
-    // Estimate priority fee for funding calculation
+    // Get current SOL price for USD conversions
+    const { getSolPriceUsd } = await import("./jupiter");
+    const solPriceUsd = await getSolPriceUsd();
+    
+    // Estimate priority fee early for proper reserve calculation
     const priorityFeeLamports = await estimatePriorityFee();
     const priorityFeeSol = priorityFeeToSol(priorityFeeLamports);
+    const estimatedGasReserve = (priorityFeeSol * 4) + 0.002; // 4x priority + base fee buffer
     
-    // Use pre-calculated segment amount if available, otherwise calculate
-    const solAmount = buy.solAmount ?? balance * 0.1;
-    const gasReserve = (priorityFeeSol * 4) + 0.002; // 4x priority + base fee buffer
+    // Trading budget limit enforcement
+    // 1. Check min reserve requirement (includes gas reserves)
+    const minReserveSol = config.minReserveSol ?? 0;
+    const totalReserve = minReserveSol + estimatedGasReserve + 0.005; // Reserve + gas + safety buffer
+    const availableBalance = Math.max(0, balance - totalReserve);
+    if (availableBalance <= 0) {
+      console.log(`Budget: Wallet reserve protection triggered. Balance: ${balance.toFixed(4)}, Total reserve needed: ${totalReserve.toFixed(4)}`);
+      await cancelPendingBuy(pendingId, "min_reserve_protection");
+      return false;
+    }
+    
+    // Calculate intended trade amount in USD
+    const intendedSolAmount = buy.buyAmount ?? (balance * (config.buyPercentage || 10) / 100);
+    const intendedUsd = intendedSolAmount * solPriceUsd;
+    
+    // 2. Check max per-trade limit
+    let cappedSolAmount = intendedSolAmount;
+    if (config.maxTradeUsd && config.maxTradeUsd > 0 && intendedUsd > config.maxTradeUsd) {
+      cappedSolAmount = config.maxTradeUsd / solPriceUsd;
+      console.log(`Budget: Trade capped from $${intendedUsd.toFixed(2)} to $${config.maxTradeUsd.toFixed(2)} (max per trade)`);
+    }
+    
+    // 3. Check daily spend limit
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+    const startOfDay = currentTimestamp - (currentTimestamp % 86400);
+    let dailySpent = config.dailySpentUsd ?? 0;
+    const dailyReset = config.dailySpentResetAt ?? 0;
+    
+    // Reset daily spend if new day
+    if (dailyReset < startOfDay) {
+      dailySpent = 0;
+    }
+    
+    if (config.maxDailySpendUsd && config.maxDailySpendUsd > 0) {
+      const remainingDaily = Math.max(0, config.maxDailySpendUsd - dailySpent);
+      const cappedUsd = cappedSolAmount * solPriceUsd;
+      
+      if (remainingDaily <= 0) {
+        console.log(`Budget: Daily limit exhausted ($${dailySpent.toFixed(2)}/${config.maxDailySpendUsd.toFixed(2)})`);
+        await cancelPendingBuy(pendingId, "daily_limit_reached");
+        return false;
+      }
+      
+      if (cappedUsd > remainingDaily) {
+        cappedSolAmount = remainingDaily / solPriceUsd;
+        console.log(`Budget: Trade capped from $${cappedUsd.toFixed(2)} to $${remainingDaily.toFixed(2)} (daily limit)`);
+      }
+    }
+    
+    // 4. Cap to available balance (after reserve)
+    if (cappedSolAmount > availableBalance) {
+      cappedSolAmount = availableBalance;
+      console.log(`Budget: Trade capped to available balance: ${cappedSolAmount.toFixed(4)} SOL`);
+    }
+    
+    // Skip tiny trades
+    if (cappedSolAmount < 0.001) {
+      console.log(`Budget: Trade amount too small after caps: ${cappedSolAmount.toFixed(6)} SOL`);
+      await cancelPendingBuy(pendingId, "amount_too_small");
+      return false;
+    }
+    
+    // Use budget-capped amount (already accounts for reserves and limits)
+    const solAmount = cappedSolAmount;
+    const gasReserve = estimatedGasReserve; // Already calculated above
     const totalRequired = solAmount + gasReserve;
     
     if (balance < totalRequired + 0.005) {
@@ -309,6 +377,15 @@ export async function executePendingBuy(
     console.log(`  Signature: ${result.signature}`);
     console.log(`  Amount: ${result.outputAmount?.toLocaleString()} tokens`);
     console.log(`  Spent: ${result.inputAmount?.toFixed(4)} SOL`);
+    
+    // Update daily spend tracking
+    const spentUsd = solSpentActual * solPriceUsd;
+    const newDailySpent = dailySpent + spentUsd;
+    await db.update(tradeConfig).set({
+      dailySpentUsd: newDailySpent,
+      dailySpentResetAt: startOfDay + 86400, // Reset at start of next day
+    }).where(eq(tradeConfig.userId, userId));
+    console.log(`Budget: Daily spend now $${newDailySpent.toFixed(2)}`);
 
     await sendBuyNotification(userId, buy.tokenSymbol, result.inputAmount || solAmount, result.outputAmount || 0, currentPrice, result.signature, buy.segmentIndex, buy.totalSegments);
 
