@@ -153,7 +153,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4" autoComplete={isSetup ? "off" : "on"}>
             <div className="space-y-2">
               <Label htmlFor="username">Username</Label>
               <div className="relative">
@@ -166,6 +166,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                   onChange={(e) => setUsername(e.target.value)}
                   className="pl-10"
                   required
+                  autoComplete={isSetup ? "off" : "username"}
                   data-testid="input-username"
                 />
               </div>
@@ -183,6 +184,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                   onChange={(e) => setPassword(e.target.value)}
                   className="pl-10"
                   required
+                  autoComplete={isSetup ? "new-password" : "current-password"}
                   data-testid="input-password"
                 />
               </div>
@@ -201,6 +203,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     className="pl-10"
                     required
+                    autoComplete="new-password"
                     data-testid="input-confirm-password"
                   />
                 </div>
