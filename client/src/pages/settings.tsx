@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ApiKeysSettings } from "@/components/api-keys-settings";
 import { AdminDashboard } from "@/components/admin-dashboard";
@@ -42,6 +42,14 @@ export default function SettingsPage() {
     queryKey: ["/api/telegram/status"],
   });
 
+  const { data: emailSettings } = useQuery<{
+    emailProvider: string | null;
+    emailFromAddress: string | null;
+    hasApiKey: boolean;
+  }>({
+    queryKey: ["/api/settings/email-provider"],
+  });
+
   // Email provider state
   const [emailProvider, setEmailProvider] = useState<"resend" | "sendgrid" | "mailgun" | "smtp">("resend");
   const [emailApiKey, setEmailApiKey] = useState("");
@@ -50,6 +58,18 @@ export default function SettingsPage() {
   const [smtpPort, setSmtpPort] = useState("587");
   const [smtpUser, setSmtpUser] = useState("");
   const [smtpPass, setSmtpPass] = useState("");
+
+  // Prefill form with existing settings
+  useEffect(() => {
+    if (emailSettings) {
+      if (emailSettings.emailProvider) {
+        setEmailProvider(emailSettings.emailProvider as typeof emailProvider);
+      }
+      if (emailSettings.emailFromAddress) {
+        setEmailFromAddress(emailSettings.emailFromAddress);
+      }
+    }
+  }, [emailSettings]);
 
   const saveEmailMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/settings/email-provider", {
@@ -65,7 +85,7 @@ export default function SettingsPage() {
     }),
     onSuccess: () => {
       toast({ title: "Email settings saved" });
-      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/email-provider"] });
     },
     onError: () => {
       toast({ title: "Failed to save email settings", variant: "destructive" });

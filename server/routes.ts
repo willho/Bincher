@@ -1032,6 +1032,26 @@ export async function registerRoutes(
     }
   });
 
+  // Get email provider settings
+  app.get("/api/settings/email-provider", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const [user] = await db.select({
+        emailProvider: users.emailProvider,
+        emailFromAddress: users.emailFromAddress,
+        hasApiKey: users.emailApiKey,
+      }).from(users).where(eq(users.id, req.userId!));
+      
+      res.json({
+        emailProvider: user?.emailProvider || null,
+        emailFromAddress: user?.emailFromAddress || null,
+        hasApiKey: !!user?.hasApiKey
+      });
+    } catch (error) {
+      console.error("Error getting email provider:", error);
+      res.status(500).json({ error: "Failed to get email provider" });
+    }
+  });
+
   // Update email provider settings for alerts
   app.post("/api/settings/email-provider", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
@@ -1056,6 +1076,10 @@ export async function registerRoutes(
         })
         .where(eq(users.id, req.userId!))
         .returning();
+      
+      // Clear email service cache for this user
+      const { EmailService } = await import("./email-service");
+      EmailService.clearCache(req.userId!);
       
       res.json({ success: true, emailProvider: updated.emailProvider });
     } catch (error) {

@@ -472,6 +472,22 @@ export const swingTradeSettings = pgTable("swing_trade_settings", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+// Trade filters - AI-configured filters via Miss Pincher chat
+export const tradeFilters = pgTable("trade_filters", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  name: text("name").notNull(),
+  metric: text("metric").notNull(), // marketCap, liquidity, holders, volume, age, fdv
+  operator: text("operator").notNull(), // gte, lte, eq
+  value: real("value").notNull(),
+  enabled: boolean("enabled").default(true),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertTradeFilterSchema = createInsertSchema(tradeFilters).omit({ id: true });
+export type InsertTradeFilter = z.infer<typeof insertTradeFilterSchema>;
+export type TradeFilter = typeof tradeFilters.$inferSelect;
+
 // Token snapshots - SHARED across all users for AI learning
 // Captures comprehensive data at queue time for AI analysis
 export const tokenSnapshots = pgTable("token_snapshots", {

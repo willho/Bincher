@@ -1,10 +1,10 @@
 import { getHotWalletBalance, updateTradeConfig, getHoldings, getPendingBuys } from "./wallet";
 import { db } from "./db";
-import { holdings } from "@shared/schema";
+import { holdings, tradeFilters } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 
 export interface ParsedIntent {
-  type: 'buy' | 'sell' | 'balance' | 'holdings' | 'pending' | 'enable_copy' | 'disable_copy' | 'set_config' | 'confirm' | 'cancel' | 'conversation';
+  type: 'buy' | 'sell' | 'balance' | 'holdings' | 'pending' | 'enable_copy' | 'disable_copy' | 'set_config' | 'create_filter' | 'list_filters' | 'delete_filter' | 'confirm' | 'cancel' | 'conversation';
   params?: Record<string, any>;
 }
 
@@ -68,6 +68,87 @@ const cancelPatterns = [
   /^(no|nope|cancel|nevermind|never\s+mind|wait|stop|don'?t)$/i,
 ];
 
+const createFilterPatterns = [
+  /^(?:create|add|set)\s+(?:a\s+)?filter:?\s+(.+)/i,
+  /^(?:only|skip|avoid|ignore|require)\s+(?:tokens?\s+)?(.+)/i,
+  /^(?:don'?t|do\s+not)\s+(?:buy|trade)\s+(.+)/i,
+  /^filter:?\s+(.+)/i,
+];
+
+const listFiltersPatterns = [
+  /^(?:show|list|view|my)\s+filters?/i,
+  /^filters$/i,
+  /^what\s+(?:are\s+)?(?:my\s+)?filters/i,
+];
+
+const deleteFilterPatterns = [
+  /^(?:delete|remove|clear)\s+filter\s+(.+)/i,
+  /^(?:delete|remove|clear)\s+all\s+filters?/i,
+];
+
+interface ParsedFilter {
+  metric?: 'marketCap' | 'liquidity' | 'holders' | 'volume' | 'age' | 'fdv';
+  operator?: 'gte' | 'lte' | 'eq';
+  value?: number;
+  isSkip?: boolean;
+}
+
+function formatValue(value: number): string {
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return value.toString();
+}
+
+function parseFilterCondition(condition: string): ParsedFilter {
+  const lower = condition.toLowerCase();
+  
+  const metricMap: Record<string, ParsedFilter['metric']> = {
+    'market cap': 'marketCap',
+    'mcap': 'marketCap',
+    'mc': 'marketCap',
+    'liquidity': 'liquidity',
+    'liq': 'liquidity',
+    'holders': 'holders',
+    'holder': 'holders',
+    'volume': 'volume',
+    'vol': 'volume',
+    'age': 'age',
+    'days old': 'age',
+    'fdv': 'fdv',
+    'fully diluted': 'fdv',
+  };
+  
+  let metric: ParsedFilter['metric'];
+  for (const [key, val] of Object.entries(metricMap)) {
+    if (lower.includes(key)) {
+      metric = val;
+      break;
+    }
+  }
+  
+  const isSkip = /^(skip|avoid|ignore|don'?t|no)/.test(lower);
+  
+  let operator: ParsedFilter['operator'] = 'gte';
+  if (/(under|below|less than|<|fewer than)/.test(lower)) {
+    operator = 'lte';
+  } else if (/(over|above|more than|>|at least|minimum)/.test(lower)) {
+    operator = 'gte';
+  }
+  
+  const numMatch = lower.match(/(\d+(?:\.\d+)?)\s*(k|m|b)?/);
+  let value: number | undefined;
+  if (numMatch) {
+    value = parseFloat(numMatch[1]);
+    const suffix = numMatch[2];
+    if (suffix === 'k') value *= 1000;
+    else if (suffix === 'm') value *= 1000000;
+    else if (suffix === 'b') value *= 1000000000;
+  }
+  
+  return { metric, operator, value, isSkip };
+}
+
 export function parseIntent(message: string): ParsedIntent {
   const msg = message.trim();
   
@@ -110,6 +191,29 @@ export function parseIntent(message: string): ParsedIntent {
   for (const pattern of disableCopyPatterns) {
     if (pattern.test(msg)) {
       return { type: 'disable_copy' };
+    }
+  }
+  
+  for (const pattern of listFiltersPatterns) {
+    if (pattern.test(msg)) {
+      return { type: 'list_filters' };
+    }
+  }
+  
+  for (const pattern of deleteFilterPatterns) {
+    const match = msg.match(pattern);
+    if (match) {
+      const filterName = match[1] || 'all';
+      return { type: 'delete_filter', params: { name: filterName } };
+    }
+  }
+  
+  for (const pattern of createFilterPatterns) {
+    const match = msg.match(pattern);
+    if (match) {
+      const rawCondition = match[1];
+      const parsed = parseFilterCondition(rawCondition);
+      return { type: 'create_filter', params: { raw: rawCondition, ...parsed } };
     }
   }
   
@@ -184,6 +288,75 @@ export async function executeIntent(userId: number, intent: ParsedIntent): Promi
     case 'disable_copy': {
       await updateTradeConfig(userId, { enabled: false });
       return { handled: true, response: "Copy trading disabled. Monitoring continues but no automatic buys." };
+    }
+    
+    case 'create_filter': {
+      const { raw, metric, operator, value, isSkip } = intent.params || {};
+      
+      if (!metric || !value) {
+        return { 
+          handled: true, 
+          response: "I couldn't parse that filter. Try something like:\n• 'Only buy tokens with market cap above 500k'\n• 'Skip tokens with less than 100 holders'\n• 'Filter: liquidity over 50k'" 
+        };
+      }
+      
+      const now = Math.floor(Date.now() / 1000);
+      const effectiveOperator = isSkip ? (operator === 'gte' ? 'lte' : 'gte') : operator;
+      const filterName = `${metric} ${effectiveOperator === 'gte' ? '>=' : '<='} ${formatValue(value)}`;
+      
+      await db.insert(tradeFilters).values({
+        userId,
+        name: filterName,
+        metric,
+        operator: effectiveOperator,
+        value,
+        enabled: true,
+        createdAt: now
+      });
+      
+      return { 
+        handled: true, 
+        response: `Filter created: ${filterName}. I'll apply this when evaluating tokens.` 
+      };
+    }
+    
+    case 'list_filters': {
+      const filters = await db.select().from(tradeFilters)
+        .where(eq(tradeFilters.userId, userId));
+      
+      if (!filters || filters.length === 0) {
+        return { 
+          handled: true, 
+          response: "No filters set. Try 'only buy tokens above 500k market cap' to create one." 
+        };
+      }
+      
+      const list = filters.map(f => `• ${f.name} ${f.enabled ? '' : '(disabled)'}`).join('\n');
+      return { handled: true, response: `Your filters:\n${list}` };
+    }
+    
+    case 'delete_filter': {
+      const filterName = intent.params?.name;
+      
+      if (filterName === 'all') {
+        await db.delete(tradeFilters).where(eq(tradeFilters.userId, userId));
+        return { handled: true, response: "All filters deleted." };
+      }
+      
+      const filters = await db.select().from(tradeFilters)
+        .where(eq(tradeFilters.userId, userId));
+      
+      const matchingFilter = filters.find(f => 
+        f.name.toLowerCase().includes(filterName.toLowerCase()) ||
+        f.metric.toLowerCase() === filterName.toLowerCase()
+      );
+      
+      if (matchingFilter) {
+        await db.delete(tradeFilters).where(eq(tradeFilters.id, matchingFilter.id));
+        return { handled: true, response: `Filter deleted: ${matchingFilter.name}` };
+      }
+      
+      return { handled: true, response: `No filter found matching "${filterName}"` };
     }
     
     case 'buy':
