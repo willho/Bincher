@@ -61,8 +61,16 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  await storage.initialize();
-  console.log("Database initialized");
+  let dbAvailable = false;
+  try {
+    await storage.initialize();
+    console.log("Database initialized");
+    dbAvailable = true;
+  } catch (error) {
+    console.error("Database connection failed:", error instanceof Error ? error.message : error);
+    console.log("Application starting in limited mode - database features unavailable");
+    console.log("To fix: Enable your Neon database endpoint at https://console.neon.tech");
+  }
   
   await registerRoutes(httpServer, app);
 
