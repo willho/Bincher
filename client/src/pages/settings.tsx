@@ -162,17 +162,18 @@ export default function SettingsPage() {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-                      <li>Open Telegram and search for <strong>@MissPincherBot</strong></li>
-                      <li>Send the command <code className="bg-muted px-1 rounded">/start</code></li>
-                      <li>Send the verification code: <code className="bg-muted px-2 py-1 rounded font-mono">{telegramStatus?.linkToken || "Loading..."}</code></li>
-                    </ol>
+                    <p className="text-sm text-muted-foreground">
+                      Click the button below to open Telegram and connect your account automatically.
+                    </p>
                     <Button variant="outline" size="sm" asChild>
-                      <a href="https://t.me/MissPincherBot" target="_blank" rel="noopener noreferrer">
+                      <a href={`https://t.me/MissPincherBot?start=${telegramStatus?.linkToken || ""}`} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="h-4 w-4 mr-2" />
-                        Open Telegram
+                        Connect via Telegram
                       </a>
                     </Button>
+                    <p className="text-xs text-muted-foreground">
+                      Or manually send <code className="bg-muted px-1 rounded">/start {telegramStatus?.linkToken || "..."}</code> to @MissPincherBot
+                    </p>
                   </div>
                 )}
               </CardContent>
