@@ -320,6 +320,20 @@ export async function hasTokenBeenBought(userId: number, tokenMint: string): Pro
   return false;
 }
 
+export interface WalletCopyConfig {
+  copyBuyType?: string; // "fixed_sol" | "fixed_usd" | "percentage"
+  copyBuyAmount?: number;
+  copyMinBalance?: number;
+  copyMinTradeUsd?: number;
+  copyScoreThreshold?: number;
+  copyTiming?: string; // "immediate" | "delayed" | "triggered"
+  copyDelayMinutes?: number;
+  copyAutoMirror?: boolean;
+  dedupSkipIfHolding?: boolean;
+  dedupSkipIfEverHeld?: boolean;
+  dedupSkipIfPending?: boolean;
+}
+
 export async function addPendingBuy(
   userId: number,
   tokenMint: string,
@@ -327,16 +341,96 @@ export async function addPendingBuy(
   tokenName: string | undefined,
   initialPrice: number | undefined,
   liquidity: number | undefined,
-  sourceWalletData?: { swapId?: number; walletAddress?: string; walletLabel?: string; signalWalletId?: number }
+  sourceWalletData?: { swapId?: number; walletAddress?: string; walletLabel?: string; signalWalletId?: number },
+  walletCopyConfig?: WalletCopyConfig,
+  sourceTradeUsd?: number,
+  tokenAiScore?: number
 ): Promise<PendingBuy | null> {
-  const alreadyBought = await hasTokenBeenBought(userId, tokenMint);
-  if (alreadyBought) {
-    console.log(`Token ${tokenSymbol} already bought or pending for user ${userId}, skipping`);
+  // Import the split buy functions
+  const { getSolPriceUsd, calculateSplitBuySegments, getRandomBuyPercentage } = await import("./jupiter");
+  const solPriceUsd = await getSolPriceUsd();
+  
+  // Apply per-wallet dedup settings - SOURCE-AWARE dedup
+  // These settings control dedup behavior for THIS specific source wallet
+  const dedupSkipHolding = walletCopyConfig?.dedupSkipIfHolding ?? true;
+  const dedupSkipEverHeld = walletCopyConfig?.dedupSkipIfEverHeld ?? false;
+  const dedupSkipPending = walletCopyConfig?.dedupSkipIfPending ?? true;
+  const signalWalletId = sourceWalletData?.signalWalletId;
+  const sourceAddress = sourceWalletData?.walletAddress;
+  
+  // Check if already holding from THIS source
+  if (dedupSkipHolding) {
+    const holdingConditions = [
+      eq(holdings.userId, userId),
+      eq(holdings.tokenMint, tokenMint),
+      eq(holdings.reclaimed, false),
+    ];
+    // Add source identity to check
+    if (signalWalletId) {
+      holdingConditions.push(eq(holdings.signalWalletId, signalWalletId));
+    } else if (sourceAddress) {
+      holdingConditions.push(eq(holdings.sourceWalletAddress, sourceAddress));
+    }
+    
+    const existingHolding = await db.select({ id: holdings.id }).from(holdings).where(and(...holdingConditions)).limit(1);
+    if (existingHolding.length > 0) {
+      console.log(`Token ${tokenSymbol} already held from same source (signalWalletId: ${signalWalletId}), skipping`);
+      return null;
+    }
+  }
+  
+  // Check if pending buy exists from THIS source
+  if (dedupSkipPending) {
+    const pendingConditions = [
+      eq(pendingBuys.userId, userId),
+      eq(pendingBuys.tokenMint, tokenMint),
+      eq(pendingBuys.status, "active"),
+    ];
+    if (signalWalletId) {
+      pendingConditions.push(eq(pendingBuys.signalWalletId, signalWalletId));
+    } else if (sourceAddress) {
+      pendingConditions.push(eq(pendingBuys.sourceWalletAddress, sourceAddress));
+    }
+    
+    const existingPending = await db.select({ id: pendingBuys.id }).from(pendingBuys).where(and(...pendingConditions)).limit(1);
+    if (existingPending.length > 0) {
+      console.log(`Token ${tokenSymbol} already pending from same source (signalWalletId: ${signalWalletId}), skipping`);
+      return null;
+    }
+  }
+  
+  // Check if EVER held this token from THIS source
+  if (dedupSkipEverHeld) {
+    const everHeldConditions = [
+      eq(holdings.userId, userId),
+      eq(holdings.tokenMint, tokenMint),
+    ];
+    if (signalWalletId) {
+      everHeldConditions.push(eq(holdings.signalWalletId, signalWalletId));
+    } else if (sourceAddress) {
+      everHeldConditions.push(eq(holdings.sourceWalletAddress, sourceAddress));
+    }
+    
+    const everHeld = await db.select({ id: holdings.id }).from(holdings).where(and(...everHeldConditions)).limit(1);
+    if (everHeld.length > 0) {
+      console.log(`Token ${tokenSymbol} was previously held from same source (signalWalletId: ${signalWalletId}), skipping`);
+      return null;
+    }
+  }
+  
+  // Check AI score threshold if configured
+  const scoreThreshold = walletCopyConfig?.copyScoreThreshold;
+  if (scoreThreshold && tokenAiScore !== undefined && tokenAiScore < scoreThreshold) {
+    console.log(`Token ${tokenSymbol} AI score ${tokenAiScore} below threshold ${scoreThreshold}, skipping`);
     return null;
   }
   
-  // Import the split buy functions
-  const { getSolPriceUsd, calculateSplitBuySegments, getRandomBuyPercentage } = await import("./jupiter");
+  // Check minimum trade USD filter if configured
+  const minTradeUsd = walletCopyConfig?.copyMinTradeUsd;
+  if (minTradeUsd && sourceTradeUsd !== undefined && sourceTradeUsd < minTradeUsd) {
+    console.log(`Source trade $${sourceTradeUsd.toFixed(2)} below minimum $${minTradeUsd}, skipping`);
+    return null;
+  }
   
   const balance = await getHotWalletBalance(userId);
   if (balance <= 0) {
@@ -344,35 +438,35 @@ export async function addPendingBuy(
     return null;
   }
   
-  // Get SOL price for USD calculations
-  const solPriceUsd = await getSolPriceUsd();
-  
-  // Tiered buy size logic based on pool liquidity:
-  // - Pool < $100: Fixed $10 buy
-  // - Pool $100-150: 10% of balance
-  // - Pool > $150: 10-15% random buy percentage
-  let totalSolAmount: number;
-  const poolLiquidity = liquidity ?? 0;
-  
-  if (poolLiquidity < 100) {
-    // Fixed $10 buy for small pools
-    totalSolAmount = 10 / solPriceUsd;
-    console.log(`Small pool ($${poolLiquidity.toFixed(0)} liquidity): Fixed $10 buy = ${totalSolAmount.toFixed(4)} SOL`);
-  } else if (poolLiquidity <= 150) {
-    // 10% of balance for medium pools
-    totalSolAmount = balance * 0.10;
-    console.log(`Medium pool ($${poolLiquidity.toFixed(0)} liquidity): 10% of balance = ${totalSolAmount.toFixed(4)} SOL`);
-  } else {
-    // 10-15% random for larger pools
-    const buyPercentage = getRandomBuyPercentage();
-    totalSolAmount = balance * (buyPercentage / 100);
-    console.log(`Large pool ($${poolLiquidity.toFixed(0)} liquidity): ${buyPercentage.toFixed(1)}% of balance = ${totalSolAmount.toFixed(4)} SOL`);
+  // Check minimum balance requirement
+  const minBalance = walletCopyConfig?.copyMinBalance;
+  if (minBalance && balance < minBalance) {
+    console.log(`User ${userId} balance ${balance.toFixed(4)} SOL below minimum ${minBalance}, skipping`);
+    return null;
   }
   
-  // Ensure we don't buy more than balance allows
-  const maxBuy = balance * 0.15;
+  // Calculate buy amount based on per-wallet config
+  let totalSolAmount: number;
+  const buyType = walletCopyConfig?.copyBuyType || "percentage";
+  const buyAmount = walletCopyConfig?.copyBuyAmount || 10;
+  
+  if (buyType === "fixed_sol") {
+    totalSolAmount = buyAmount;
+    console.log(`Per-wallet config: Fixed ${buyAmount} SOL`);
+  } else if (buyType === "fixed_usd") {
+    totalSolAmount = buyAmount / solPriceUsd;
+    console.log(`Per-wallet config: Fixed $${buyAmount} USD = ${totalSolAmount.toFixed(4)} SOL`);
+  } else {
+    // Default: percentage of balance
+    totalSolAmount = balance * (buyAmount / 100);
+    console.log(`Per-wallet config: ${buyAmount}% of balance = ${totalSolAmount.toFixed(4)} SOL`);
+  }
+  
+  // Ensure we don't buy more than balance allows (reserve some for fees)
+  const maxBuy = balance * 0.90;
   if (totalSolAmount > maxBuy) {
     totalSolAmount = maxBuy;
+    console.log(`Capped buy to ${maxBuy.toFixed(4)} SOL (90% of balance)`);
   }
   
   // Calculate segments (solPriceUsd already fetched above for tiered sizing)
@@ -380,8 +474,30 @@ export async function addPendingBuy(
   
   const now = Math.floor(Date.now() / 1000);
   
-  // Initial delay: 10-20 minutes (random)
-  const initialDelayMinutes = 10 + Math.random() * 10;
+  // Determine timing based on per-wallet config
+  const timing = walletCopyConfig?.copyTiming || "delayed";
+  let initialDelayMinutes: number;
+  
+  if (timing === "immediate") {
+    // Execute as soon as possible (minimum delay for safety)
+    initialDelayMinutes = 0.5; // 30 seconds
+    console.log("Per-wallet config: Immediate timing (30s delay)");
+  } else if (timing === "triggered") {
+    // Wait for price/volume trigger - use longer delay and rely on triggers
+    initialDelayMinutes = walletCopyConfig?.copyDelayMinutes || 60;
+    console.log(`Per-wallet config: Triggered timing (${initialDelayMinutes}min max delay, waiting for triggers)`);
+  } else {
+    // Default: delayed - use configured delay or random 10-20min
+    const configuredDelay = walletCopyConfig?.copyDelayMinutes;
+    if (configuredDelay) {
+      initialDelayMinutes = configuredDelay;
+      console.log(`Per-wallet config: Delayed ${initialDelayMinutes}min`);
+    } else {
+      initialDelayMinutes = 10 + Math.random() * 10;
+      console.log(`Per-wallet config: Random delay ${initialDelayMinutes.toFixed(1)}min`);
+    }
+  }
+  
   let scheduledBuyAt = now + Math.floor(initialDelayMinutes * 60);
   
   const totalUsd = totalSolAmount * solPriceUsd;
@@ -421,6 +537,7 @@ export async function addPendingBuy(
       sourceWalletAddress: sourceWalletData?.walletAddress,
       sourceWalletLabel: sourceWalletData?.walletLabel,
       signalWalletId: sourceWalletData?.signalWalletId,
+      copyTiming: timing, // Store timing mode for execution logic
     }).returning();
     
     // First segment becomes the parent for subsequent segments

@@ -51,6 +51,12 @@ export async function processPendingBuys(): Promise<void> {
         continue;
       }
 
+      // Skip "triggered" timing buys in timer loop - they only execute on explicit triggers
+      if (pending.copyTiming === "triggered") {
+        console.log(`Skipping triggered-only buy for ${pending.tokenSymbol} (waiting for trigger)`);
+        continue;
+      }
+
       if (pending.triggerReason?.startsWith("processing:")) {
         console.log(`Recovering stuck pending buy for ${pending.tokenSymbol}...`);
         await db.update(pendingBuys).set({

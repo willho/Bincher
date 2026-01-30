@@ -231,6 +231,7 @@ export const pendingBuys = pgTable("pending_buys", {
   sourceWalletAddress: text("source_wallet_address"),
   sourceWalletLabel: text("source_wallet_label"),
   signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet for copy trades
+  copyTiming: text("copy_timing").default("delayed"), // "immediate" | "delayed" | "triggered" - controls execution behavior
 });
 
 // Trade config - settings for copy trading

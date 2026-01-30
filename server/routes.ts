@@ -748,9 +748,28 @@ export async function registerRoutes(
         const walletCopyEnabled = sourceWallet?.copyTradeEnabled === true;
         
         // Global copy trading must be enabled, AND this specific wallet must have copy trading enabled
+        // Note: per-wallet dedup settings are applied inside addPendingBuy
         if (tradeConf.enabled && walletCopyEnabled && isBuy) {
-          const alreadyBought = await hasTokenBeenBought(userId, swap.toToken);
-          if (!alreadyBought) {
+            // Build per-wallet copy config
+            const walletCopyConfig = sourceWallet ? {
+              copyBuyType: sourceWallet.copyBuyType || undefined,
+              copyBuyAmount: sourceWallet.copyBuyAmount || undefined,
+              copyMinBalance: sourceWallet.copyMinBalance || undefined,
+              copyMinTradeUsd: sourceWallet.copyMinTradeUsd || undefined,
+              copyScoreThreshold: sourceWallet.copyScoreThreshold || undefined,
+              copyTiming: sourceWallet.copyTiming || undefined,
+              copyDelayMinutes: sourceWallet.copyDelayMinutes || undefined,
+              copyAutoMirror: sourceWallet.copyAutoMirror || undefined,
+              dedupSkipIfHolding: sourceWallet.dedupSkipIfHolding ?? true,
+              dedupSkipIfEverHeld: sourceWallet.dedupSkipIfEverHeld ?? false,
+              dedupSkipIfPending: sourceWallet.dedupSkipIfPending ?? true,
+            } : undefined;
+            
+            // Calculate source trade USD value for filtering
+            const sourceTradeUsd = toTokenMetadata?.priceUsd && swap.toAmount 
+              ? parseFloat(swap.toAmount) * toTokenMetadata.priceUsd 
+              : undefined;
+            
             const pendingBuy = await addPendingBuy(
               userId,
               swap.toToken,
@@ -763,14 +782,14 @@ export async function registerRoutes(
                 walletAddress: swapWalletAddress,
                 walletLabel: sourceWallet?.label || undefined,
                 signalWalletId: sourceWallet?.id,
-              }
+              },
+              walletCopyConfig,
+              sourceTradeUsd,
+              undefined // tokenAiScore - will be determined later
             );
             if (pendingBuy) {
               console.log("Copy trade: Queued pending buy for", swap.toTokenSymbol, "for user:", userId, "from wallet:", sourceWallet?.label || swapWalletAddress);
             }
-          } else {
-            console.log("Copy trade: Token already bought/pending, skipping", swap.toTokenSymbol);
-          }
         } else if (tradeConf.enabled && isBuy && !walletCopyEnabled) {
           console.log("Copy trade: Wallet", sourceWallet?.label || swapWalletAddress, "doesn't have copy trading enabled, skipping");
         }
@@ -1260,6 +1279,117 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error deleting monitored wallet:", error);
       res.status(500).json({ error: "Failed to delete monitored wallet" });
+    }
+  });
+  
+  // Get per-wallet copy config
+  app.get("/api/monitored-wallets/:id/copy-config", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      const [wallet] = await db.select().from(monitoredWallets).where(
+        and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, req.userId!))
+      ).limit(1);
+      
+      if (!wallet) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      
+      res.json({
+        walletId: wallet.id,
+        walletAddress: wallet.walletAddress,
+        label: wallet.label,
+        copyTradeEnabled: wallet.copyTradeEnabled,
+        copyBuyType: wallet.copyBuyType || "percentage",
+        copyBuyAmount: wallet.copyBuyAmount || 10,
+        copyMinBalance: wallet.copyMinBalance,
+        copyMinTradeUsd: wallet.copyMinTradeUsd,
+        copyScoreThreshold: wallet.copyScoreThreshold,
+        copyTiming: wallet.copyTiming || "delayed",
+        copyDelayMinutes: wallet.copyDelayMinutes,
+        copyAutoMirror: wallet.copyAutoMirror ?? false,
+        dedupSkipIfHolding: wallet.dedupSkipIfHolding ?? true,
+        dedupSkipIfEverHeld: wallet.dedupSkipIfEverHeld ?? false,
+        dedupSkipIfPending: wallet.dedupSkipIfPending ?? true,
+      });
+    } catch (error) {
+      console.error("Error getting wallet copy config:", error);
+      res.status(500).json({ error: "Failed to get wallet copy config" });
+    }
+  });
+  
+  // Update per-wallet copy config
+  const copyConfigSchema = z.object({
+    copyTradeEnabled: z.boolean().optional(),
+    copyBuyType: z.enum(["fixed_sol", "fixed_usd", "percentage"]).optional(),
+    copyBuyAmount: z.number().positive().optional(),
+    copyMinBalance: z.number().nonnegative().nullish(),
+    copyMinTradeUsd: z.number().nonnegative().nullish(),
+    copyScoreThreshold: z.number().int().min(0).max(100).nullish(),
+    copyTiming: z.enum(["immediate", "delayed", "triggered"]).optional(),
+    copyDelayMinutes: z.number().int().nonnegative().nullish(),
+    copyAutoMirror: z.boolean().optional(),
+    dedupSkipIfHolding: z.boolean().optional(),
+    dedupSkipIfEverHeld: z.boolean().optional(),
+    dedupSkipIfPending: z.boolean().optional(),
+  });
+  
+  app.patch("/api/monitored-wallets/:id/copy-config", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      const parsed = copyConfigSchema.safeParse(req.body);
+      
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid copy config", details: parsed.error.issues });
+      }
+      
+      // Verify wallet belongs to user
+      const [existing] = await db.select().from(monitoredWallets).where(
+        and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, req.userId!))
+      ).limit(1);
+      
+      if (!existing) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      
+      const updateData = parsed.data;
+      
+      await db.update(monitoredWallets).set({
+        copyTradeEnabled: updateData.copyTradeEnabled ?? existing.copyTradeEnabled,
+        copyBuyType: updateData.copyBuyType ?? existing.copyBuyType,
+        copyBuyAmount: updateData.copyBuyAmount ?? existing.copyBuyAmount,
+        copyMinBalance: updateData.copyMinBalance !== undefined ? updateData.copyMinBalance : existing.copyMinBalance,
+        copyMinTradeUsd: updateData.copyMinTradeUsd !== undefined ? updateData.copyMinTradeUsd : existing.copyMinTradeUsd,
+        copyScoreThreshold: updateData.copyScoreThreshold !== undefined ? updateData.copyScoreThreshold : existing.copyScoreThreshold,
+        copyTiming: updateData.copyTiming ?? existing.copyTiming,
+        copyDelayMinutes: updateData.copyDelayMinutes !== undefined ? updateData.copyDelayMinutes : existing.copyDelayMinutes,
+        copyAutoMirror: updateData.copyAutoMirror ?? existing.copyAutoMirror,
+        dedupSkipIfHolding: updateData.dedupSkipIfHolding ?? existing.dedupSkipIfHolding,
+        dedupSkipIfEverHeld: updateData.dedupSkipIfEverHeld ?? existing.dedupSkipIfEverHeld,
+        dedupSkipIfPending: updateData.dedupSkipIfPending ?? existing.dedupSkipIfPending,
+      }).where(eq(monitoredWallets.id, walletId));
+      
+      // Return updated config
+      const [updated] = await db.select().from(monitoredWallets).where(eq(monitoredWallets.id, walletId)).limit(1);
+      
+      res.json({
+        success: true,
+        walletId: updated.id,
+        copyTradeEnabled: updated.copyTradeEnabled,
+        copyBuyType: updated.copyBuyType || "percentage",
+        copyBuyAmount: updated.copyBuyAmount || 10,
+        copyMinBalance: updated.copyMinBalance,
+        copyMinTradeUsd: updated.copyMinTradeUsd,
+        copyScoreThreshold: updated.copyScoreThreshold,
+        copyTiming: updated.copyTiming || "delayed",
+        copyDelayMinutes: updated.copyDelayMinutes,
+        copyAutoMirror: updated.copyAutoMirror ?? false,
+        dedupSkipIfHolding: updated.dedupSkipIfHolding ?? true,
+        dedupSkipIfEverHeld: updated.dedupSkipIfEverHeld ?? false,
+        dedupSkipIfPending: updated.dedupSkipIfPending ?? true,
+      });
+    } catch (error) {
+      console.error("Error updating wallet copy config:", error);
+      res.status(500).json({ error: "Failed to update wallet copy config" });
     }
   });
 
