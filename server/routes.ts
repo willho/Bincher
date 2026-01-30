@@ -1983,9 +1983,20 @@ export async function registerRoutes(
     }
   });
 
-  // Backfill missing token metadata for existing swaps
-  app.post("/api/admin/backfill-swap-metadata", requireAuth, async (req: AuthenticatedRequest, res) => {
+  // Backfill missing token metadata for existing swaps (admin only)
+  let lastBackfillTime = 0;
+  app.post("/api/admin/backfill-swap-metadata", requireAdmin, async (req: AuthenticatedRequest, res) => {
     try {
+      // Rate limit: max once per 60 seconds
+      const now = Date.now();
+      if (now - lastBackfillTime < 60000) {
+        return res.status(429).json({ 
+          error: "Rate limited - wait 60 seconds between backfill requests",
+          waitSeconds: Math.ceil((60000 - (now - lastBackfillTime)) / 1000)
+        });
+      }
+      lastBackfillTime = now;
+      
       // Find swaps with missing token symbols
       const swapsWithMissingData = await db.select()
         .from(swaps)
@@ -1997,7 +2008,17 @@ export async function registerRoutes(
             like(swaps.toTokenSymbol, "%...%")
           )
         )
-        .limit(100);
+        .limit(50); // Reduced limit for safety
+      
+      // Cache metadata lookups to avoid duplicate API calls for same mint
+      const metadataCache = new Map<string, { symbol?: string } | null>();
+      
+      const getMetadataCached = async (mint: string) => {
+        if (metadataCache.has(mint)) return metadataCache.get(mint);
+        const meta = await fetchTokenMetadata(mint);
+        metadataCache.set(mint, meta);
+        return meta;
+      };
       
       let updated = 0;
       for (const swap of swapsWithMissingData) {
@@ -2007,7 +2028,7 @@ export async function registerRoutes(
         
         // Fetch fromToken metadata if needed
         if (!isBaseCurrency(swap.fromToken) && (fromSymbol === "???" || fromSymbol?.includes("..."))) {
-          const meta = await fetchTokenMetadata(swap.fromToken);
+          const meta = await getMetadataCached(swap.fromToken);
           if (meta?.symbol) {
             fromSymbol = meta.symbol;
             hasUpdate = true;
@@ -2016,7 +2037,7 @@ export async function registerRoutes(
         
         // Fetch toToken metadata if needed
         if (!isBaseCurrency(swap.toToken) && (toSymbol === "???" || toSymbol?.includes("..."))) {
-          const meta = await fetchTokenMetadata(swap.toToken);
+          const meta = await getMetadataCached(swap.toToken);
           if (meta?.symbol) {
             toSymbol = meta.symbol;
             hasUpdate = true;
@@ -2035,6 +2056,7 @@ export async function registerRoutes(
         success: true,
         checked: swapsWithMissingData.length,
         updated,
+        remaining: swapsWithMissingData.length === 50 ? "More swaps may need updating - run again" : "None",
         message: updated > 0 ? `Updated ${updated} swaps with token metadata` : "All swaps already have metadata"
       });
     } catch (error) {
