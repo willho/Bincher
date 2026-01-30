@@ -11,6 +11,7 @@ Penny Pincher is an automated Solana trading platform that uses AI for analysis 
 - Do not make changes to the folder `Z`.
 - Do not make changes to the file `Y`.
 - When a task list is paused, record it in the "Paused Tasks / Backlog" section below.
+- When discussing trading errors or copy trading issues, always assume production environment (not development).
 
 ## System Architecture
 
