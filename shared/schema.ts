@@ -1026,6 +1026,15 @@ export const aiPredictions = pgTable("ai_predictions", {
     heatScore?: number;
     whaleActivity?: boolean;
   }>(),
+  
+  // Factor snapshot for adaptive learning
+  factorsSnapshot: jsonb("factors_snapshot").$type<{
+    priceChange?: number;
+    timeDecay?: number;
+    whaleActivity?: number;
+    signalWalletStatus?: number;
+    volumeTrend?: number;
+  }>(),
 });
 
 export const insertAiPredictionSchema = createInsertSchema(aiPredictions).omit({ id: true });

@@ -836,22 +836,73 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
         aiScoredAt: now,
       }).where(eq(tokenSnapshots.id, snapshotId));
       
-      // Record prediction for accuracy tracking
+      // Record prediction for accuracy tracking with real factors
       try {
         const { recordPredictionFromScore } = await import("./ai-accuracy");
+        const { detectMarketRegime, applyRegimeAdjustment } = await import("./adaptive-scoring");
+        const { computeMarketFactors } = await import("./position-score");
+        
+        // Compute market-level factors for this snapshot
+        // These are different from position factors (which use entry price/hold time)
+        // Both factor types contribute to adaptive learning for their respective use cases
+        const factorsSnapshot = computeMarketFactors(
+          {
+            priceUsd: snapshot.priceUsd,
+            marketCap: snapshot.marketCap,
+            liquidity: snapshot.liquidity,
+            volume24h: snapshot.volume24h,
+          },
+          whaleData ? {
+            top5Concentration: whaleData.top5Concentration,
+            recentWhaleActivity: whaleData.recentWhaleActivity,
+          } : undefined,
+          true // Signal wallet is holding (snapshot was just created)
+        );
+        
+        // Compute factor-weighted score using adaptive weights
+        const adaptiveWeights = await (await import("./adaptive-scoring")).getAdaptiveWeights();
+        const factorWeightedScore = 50 + (
+          (factorsSnapshot.priceChange || 0) * adaptiveWeights.priceChange +
+          (factorsSnapshot.timeDecay || 0) * adaptiveWeights.timeDecay +
+          (factorsSnapshot.whaleActivity || 0) * adaptiveWeights.whaleActivity +
+          (factorsSnapshot.signalWalletStatus || 0) * adaptiveWeights.signalWalletStatus +
+          (factorsSnapshot.volumeTrend || 0) * adaptiveWeights.volumeTrend
+        );
+        
+        // Blend AI score with factor-weighted score (80% AI, 20% factors)
+        // This incorporates learned factor importance into AI predictions
+        const blendedScore = Math.round(parsed.score * 0.8 + factorWeightedScore * 0.2);
+        
+        // Apply market regime adjustment to the blended score
+        const regime = await detectMarketRegime();
+        const predictedOutcome = blendedScore >= 70 ? "bullish" : blendedScore <= 30 ? "bearish" : "neutral";
+        const regimeAdjustedScore = applyRegimeAdjustment(blendedScore, regime, predictedOutcome);
+        
+        // Update the stored score with regime adjustment
+        if (regimeAdjustedScore !== parsed.score) {
+          await db.update(tokenSnapshots).set({
+            aiScore: regimeAdjustedScore,
+          }).where(eq(tokenSnapshots.id, snapshotId));
+          console.log(`[AI] Applied regime adjustment: ${parsed.score} -> ${regimeAdjustedScore} (${regime.type} market)`);
+        }
+        
+        // Store with null userId for global learning pool
+        // Market factor learning is global (same token = same market conditions for all users)
+        // This ensures sufficient data for adaptive weight calculation
         await recordPredictionFromScore(
-          snapshot.userId ?? null,
+          null, // Global learning - market factors are token-level, not user-level
           snapshot.tokenMint,
           snapshot.tokenSymbol,
           snapshotId,
-          parsed.score,
+          regimeAdjustedScore, // Use regime-adjusted score
           parsed.reasoning,
           parsed.redFlags || [],
           parsed.greenFlags || [],
           snapshot.priceUsd ?? undefined,
           snapshot.marketCap ?? undefined,
           snapshot.liquidity ?? undefined,
-          snapshot.volume24h ?? undefined
+          snapshot.volume24h ?? undefined,
+          factorsSnapshot
         );
       } catch (predictionError) {
         console.error("Failed to record prediction for accuracy tracking:", predictionError);
@@ -1435,6 +1486,18 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: "get_my_accuracy",
       description: "Get Miss Pincher's prediction accuracy stats. Shows hit rate, performance by prediction type, and confidence calibration. Use when user asks about accuracy, performance, or how good predictions are.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_market_insights",
+      description: "Get adaptive scoring insights including current market regime, learned patterns, weight adjustments, and recommendations. Use when user asks about market conditions, what's working, or how scoring is adapting.",
       parameters: {
         type: "object",
         properties: {},
@@ -2735,8 +2798,9 @@ POSITIONS & MANUAL TRADING:
 DEVNET (testing only):
 - request_devnet_faucet: Request SOL from devnet faucet (only works on devnet)
 
-SELF-REFLECTION:
+SELF-REFLECTION & LEARNING:
 - get_my_accuracy: Check my prediction accuracy stats (hit rate, calibration)
+- get_market_insights: Get market regime, learned patterns, weight adjustments, and recommendations
 
 TOKEN ANALYSIS:
 - refresh_token_score: Refresh/rescore a specific token
@@ -2899,6 +2963,49 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
           else if (toolName === "get_my_accuracy") {
             const { getAccuracySummaryForChat } = await import("./ai-accuracy");
             const summary = await getAccuracySummaryForChat(userId);
+            toolResults.push(summary);
+          }
+          // Market insights from adaptive scoring (global market-level data)
+          else if (toolName === "get_market_insights") {
+            const { getAdaptiveScoringContext } = await import("./adaptive-scoring");
+            const context = await getAdaptiveScoringContext();
+            
+            let summary = `MARKET INSIGHTS:\n\n`;
+            
+            // Market regime
+            summary += `CURRENT MARKET REGIME: ${context.regime.type.toUpperCase()}\n`;
+            summary += `Confidence: ${(context.regime.confidence * 100).toFixed(0)}%\n`;
+            summary += `Indicators:\n`;
+            summary += `  - Price direction: ${context.regime.indicators.recentPriceDirection > 0 ? '+' : ''}${context.regime.indicators.recentPriceDirection.toFixed(1)}%\n`;
+            summary += `  - Volatility: ${context.regime.indicators.volatility.toFixed(1)}%\n`;
+            summary += `  - Whale activity: ${(context.regime.indicators.whaleActivityLevel * 100).toFixed(0)}%\n`;
+            summary += `  - Avg hold time: ${context.regime.indicators.avgHoldTime.toFixed(1)} hrs\n\n`;
+            
+            // Adaptive weights
+            summary += `LEARNED SCORING WEIGHTS:\n`;
+            const sortedWeights = Object.entries(context.weights).sort((a, b) => b[1] - a[1]);
+            for (const [factor, weight] of sortedWeights) {
+              summary += `  - ${factor}: ${(weight * 100).toFixed(0)}%\n`;
+            }
+            summary += `\n`;
+            
+            // Top patterns
+            if (context.patterns.length > 0) {
+              summary += `DISCOVERED PATTERNS:\n`;
+              for (const pattern of context.patterns.slice(0, 5)) {
+                summary += `  - ${pattern.pattern}: ${(pattern.successRate * 100).toFixed(0)}% success (${pattern.occurrences} samples)\n`;
+              }
+              summary += `\n`;
+            }
+            
+            // Recommendations
+            if (context.recommendations.length > 0) {
+              summary += `RECOMMENDATIONS:\n`;
+              for (const rec of context.recommendations) {
+                summary += `  - ${rec}\n`;
+              }
+            }
+            
             toolResults.push(summary);
           }
         } catch (parseError) {

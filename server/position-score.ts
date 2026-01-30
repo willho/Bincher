@@ -3,6 +3,90 @@ import { holdings } from "@shared/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
 import { getHoldersCached } from "./price-aggregator";
 
+// Market-level factor computation for AI predictions
+// Maps market data to the same factor interface used by position scoring
+// This allows adaptive learning from market factors while using a common interface
+// The factor semantics differ between contexts:
+// - For market predictions: priceChange = liquidityHealth, timeDecay = freshness, etc.
+// - For position scoring: priceChange = entry vs current price, timeDecay = holding duration
+export interface MarketFactors {
+  liquidityHealth: number;     // Liquidity/mcap ratio quality
+  volumeStrength: number;      // Trading volume level
+  whaleConcentration: number;  // Holder concentration risk
+  whaleActivity: number;       // Recent whale movements
+  tokenFreshness: number;      // How new/fresh the token is
+}
+
+export function computeMarketFactors(
+  tokenData: {
+    priceUsd?: number | null;
+    marketCap?: number | null;
+    liquidity?: number | null;
+    volume24h?: number | null;
+  },
+  whaleData?: {
+    top5Concentration: number;
+    recentWhaleActivity: boolean;
+  }
+): MarketFactors {
+  const factors: MarketFactors = {
+    liquidityHealth: 0,
+    volumeStrength: 0,
+    whaleConcentration: 0,
+    whaleActivity: 0,
+    tokenFreshness: 0,
+  };
+
+  // Liquidity health (liquidity/mcap ratio)
+  if (tokenData.liquidity && tokenData.marketCap && tokenData.marketCap > 0) {
+    const liquidityRatio = tokenData.liquidity / tokenData.marketCap;
+    if (liquidityRatio > 0.1) {
+      factors.liquidityHealth = 40; // Excellent liquidity
+    } else if (liquidityRatio > 0.05) {
+      factors.liquidityHealth = 20; // Good liquidity
+    } else if (liquidityRatio > 0.02) {
+      factors.liquidityHealth = 0;  // Acceptable
+    } else {
+      factors.liquidityHealth = -30; // Poor liquidity risk
+    }
+  }
+
+  // Volume strength
+  if (tokenData.volume24h !== undefined && tokenData.volume24h !== null) {
+    if (tokenData.volume24h > 500000) {
+      factors.volumeStrength = 35;
+    } else if (tokenData.volume24h > 100000) {
+      factors.volumeStrength = 20;
+    } else if (tokenData.volume24h > 10000) {
+      factors.volumeStrength = 5;
+    } else {
+      factors.volumeStrength = -15;
+    }
+  }
+
+  // Whale data
+  if (whaleData) {
+    // Whale concentration risk
+    if (whaleData.top5Concentration > 80) {
+      factors.whaleConcentration = -40;
+    } else if (whaleData.top5Concentration > 60) {
+      factors.whaleConcentration = -20;
+    } else if (whaleData.top5Concentration > 40) {
+      factors.whaleConcentration = 0;
+    } else {
+      factors.whaleConcentration = 15; // Well distributed
+    }
+
+    // Whale activity (recent movements)
+    factors.whaleActivity = whaleData.recentWhaleActivity ? 25 : 0;
+  }
+
+  // Token freshness (new snapshot = fresh signal)
+  factors.tokenFreshness = 10;
+
+  return factors;
+}
+
 export interface PositionScoreFactors {
   priceChange: number;
   timeDecay: number;
@@ -17,12 +101,17 @@ export interface PositionScoreResult {
   factors: PositionScoreFactors;
 }
 
-const SCORE_WEIGHTS = {
-  priceChange: 0.35,
-  timeDecay: 0.15,
-  whaleActivity: 0.20,
-  signalWalletStatus: 0.20,
-  volumeTrend: 0.10,
+// Position scoring uses fixed weights optimized for holding management
+// These are different from adaptive market-level weights which are for new token predictions
+// Position factors (entry price change, hold time, signal wallet sold) are fundamentally 
+// different from market factors (liquidity ratio, volume, concentration) so they need
+// separate weight systems
+const POSITION_SCORE_WEIGHTS = {
+  priceChange: 0.35,     // Entry price vs current price movement
+  timeDecay: 0.15,       // How long position has been held without gains
+  whaleActivity: 0.20,   // Recent whale activity on the token
+  signalWalletStatus: 0.20, // Whether signal wallet is still holding
+  volumeTrend: 0.10,     // Volume change direction
 };
 
 export async function calculatePositionScore(
@@ -127,14 +216,26 @@ export async function calculatePositionScore(
     }
   }
 
+  // Use fixed position weights (not adaptive market weights)
+  // Position factors are fundamentally different from market factors
   const rawScore =
-    (factors.priceChange * SCORE_WEIGHTS.priceChange) +
-    (factors.timeDecay * SCORE_WEIGHTS.timeDecay) +
-    (factors.whaleActivity * SCORE_WEIGHTS.whaleActivity) +
-    (factors.signalWalletStatus * SCORE_WEIGHTS.signalWalletStatus) +
-    (factors.volumeTrend * SCORE_WEIGHTS.volumeTrend);
+    (factors.priceChange * POSITION_SCORE_WEIGHTS.priceChange) +
+    (factors.timeDecay * POSITION_SCORE_WEIGHTS.timeDecay) +
+    (factors.whaleActivity * POSITION_SCORE_WEIGHTS.whaleActivity) +
+    (factors.signalWalletStatus * POSITION_SCORE_WEIGHTS.signalWalletStatus) +
+    (factors.volumeTrend * POSITION_SCORE_WEIGHTS.volumeTrend);
 
-  const normalizedScore = Math.round(Math.max(0, Math.min(100, 50 + rawScore)));
+  let normalizedScore = Math.round(Math.max(0, Math.min(100, 50 + rawScore)));
+
+  // Apply market regime adjustment
+  try {
+    const { detectMarketRegime, applyRegimeAdjustment } = await import("./adaptive-scoring");
+    const regime = await detectMarketRegime();
+    const predictedOutcome = normalizedScore >= 65 ? "bullish" : normalizedScore <= 35 ? "bearish" : "neutral";
+    normalizedScore = Math.round(applyRegimeAdjustment(normalizedScore, regime, predictedOutcome));
+  } catch (e) {
+    // Regime adjustment is optional
+  }
 
   let tier: "strong" | "neutral" | "weak";
   if (normalizedScore >= 65) {

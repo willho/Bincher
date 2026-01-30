@@ -20,6 +20,13 @@ export interface PredictionData {
     heatScore?: number;
     whaleActivity?: boolean;
   };
+  factorsSnapshot?: {
+    priceChange?: number;
+    timeDecay?: number;
+    whaleActivity?: number;
+    signalWalletStatus?: number;
+    volumeTrend?: number;
+  };
 }
 
 export async function recordPrediction(
@@ -41,6 +48,7 @@ export async function recordPrediction(
     greenFlags: data.greenFlags,
     priceAtPrediction: data.priceAtPrediction,
     priceContextAt: data.priceContext,
+    factorsSnapshot: data.factorsSnapshot,
     predictedAt: now,
   }).returning({ id: aiPredictions.id });
 
@@ -374,7 +382,14 @@ export async function recordPredictionFromScore(
   priceUsd?: number,
   marketCap?: number,
   liquidity?: number,
-  volume24h?: number
+  volume24h?: number,
+  factorsSnapshot?: {
+    priceChange?: number;
+    timeDecay?: number;
+    whaleActivity?: number;
+    signalWalletStatus?: number;
+    volumeTrend?: number;
+  }
 ): Promise<number> {
   let predictedOutcome: "bullish" | "bearish" | "neutral";
   if (score >= 70) {
@@ -408,5 +423,6 @@ export async function recordPredictionFromScore(
       liquidity,
       volume24h,
     },
+    factorsSnapshot,
   });
 }
