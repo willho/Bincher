@@ -41,7 +41,7 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - **AI Trading Control**: Miss Pincher can propose and execute trades, and manage copy trading configurations through natural language, requiring explicit user confirmation for all trade executions.
 - **AI Health & Cost Optimization**: Includes an AI health tracking system, an intent parser for simple commands (reducing AI calls), and graceful degradation to ensure manual controls remain functional if AI is unavailable.
 - **Network Mode**: Supports dynamic switching between Devnet and Mainnet with separate API endpoints and features like faucet links for Devnet.
-- **Position Model**: Each trading position is isolated with its own token wallet, tracking token, source, and configuration.
+- **Position Model**: Each trading position is stored in the `holdings` table, which tracks: token wallet (`tokenWalletPublicKey`), token (`tokenMint`), source (`sourceWalletAddress`, `signalWalletId`), and per-position config (`takeProfitThresholds`, `stopLossPercent`, `positionSource`). Multiple positions on the same token are allowed from different signal sources.
 - **Per-Wallet Copy Config**: Granular settings for buy amounts, minimum balances, trade filters, score thresholds, and timing.
 - **Risk Management**: Configurable take-profit, stop-loss, auto-mirroring, and trading budget limits.
 - **Adaptive AI & Autonomous Mode (Planned)**: Future enhancements include adaptive scoring based on outcome feedback, continuous position scoring updates, familiar whale tracking, and an autonomous trading mode with user-defined risk profiles and stop conditions.

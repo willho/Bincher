@@ -50,6 +50,54 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   aiScore: integer("ai_score"), // 0-100 score from AI analysis
   aiScoreDetails: text("ai_score_details"), // JSON with hit rate, avg multiplier, risk, etc.
   aiScoreUpdatedAt: integer("ai_score_updated_at"),
+  
+  // Per-wallet copy config (Phase 8)
+  copyBuyType: text("copy_buy_type").default("percentage"), // "fixed_sol" | "fixed_usd" | "percentage"
+  copyBuyAmount: real("copy_buy_amount").default(10), // Amount based on type
+  copyMinBalance: real("copy_min_balance"), // Skip if hot wallet below this SOL
+  copyMinTradeUsd: real("copy_min_trade_usd"), // Only copy trades over this USD value
+  copyScoreThreshold: integer("copy_score_threshold"), // Only copy tokens above this AI score
+  copyTiming: text("copy_timing").default("immediate"), // "immediate" | "delayed" | "triggered"
+  copyDelayMinutes: integer("copy_delay_minutes"), // Delay before copying (if delayed)
+  copyAutoMirror: boolean("copy_auto_mirror").default(false), // Mirror additional buys/sells
+  
+  // Deduplication options
+  dedupSkipIfHolding: boolean("dedup_skip_if_holding").default(true), // Skip if already holding
+  dedupSkipIfEverHeld: boolean("dedup_skip_if_ever_held").default(false), // Skip if ever held
+  dedupSkipIfPending: boolean("dedup_skip_if_pending").default(true), // Skip if already pending
+});
+
+// Signal wallet profiles - track trading patterns for each wallet
+export const signalWalletProfiles = pgTable("signal_wallet_profiles", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull().unique(),
+  
+  // Aggregated trading style metrics
+  avgEntryMcap: real("avg_entry_mcap"), // Average market cap at entry
+  medianHoldTimeMinutes: integer("median_hold_time_minutes"),
+  avgExitMultiplier: real("avg_exit_multiplier"), // Average exit multiplier
+  maxExitMultiplier: real("max_exit_multiplier"), // Best exit
+  minExitMultiplier: real("min_exit_multiplier"), // Worst exit
+  
+  // Win/loss tracking
+  totalTrades: integer("total_trades").default(0),
+  winningTrades: integer("winning_trades").default(0), // Exits > 1x
+  ruggedTrades: integer("rugged_trades").default(0), // Exits < 0.1x
+  winRate: real("win_rate"), // Calculated: winning/total
+  rugRate: real("rug_rate"), // Calculated: rugged/total
+  
+  // Style classification
+  tradingStyle: text("trading_style"), // "insider" | "degen" | "quality" | "whale" | "unknown"
+  styleConfidence: real("style_confidence"), // 0-1 confidence in classification
+  
+  // Recent performance (rolling 30 days)
+  recentWinRate: real("recent_win_rate"),
+  recentAvgMultiplier: real("recent_avg_multiplier"),
+  
+  // Timestamps
+  firstSeenAt: integer("first_seen_at"),
+  lastTradeAt: integer("last_trade_at"),
+  updatedAt: integer("updated_at").notNull(),
 });
 
 // Database tables
@@ -134,6 +182,16 @@ export const holdings = pgTable("holdings", {
   sourceWalletCurrentPct: real("source_wallet_current_pct"),
   isDead: boolean("is_dead").default(false),
   isDust: boolean("is_dust").default(false),
+  
+  // Position config (Phase 8) - per-position risk management
+  takeProfitThresholds: jsonb("take_profit_thresholds").$type<number[]>(), // Custom milestones [2, 4, 10, 25]
+  takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>(), // Sell % at each [25, 25, 25, 25]
+  stopLossPercent: real("stop_loss_percent"), // Sell if price drops by this %
+  stopLossFloorUsd: real("stop_loss_floor_usd"), // Sell if value drops below this $
+  autoMirrorSells: boolean("auto_mirror_sells").default(false), // Mirror signal wallet sells
+  positionSource: text("position_source").default("copy"), // "copy" | "manual" | "autonomous" | "swing"
+  signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet that signaled
+  entryReason: text("entry_reason"), // AI-generated or user note about why position was taken
 });
 
 // Pending buys - tokens queued for purchase with delay
@@ -182,6 +240,113 @@ export const tradeConfig = pgTable("trade_config", {
   dumpAlertEnabled: boolean("dump_alert_enabled").default(true),
   dumpAlertThreshold: real("dump_alert_threshold").default(50),
   minBuyScore: integer("min_buy_score"),
+  
+  // Trading budget limits (Phase 8)
+  maxTradeUsd: real("max_trade_usd"), // Max per trade in USD
+  maxDailySpendUsd: real("max_daily_spend_usd"), // Max daily spend in USD
+  minReserveSol: real("min_reserve_sol"), // Keep at least this SOL in hot wallet
+  dailySpentUsd: real("daily_spent_usd").default(0), // Track daily spend
+  dailySpentResetAt: integer("daily_spent_reset_at"), // When to reset daily spend
+});
+
+// Autonomous mode settings - per-user AI trading configuration
+export const autonomousSettings = pgTable("autonomous_settings", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  
+  // Mode toggle
+  enabled: boolean("enabled").default(false),
+  enabledAt: integer("enabled_at"),
+  
+  // Risk profile
+  riskProfile: text("risk_profile").default("balanced"), // "conservative" | "balanced" | "aggressive" | "custom"
+  
+  // Position limits
+  maxOpenPositions: integer("max_open_positions").default(5),
+  maxPositionSizeUsd: real("max_position_size_usd").default(50),
+  minTokenScore: integer("min_token_score").default(70), // Minimum AI score to enter
+  
+  // Entry filters
+  allowedSources: jsonb("allowed_sources").$type<string[]>().default(["copy"]), // "copy" | "discovery" | "swing"
+  preferredWallets: jsonb("preferred_wallets").$type<number[]>(), // Only use these signal wallet IDs
+  minMcap: real("min_mcap"), // Minimum market cap
+  maxMcap: real("max_mcap"), // Maximum market cap
+  minLiquidity: real("min_liquidity"), // Minimum liquidity
+  
+  // Exit rules
+  defaultTakeProfit: jsonb("default_take_profit").$type<number[]>().default([4, 10, 25]),
+  defaultStopLoss: real("default_stop_loss").default(50), // Sell if down 50%
+  
+  // Auto-stop conditions
+  stopOnDailyLossUsd: real("stop_on_daily_loss_usd"), // Stop if daily loss exceeds
+  stopOnDrawdownPercent: real("stop_on_drawdown_percent"), // Stop if portfolio drops by %
+  stopOnWinTargetUsd: real("stop_on_win_target_usd"), // Stop after hitting profit target
+  stopOnLossStreak: integer("stop_on_loss_streak"), // Stop after N consecutive losses
+  stopOnTradeCount: integer("stop_on_trade_count"), // Max trades per day
+  stopOnMinBalanceSol: real("stop_on_min_balance_sol"), // Kill switch: stop if balance below
+  
+  // Current state
+  todayLossUsd: real("today_loss_usd").default(0),
+  todayWinUsd: real("today_win_usd").default(0),
+  todayTradeCount: integer("today_trade_count").default(0),
+  consecutiveLosses: integer("consecutive_losses").default(0),
+  peakBalanceSol: real("peak_balance_sol"),
+  stateResetAt: integer("state_reset_at"),
+  
+  // Auto-stop triggered
+  stoppedReason: text("stopped_reason"), // Why auto-stop triggered
+  stoppedAt: integer("stopped_at"),
+  
+  // User acknowledgment
+  warningAcknowledged: boolean("warning_acknowledged").default(false),
+  acknowledgedAt: integer("acknowledged_at"),
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+// Swing trade settings - per-user swing trading configuration
+export const swingTradeSettings = pgTable("swing_trade_settings", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  
+  // Enable/disable swing trading
+  enabled: boolean("enabled").default(false),
+  
+  // Pattern detection preferences
+  detectSupportResistance: boolean("detect_support_resistance").default(true),
+  detectVolumeSpikes: boolean("detect_volume_spikes").default(true),
+  detectOhlcPatterns: boolean("detect_ohlc_patterns").default(true),
+  detectConsolidation: boolean("detect_consolidation").default(true),
+  detectBreakouts: boolean("detect_breakout").default(true),
+  
+  // Entry triggers
+  minSupportBounces: integer("min_support_bounces").default(3), // How many times price touched support
+  breakoutVolumeFactor: real("breakout_volume_factor").default(2), // Volume multiplier for breakout
+  consolidationMinHours: integer("consolidation_min_hours").default(4), // Min time in range
+  
+  // Position sizing
+  swingPositionSizeUsd: real("swing_position_size_usd").default(25),
+  maxSwingPositions: integer("max_swing_positions").default(3),
+  
+  // Exit strategy
+  resistanceTakeProfit: boolean("resistance_take_profit").default(true), // Sell at resistance
+  trailingStopPercent: real("trailing_stop_percent"), // Trailing stop loss
+  timeLimitHours: integer("time_limit_hours"), // Max hold time
+  
+  // Filters
+  minTokenScore: integer("min_token_score").default(60), // Only swing tokens above this score
+  minLiquidity: real("min_liquidity").default(50000), // Min liquidity in USD
+  minMcap: real("min_mcap").default(100000), // Min market cap
+  maxMcap: real("max_mcap").default(10000000), // Max market cap
+  
+  // Automation level
+  autoEntry: boolean("auto_entry").default(false), // Auto-enter swing positions
+  autoExit: boolean("auto_exit").default(true), // Auto-exit at targets
+  alertOnly: boolean("alert_only").default(true), // Just alert, don't trade
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
 });
 
 // Token snapshots - SHARED across all users for AI learning
@@ -354,6 +519,9 @@ export const insertPriceAggregateSchema = createInsertSchema(priceAggregates).om
 export const insertAiChatMessageSchema = createInsertSchema(aiChatMessages).omit({ id: true });
 export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({ id: true });
 export const insertCommunityInsightSchema = createInsertSchema(communityInsights).omit({ id: true });
+export const insertSignalWalletProfileSchema = createInsertSchema(signalWalletProfiles).omit({ id: true });
+export const insertAutonomousSettingsSchema = createInsertSchema(autonomousSettings).omit({ id: true });
+export const insertSwingTradeSettingsSchema = createInsertSchema(swingTradeSettings).omit({ id: true });
 
 // Price aggregate types
 export type PriceAggregate = typeof priceAggregates.$inferSelect;
@@ -367,6 +535,18 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 // Monitored wallet types
 export type MonitoredWallet = typeof monitoredWallets.$inferSelect;
 export type InsertMonitoredWallet = z.infer<typeof insertMonitoredWalletSchema>;
+
+// Signal wallet profile types
+export type SignalWalletProfile = typeof signalWalletProfiles.$inferSelect;
+export type InsertSignalWalletProfile = z.infer<typeof insertSignalWalletProfileSchema>;
+
+// Autonomous settings types
+export type AutonomousSettings = typeof autonomousSettings.$inferSelect;
+export type InsertAutonomousSettings = z.infer<typeof insertAutonomousSettingsSchema>;
+
+// Swing trade settings types
+export type SwingTradeSettings = typeof swingTradeSettings.$inferSelect;
+export type InsertSwingTradeSettings = z.infer<typeof insertSwingTradeSettingsSchema>;
 
 // Types for API use
 export const swapSchema = z.object({
@@ -450,6 +630,15 @@ export const holdingSchema = z.object({
   sourceWalletCurrentPct: z.number().optional(),
   isDead: z.boolean().default(false),
   isDust: z.boolean().default(false),
+  // Position config (Phase 8)
+  takeProfitThresholds: z.array(z.number()).optional(),
+  takeProfitPercentages: z.array(z.number()).optional(),
+  stopLossPercent: z.number().optional(),
+  stopLossFloorUsd: z.number().optional(),
+  autoMirrorSells: z.boolean().default(false),
+  positionSource: z.string().default("copy"),
+  signalWalletId: z.number().optional(),
+  entryReason: z.string().optional(),
 });
 
 export type Holding = z.infer<typeof holdingSchema>;
@@ -495,9 +684,104 @@ export const tradeConfigSchema = z.object({
   dumpAlertEnabled: z.boolean().default(true),
   dumpAlertThreshold: z.number().default(50),
   minBuyScore: z.number().optional(),
+  // Trading budget limits (Phase 8)
+  maxTradeUsd: z.number().optional(),
+  maxDailySpendUsd: z.number().optional(),
+  minReserveSol: z.number().optional(),
+  dailySpentUsd: z.number().default(0),
+  dailySpentResetAt: z.number().optional(),
 });
 
 export type TradeConfig = z.infer<typeof tradeConfigSchema>;
+
+// Signal wallet profile schema for API use
+export const signalWalletProfileSchema = z.object({
+  id: z.number(),
+  walletAddress: z.string(),
+  avgEntryMcap: z.number().optional(),
+  medianHoldTimeMinutes: z.number().optional(),
+  avgExitMultiplier: z.number().optional(),
+  maxExitMultiplier: z.number().optional(),
+  minExitMultiplier: z.number().optional(),
+  totalTrades: z.number().default(0),
+  winningTrades: z.number().default(0),
+  ruggedTrades: z.number().default(0),
+  winRate: z.number().optional(),
+  rugRate: z.number().optional(),
+  tradingStyle: z.string().optional(),
+  styleConfidence: z.number().optional(),
+  recentWinRate: z.number().optional(),
+  recentAvgMultiplier: z.number().optional(),
+  firstSeenAt: z.number().optional(),
+  lastTradeAt: z.number().optional(),
+  updatedAt: z.number(),
+});
+
+// Autonomous settings schema for API use
+export const autonomousSettingsSchema = z.object({
+  id: z.number(),
+  userId: z.number(),
+  enabled: z.boolean().default(false),
+  enabledAt: z.number().optional(),
+  riskProfile: z.string().default("balanced"),
+  maxOpenPositions: z.number().default(5),
+  maxPositionSizeUsd: z.number().default(50),
+  minTokenScore: z.number().default(70),
+  allowedSources: z.array(z.string()).default(["copy"]),
+  preferredWallets: z.array(z.number()).optional(),
+  minMcap: z.number().optional(),
+  maxMcap: z.number().optional(),
+  minLiquidity: z.number().optional(),
+  defaultTakeProfit: z.array(z.number()).default([4, 10, 25]),
+  defaultStopLoss: z.number().default(50),
+  stopOnDailyLossUsd: z.number().optional(),
+  stopOnDrawdownPercent: z.number().optional(),
+  stopOnWinTargetUsd: z.number().optional(),
+  stopOnLossStreak: z.number().optional(),
+  stopOnTradeCount: z.number().optional(),
+  stopOnMinBalanceSol: z.number().optional(),
+  todayLossUsd: z.number().default(0),
+  todayWinUsd: z.number().default(0),
+  todayTradeCount: z.number().default(0),
+  consecutiveLosses: z.number().default(0),
+  peakBalanceSol: z.number().optional(),
+  stateResetAt: z.number().optional(),
+  stoppedReason: z.string().optional(),
+  stoppedAt: z.number().optional(),
+  warningAcknowledged: z.boolean().default(false),
+  acknowledgedAt: z.number().optional(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+// Swing trade settings schema for API use
+export const swingTradeSettingsSchema = z.object({
+  id: z.number(),
+  userId: z.number(),
+  enabled: z.boolean().default(false),
+  detectSupportResistance: z.boolean().default(true),
+  detectVolumeSpikes: z.boolean().default(true),
+  detectOhlcPatterns: z.boolean().default(true),
+  detectConsolidation: z.boolean().default(true),
+  detectBreakouts: z.boolean().default(true),
+  minSupportBounces: z.number().default(3),
+  breakoutVolumeFactor: z.number().default(2),
+  consolidationMinHours: z.number().default(4),
+  swingPositionSizeUsd: z.number().default(25),
+  maxSwingPositions: z.number().default(3),
+  resistanceTakeProfit: z.boolean().default(true),
+  trailingStopPercent: z.number().optional(),
+  timeLimitHours: z.number().optional(),
+  minTokenScore: z.number().default(60),
+  minLiquidity: z.number().default(50000),
+  minMcap: z.number().default(100000),
+  maxMcap: z.number().default(10000000),
+  autoEntry: z.boolean().default(false),
+  autoExit: z.boolean().default(true),
+  alertOnly: z.boolean().default(true),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
 
 // Token snapshot schema for AI analysis
 export const tokenSnapshotSchema = z.object({
