@@ -793,6 +793,93 @@ export async function registerRoutes(
         } else if (tradeConf.enabled && isBuy && !walletCopyEnabled) {
           console.log("Copy trade: Wallet", sourceWallet?.label || swapWalletAddress, "doesn't have copy trading enabled, skipping");
         }
+        
+        // Auto-mirror logic: Check if signal wallet is trading a token we already hold from them
+        if (sourceWallet && tradeConf.enabled) {
+          const tokenMint = isBuy ? swap.toToken : swap.fromToken;
+          
+          // Look for existing positions from this signal wallet
+          const existingPositions = await db.select().from(holdings)
+            .where(
+              and(
+                eq(holdings.userId, userId),
+                eq(holdings.tokenMint, tokenMint),
+                eq(holdings.signalWalletId, sourceWallet.id)
+              )
+            );
+          
+          for (const position of existingPositions) {
+            if (position.currentAmount <= 0) continue;
+            
+            if (isBuy && sourceWallet.copyAutoMirror) {
+              // Auto-mirror BUY: Signal wallet is buying more of a token we already hold from them
+              // Top up our position proportionally (add to pending buy instead of immediate)
+              console.log(`Auto-mirror BUY detected: ${sourceWallet.label} bought more ${swap.toTokenSymbol}, we already hold from this signal`);
+              
+              // Queue a top-up buy using existing pending buy logic
+              // The position manager will handle it as a top-up
+              const walletCopyConfig = {
+                copyBuyType: sourceWallet.copyBuyType || undefined,
+                copyBuyAmount: sourceWallet.copyBuyAmount || undefined,
+                copyMinBalance: sourceWallet.copyMinBalance || undefined,
+                copyMinTradeUsd: sourceWallet.copyMinTradeUsd || undefined,
+                copyScoreThreshold: sourceWallet.copyScoreThreshold || undefined,
+                copyTiming: sourceWallet.copyTiming || undefined,
+                copyDelayMinutes: sourceWallet.copyDelayMinutes || undefined,
+                copyAutoMirror: true,
+                dedupSkipIfHolding: false, // Allow top-ups
+                dedupSkipIfEverHeld: false,
+                dedupSkipIfPending: true,
+              };
+              
+              const sourceTradeUsd = toTokenMetadata?.priceUsd && swap.toAmount 
+                ? parseFloat(swap.toAmount) * toTokenMetadata.priceUsd 
+                : undefined;
+              
+              await addPendingBuy(
+                userId,
+                swap.toToken,
+                swap.toTokenSymbol,
+                toTokenMetadata?.name,
+                toTokenMetadata?.priceUsd,
+                toTokenMetadata?.liquidity,
+                {
+                  swapId: savedSwap.id,
+                  walletAddress: swapWalletAddress,
+                  walletLabel: sourceWallet.label || undefined,
+                  signalWalletId: sourceWallet.id,
+                },
+                walletCopyConfig,
+                sourceTradeUsd,
+                undefined
+              );
+              console.log(`Auto-mirror: Queued top-up buy for ${swap.toTokenSymbol}`);
+              
+            } else if (!isBuy && position.autoMirrorSells) {
+              // Auto-mirror SELL: Signal wallet is selling a token we hold from them
+              // Sell proportionally based on what they sold
+              console.log(`Auto-mirror SELL detected: ${sourceWallet.label} sold ${swap.fromTokenSymbol}, mirroring sell for position ${position.id}`);
+              
+              // Calculate sell proportion (what % of their position did they sell?)
+              // We'll sell the same percentage of our position
+              // For simplicity, sell 100% if they sold any - can be refined later
+              const sellPercent = 100; // Full sell for now
+              
+              try {
+                const { executeAutoMirrorSell } = await import("./price-monitor");
+                await executeAutoMirrorSell(
+                  userId,
+                  position,
+                  sellPercent,
+                  `Signal wallet ${sourceWallet.label} sold`
+                );
+                console.log(`Auto-mirror: Executed sell for ${position.tokenSymbol}`);
+              } catch (error) {
+                console.error(`Auto-mirror sell failed for ${position.tokenSymbol}:`, error);
+              }
+            }
+          }
+        }
 
         // Update status
         const status = await storage.getMonitoringStatus();

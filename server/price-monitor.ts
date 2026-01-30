@@ -887,6 +887,137 @@ async function executeStopLoss(
   }
 }
 
+export async function executeAutoMirrorSell(
+  userId: number,
+  holding: typeof holdings.$inferSelect,
+  sellPercent: number,
+  reason: string
+): Promise<void> {
+  try {
+    if (!holding.currentAmount || holding.currentAmount <= 0) {
+      console.log(`No tokens to auto-mirror sell for ${holding.tokenSymbol}`);
+      return;
+    }
+    
+    const tokensToSell = holding.currentAmount * (sellPercent / 100);
+    
+    if (!isFinite(tokensToSell) || tokensToSell <= 0) {
+      console.log(`Invalid tokens to sell for auto-mirror ${holding.tokenSymbol}: ${tokensToSell}`);
+      return;
+    }
+
+    console.log(`Executing auto-mirror sell for ${holding.tokenSymbol}: selling ${tokensToSell.toLocaleString()} tokens (${sellPercent}%)`);
+
+    let result;
+    
+    // Use token wallet if available, otherwise fall back to main wallet
+    if (holding.tokenWalletEncryptedKey) {
+      const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
+      if (!tokenWalletKeypair) {
+        console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
+        result = await sellToken(userId, holding.tokenMint, tokensToSell);
+      } else {
+        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        
+        // Send SOL back to main wallet
+        if (result.success) {
+          const mainWallet = await getOrCreateHotWallet(userId);
+          if (mainWallet) {
+            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+            const profitResult = await sendProfitsToMainWallet(
+              tokenWalletKeypair,
+              mainWallet.publicKey,
+              gasReserve
+            );
+            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL back to main wallet after auto-mirror sell`);
+            }
+          }
+        }
+      }
+    } else {
+      result = await sellToken(userId, holding.tokenMint, tokensToSell);
+    }
+    
+    if (!result.success) {
+      console.error(`Auto-mirror sell failed for ${holding.tokenSymbol}:`, result.error);
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const newAmount = holding.currentAmount - tokensToSell;
+
+    await db.update(holdings).set({
+      currentAmount: newAmount,
+      lastSellTimestamp: now,
+      lastSellSignature: result.signature,
+    }).where(eq(holdings.id, holding.id));
+
+    console.log(`Auto-mirror sell successful for ${holding.tokenSymbol}:`);
+    console.log(`  Reason: ${reason}`);
+    console.log(`  Signature: ${result.signature}`);
+    console.log(`  Tokens sold: ${tokensToSell.toLocaleString()} (${sellPercent}%)`);
+    console.log(`  SOL received: ~${result.inputAmount} SOL`);
+    console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
+
+    // Send notification
+    await sendAutoMirrorSellNotification(userId, holding, tokensToSell, result.inputAmount || 0, sellPercent, result.signature, reason);
+
+  } catch (error) {
+    console.error(`Error executing auto-mirror sell for ${holding.tokenSymbol}:`, error);
+  }
+}
+
+async function sendAutoMirrorSellNotification(
+  userId: number,
+  holding: typeof holdings.$inferSelect,
+  tokensSold: number,
+  solReceived: number,
+  sellPercent: number,
+  signature: string,
+  reason: string
+): Promise<void> {
+  const settings = await storage.getNotificationSettings(userId);
+  if (!settings?.enabled || !settings.emails?.length) {
+    return;
+  }
+
+  const subject = `Auto-mirror sell: ${holding.tokenSymbol}`;
+  
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #fff; padding: 20px; border-radius: 12px;">
+      <h2 style="color: #ffd700; margin-bottom: 20px;">Auto-Mirror Sell: ${holding.tokenSymbol}</h2>
+      
+      <div style="background: #16213e; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+        <p style="color: #888; margin-bottom: 12px;">${reason}</p>
+        <table style="width: 100%; color: #e0e0e0;">
+          <tr>
+            <td style="padding: 4px 0;">Sold:</td>
+            <td style="text-align: right;">${sellPercent}%</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Tokens Sold:</td>
+            <td style="text-align: right;">${formatNumber(tokensSold)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">SOL Received:</td>
+            <td style="text-align: right; color: #00ff88;">${solReceived.toFixed(4)} SOL</td>
+          </tr>
+        </table>
+      </div>
+      
+      <a href="https://solscan.io/tx/${signature}" style="display: block; text-align: center; color: #64b5f6; margin-top: 16px;">View Transaction</a>
+    </div>
+  `;
+
+  try {
+    await sendEmail(settings.emails, subject, html);
+    console.log(`Auto-mirror sell notification sent for ${holding.tokenSymbol}`);
+  } catch (error) {
+    console.error(`Failed to send auto-mirror sell notification:`, error);
+  }
+}
+
 async function sendStopLossNotification(
   userId: number,
   holding: typeof holdings.$inferSelect,
