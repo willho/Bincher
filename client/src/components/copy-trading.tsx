@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   ArrowUpRight,
   Bot,
@@ -19,6 +20,7 @@ import {
   ExternalLink, 
   Eye,
   EyeOff,
+  Filter,
   Key,
   Loader2,
   Pause,
@@ -34,7 +36,7 @@ import {
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
-import type { TradeConfig, Holding, PendingBuy } from "@shared/schema";
+import type { TradeConfig, Holding, PendingBuy, MonitoredWallet } from "@shared/schema";
 
 interface HotWalletInfo {
   exists: boolean;
@@ -59,6 +61,8 @@ export function CopyTrading() {
   const [activeOpen, setActiveOpen] = useState(true);
   const [pendingOpen, setPendingOpen] = useState(true);
   const [inactiveOpen, setInactiveOpen] = useState(false);
+  const [signalWalletFilter, setSignalWalletFilter] = useState<string>("all");
+  const [sortBy, setSortBy] = useState<string>("recent");
 
   const copyToClipboard = async (text: string, label: string = "Address") => {
     try {
@@ -84,6 +88,24 @@ export function CopyTrading() {
   const { data: pendingBuys, isLoading: pendingLoading } = useQuery<PendingBuy[]>({
     queryKey: ["/api/copy-trade/pending"],
   });
+
+  const { data: monitoredWallets } = useQuery<MonitoredWallet[]>({
+    queryKey: ["/api/monitored-wallets"],
+  });
+
+  const uniqueSignalWallets = useMemo(() => {
+    if (!holdings) return [];
+    const walletMap = new Map<string, { address: string; label: string }>();
+    holdings.forEach(h => {
+      if (h.sourceWalletAddress) {
+        walletMap.set(h.sourceWalletAddress, {
+          address: h.sourceWalletAddress,
+          label: h.sourceWalletLabel || `${h.sourceWalletAddress.slice(0, 6)}...${h.sourceWalletAddress.slice(-4)}`
+        });
+      }
+    });
+    return Array.from(walletMap.values());
+  }, [holdings]);
 
   const createWallet = useMutation({
     mutationFn: () => apiRequest("POST", "/api/copy-trade/wallet"),
@@ -801,6 +823,63 @@ export function CopyTrading() {
                 Tokens bought through copy trading - organized by status
               </CardDescription>
             </CardHeader>
+
+            <div className="px-6 pb-2">
+              <div className="flex flex-wrap gap-3 items-end p-3 rounded-lg bg-muted/30 border">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Filter className="h-4 w-4" />
+                  <span>Filters:</span>
+                </div>
+                
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs text-muted-foreground">Signal Wallet</Label>
+                  <Select value={signalWalletFilter} onValueChange={setSignalWalletFilter}>
+                    <SelectTrigger className="w-[180px] h-8" data-testid="select-signal-wallet-filter">
+                      <SelectValue placeholder="All wallets" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All wallets</SelectItem>
+                      <SelectItem value="manual">Manual buys</SelectItem>
+                      {uniqueSignalWallets.map(w => (
+                        <SelectItem key={w.address} value={w.address}>
+                          {w.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs text-muted-foreground">Sort by</Label>
+                  <Select value={sortBy} onValueChange={setSortBy}>
+                    <SelectTrigger className="w-[140px] h-8" data-testid="select-sort-by">
+                      <SelectValue placeholder="Recent" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="recent">Most Recent</SelectItem>
+                      <SelectItem value="value">Highest Value</SelectItem>
+                      <SelectItem value="profit">Best Profit</SelectItem>
+                      <SelectItem value="loss">Worst Loss</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {(signalWalletFilter !== "all" || sortBy !== "recent") && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => {
+                      setSignalWalletFilter("all");
+                      setSortBy("recent");
+                    }}
+                    data-testid="button-clear-filters"
+                  >
+                    Clear filters
+                  </Button>
+                )}
+              </div>
+            </div>
             <CardContent>
               {holdingsLoading ? (
                 <div className="space-y-2">
@@ -810,16 +889,45 @@ export function CopyTrading() {
                 </div>
               ) : (() => {
                 const allHoldings = holdings ?? [];
-                const visibleHoldings = allHoldings.filter((h) => !hideDeadDust || (!h.isDead && !h.isDust));
+                
+                let visibleHoldings = allHoldings.filter((h) => !hideDeadDust || (!h.isDead && !h.isDust));
+                
+                if (signalWalletFilter === "manual") {
+                  visibleHoldings = visibleHoldings.filter((h) => !h.sourceWalletAddress);
+                } else if (signalWalletFilter !== "all") {
+                  visibleHoldings = visibleHoldings.filter((h) => h.sourceWalletAddress === signalWalletFilter);
+                }
+                
+                const sortHoldings = (list: Holding[]) => {
+                  return [...list].sort((a, b) => {
+                    const aMultiplier = a.lastPrice && a.buyPrice ? (a.lastPrice / a.buyPrice) : 1;
+                    const bMultiplier = b.lastPrice && b.buyPrice ? (b.lastPrice / b.buyPrice) : 1;
+                    const aValue = a.currentAmount * (a.lastPrice || 0);
+                    const bValue = b.currentAmount * (b.lastPrice || 0);
+                    
+                    switch (sortBy) {
+                      case "value":
+                        return bValue - aValue;
+                      case "profit":
+                        return bMultiplier - aMultiplier;
+                      case "loss":
+                        return aMultiplier - bMultiplier;
+                      case "recent":
+                      default:
+                        return new Date(b.boughtAt).getTime() - new Date(a.boughtAt).getTime();
+                    }
+                  });
+                };
+                
                 const hiddenCount = allHoldings.length - visibleHoldings.length;
                 
-                const activeHoldings = visibleHoldings.filter((h) => 
+                const activeHoldings = sortHoldings(visibleHoldings.filter((h) => 
                   h.positionStatus === "active" || (!h.positionStatus && h.currentAmount > 0)
-                );
-                const pendingHoldings = visibleHoldings.filter((h) => h.positionStatus === "pending");
-                const inactiveHoldings = visibleHoldings.filter((h) => 
+                ));
+                const pendingHoldings = sortHoldings(visibleHoldings.filter((h) => h.positionStatus === "pending"));
+                const inactiveHoldings = sortHoldings(visibleHoldings.filter((h) => 
                   h.positionStatus === "inactive" || (!h.positionStatus && h.currentAmount <= 0)
-                );
+                ));
 
                 const renderHolding = (holding: Holding) => {
                   const multiplier = holding.lastPrice && holding.buyPrice 
