@@ -829,7 +829,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                   <div className="p-4 rounded-lg border bg-muted/30 space-y-3">
                     <p className="text-sm font-medium">Connect to Telegram</p>
                     <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-                      <li>Open Telegram and search for <strong>@PennyPincherBot</strong></li>
+                      <li>Open Telegram and search for <strong>@MissPincherBot</strong></li>
                       <li>Send the command <code className="bg-muted px-1 rounded">/start</code></li>
                       <li>You'll receive a verification code - enter it in Settings after login</li>
                     </ol>

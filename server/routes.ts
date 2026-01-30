@@ -45,7 +45,7 @@ import {
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
 import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles } from "@shared/schema";
-import { eq, and, isNotNull, desc, gte, sql } from "drizzle-orm";
+import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions } from "./ai";
@@ -619,11 +619,22 @@ export async function registerRoutes(
         // Associate swap with user
         swap.userId = userId;
 
-        // Fetch token metadata for the token being bought
+        // Fetch token metadata for the token being bought and update symbols
         const toTokenMetadata = await fetchTokenMetadata(swap.toToken);
         if (toTokenMetadata) {
           swap.toTokenMetadata = toTokenMetadata;
+          if (toTokenMetadata.symbol && (swap.toTokenSymbol === "???" || swap.toTokenSymbol?.includes("..."))) {
+            swap.toTokenSymbol = toTokenMetadata.symbol;
+          }
           console.log("Token metadata fetched:", toTokenMetadata.symbol, "MC:", toTokenMetadata.marketCap);
+        }
+        
+        // Also fetch metadata for fromToken if it's not a base currency (SOL/USDC/USDT)
+        if (!isBaseCurrency(swap.fromToken) && (swap.fromTokenSymbol === "???" || swap.fromTokenSymbol?.includes("..."))) {
+          const fromTokenMetadata = await fetchTokenMetadata(swap.fromToken);
+          if (fromTokenMetadata?.symbol) {
+            swap.fromTokenSymbol = fromTokenMetadata.symbol;
+          }
         }
 
         // Get cached SOL price for historical USD value (uses cache, no extra API call)
@@ -1533,6 +1544,19 @@ export async function registerRoutes(
                   .limit(1);
                 
                 if (existing.length === 0) {
+                  // Enrich token symbols from DexScreener if unknown
+                  let fromSymbol = swap.fromTokenSymbol;
+                  let toSymbol = swap.toTokenSymbol;
+                  
+                  if (!isBaseCurrency(swap.fromToken) && (fromSymbol === "???" || fromSymbol?.includes("..."))) {
+                    const meta = await fetchTokenMetadata(swap.fromToken);
+                    if (meta?.symbol) fromSymbol = meta.symbol;
+                  }
+                  if (!isBaseCurrency(swap.toToken) && (toSymbol === "???" || toSymbol?.includes("..."))) {
+                    const meta = await fetchTokenMetadata(swap.toToken);
+                    if (meta?.symbol) toSymbol = meta.symbol;
+                  }
+                  
                   await db.insert(swaps).values({
                     userId,
                     signature: swap.signature,
@@ -1540,10 +1564,10 @@ export async function registerRoutes(
                     type: swap.type,
                     source: swap.source,
                     fromToken: swap.fromToken,
-                    fromTokenSymbol: swap.fromTokenSymbol,
+                    fromTokenSymbol: fromSymbol,
                     fromAmount: swap.fromAmount,
                     toToken: swap.toToken,
-                    toTokenSymbol: swap.toTokenSymbol,
+                    toTokenSymbol: toSymbol,
                     toAmount: swap.toAmount,
                     fee: swap.fee || null,
                     slot: swap.slot,
@@ -1911,6 +1935,19 @@ export async function registerRoutes(
             .limit(1);
           
           if (existing.length === 0) {
+            // Enrich token symbols from DexScreener if unknown
+            let fromSymbol = swap.fromTokenSymbol;
+            let toSymbol = swap.toTokenSymbol;
+            
+            if (!isBaseCurrency(swap.fromToken) && (fromSymbol === "???" || fromSymbol?.includes("..."))) {
+              const meta = await fetchTokenMetadata(swap.fromToken);
+              if (meta?.symbol) fromSymbol = meta.symbol;
+            }
+            if (!isBaseCurrency(swap.toToken) && (toSymbol === "???" || toSymbol?.includes("..."))) {
+              const meta = await fetchTokenMetadata(swap.toToken);
+              if (meta?.symbol) toSymbol = meta.symbol;
+            }
+            
             await db.insert(swaps).values({
               userId: req.userId,
               signature: swap.signature,
@@ -1918,10 +1955,10 @@ export async function registerRoutes(
               type: swap.type,
               source: swap.source,
               fromToken: swap.fromToken,
-              fromTokenSymbol: swap.fromTokenSymbol,
+              fromTokenSymbol: fromSymbol,
               fromAmount: swap.fromAmount,
               toToken: swap.toToken,
-              toTokenSymbol: swap.toTokenSymbol,
+              toTokenSymbol: toSymbol,
               toAmount: swap.toAmount,
               fee: swap.fee || null,
               slot: swap.slot,
@@ -1943,6 +1980,66 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error backfilling signal wallet:", error);
       res.status(500).json({ error: "Failed to backfill wallet history" });
+    }
+  });
+
+  // Backfill missing token metadata for existing swaps
+  app.post("/api/admin/backfill-swap-metadata", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      // Find swaps with missing token symbols
+      const swapsWithMissingData = await db.select()
+        .from(swaps)
+        .where(
+          or(
+            eq(swaps.fromTokenSymbol, "???"),
+            eq(swaps.toTokenSymbol, "???"),
+            like(swaps.fromTokenSymbol, "%...%"),
+            like(swaps.toTokenSymbol, "%...%")
+          )
+        )
+        .limit(100);
+      
+      let updated = 0;
+      for (const swap of swapsWithMissingData) {
+        let fromSymbol = swap.fromTokenSymbol;
+        let toSymbol = swap.toTokenSymbol;
+        let hasUpdate = false;
+        
+        // Fetch fromToken metadata if needed
+        if (!isBaseCurrency(swap.fromToken) && (fromSymbol === "???" || fromSymbol?.includes("..."))) {
+          const meta = await fetchTokenMetadata(swap.fromToken);
+          if (meta?.symbol) {
+            fromSymbol = meta.symbol;
+            hasUpdate = true;
+          }
+        }
+        
+        // Fetch toToken metadata if needed
+        if (!isBaseCurrency(swap.toToken) && (toSymbol === "???" || toSymbol?.includes("..."))) {
+          const meta = await fetchTokenMetadata(swap.toToken);
+          if (meta?.symbol) {
+            toSymbol = meta.symbol;
+            hasUpdate = true;
+          }
+        }
+        
+        if (hasUpdate) {
+          await db.update(swaps)
+            .set({ fromTokenSymbol: fromSymbol, toTokenSymbol: toSymbol })
+            .where(eq(swaps.id, swap.id));
+          updated++;
+        }
+      }
+      
+      res.json({
+        success: true,
+        checked: swapsWithMissingData.length,
+        updated,
+        message: updated > 0 ? `Updated ${updated} swaps with token metadata` : "All swaps already have metadata"
+      });
+    } catch (error) {
+      console.error("Error backfilling swap metadata:", error);
+      res.status(500).json({ error: "Failed to backfill swap metadata" });
     }
   });
 
