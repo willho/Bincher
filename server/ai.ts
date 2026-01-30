@@ -2505,6 +2505,17 @@ function getPendingTradeContext(userId: number): string | null {
   return `PENDING TRADE: ${pending.type.toUpperCase()} ${pending.tokenSymbol} for ${pending.amount} ${pending.type === 'buy' ? 'SOL' : 'tokens'}. Expires in ${timeLeft}s. Awaiting confirmation.`;
 }
 
+// Get pending settings context to inject into system prompt
+function getPendingSettingsContext(userId: number): string | null {
+  const pending = pendingSettings.get(userId);
+  if (!pending || Date.now() > pending.expiresAt) {
+    if (pending) pendingSettings.delete(userId);
+    return null;
+  }
+  const timeLeft = Math.floor((pending.expiresAt - Date.now()) / 1000);
+  return `PENDING SETTINGS CHANGE:\n${pending.summary}\nExpires in ${timeLeft}s. Use confirm_settings if user confirms, cancel_settings if user cancels.`;
+}
+
 // ============= END TRADING TOOL FUNCTIONS =============
 
 // Build default user relationship for new users
@@ -2760,8 +2771,9 @@ export async function chatWithAI(
   // Generate the personality-driven system prompt
   let systemPrompt = buildPincherSystemPrompt(pincherContext);
   
-  // Check for pending trade
+  // Check for pending trade and pending settings
   const pendingTradeCtx = getPendingTradeContext(userId);
+  const pendingSettingsCtx = getPendingSettingsContext(userId);
   
   // Add actions and dynamic stats
   systemPrompt += `
@@ -2812,6 +2824,12 @@ PENDING TRADE AWAITING CONFIRMATION:
 ${pendingTradeCtx}
 If user's message is confirmation ("yes", "do it", "go ahead", etc.) - use execute_pending_trade.
 If user's message is rejection ("no", "cancel", "wait") - use cancel_pending_trade.
+` : ''}
+${pendingSettingsCtx ? `
+PENDING SETTINGS AWAITING CONFIRMATION:
+${pendingSettingsCtx}
+CRITICAL: If user says "confirm", "yes", "do it", "apply", "go ahead" - you MUST call confirm_settings immediately. Do NOT re-propose or ask again.
+If user says "no", "cancel", "nevermind" - call cancel_settings.
 ` : ''}
 
 TRADING RULES:
