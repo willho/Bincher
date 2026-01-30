@@ -51,6 +51,7 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - **Familiar Whale Tracking**: Tracks whales across tokens, building success profiles (profitableExits, avgExitMultiplier, reliabilityScore). API endpoints: `/api/whales/top`, `/api/whales/token/:mint`, `/api/whales/history/:wallet`.
 - **Tiered Event Buckets**: Position snapshots store journey data in compressed tiers (15min detailed → hourly summaries → daily), piggybacking on OHLC aggregation to avoid data bloat.
 - **Stop-Loss Mode**: Per-position `stopLossMode` setting: "auto" (immediate sell) or "alert" (notify and wait for user confirmation with 15-min debounce).
+- **Signal Wallet Detail Page**: Individual wallet activity pages at `/signal/:id` showing trade history with timestamps, hit rate, realized P&L, trading style analysis, and timeframe filters (24h/7d/30d/all). Includes real-time WebSocket updates for new swaps and manual Helius backfill for historical data.
 - **Autonomous Mode (Planned)**: Future: user-defined risk profiles, stop conditions, and AI-initiated trades with explicit confirmation.
 - **Swing Trading (Planned)**: Future feature for pattern detection (support/resistance, OHLC patterns, volume spikes) to enable automated swing trading.
 
