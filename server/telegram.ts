@@ -2,9 +2,15 @@ import { db } from "./db";
 import { users, systemLogs, linkTokens, pincherDataRequests, monitoredWallets, holdings, swaps } from "@shared/schema";
 import { eq, desc, and, sql, lt, gt } from "drizzle-orm";
 import { chatWithAI } from "./ai";
+import { hashPassword } from "./auth";
 import crypto from "crypto";
 
+const ADMIN_CODEWORD = "Admin1112";
+
 const LINK_TOKEN_EXPIRY_SECONDS = 600; // 10 minutes
+
+// Rate limiting for password reset attempts
+const resetPasswordAttempts = new Map<string, { count: number; firstAttempt: number }>();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
@@ -481,6 +487,65 @@ async function handleCommand(chatId: string, command: string, args: string, user
       }
       await db.update(users).set({ isAdmin: true }).where(eq(users.username, targetUsername));
       await sendMessage(chatId, `✅ ${targetUsername} is now an admin.`);
+      break;
+
+    case "/reset_password":
+      // Emergency admin password reset - only works for admin accounts
+      // Rate limited: 3 attempts per hour per chatId
+      const resetAttemptKey = `reset_${chatId}`;
+      const now = Date.now();
+      const attempts = resetPasswordAttempts.get(resetAttemptKey) || { count: 0, firstAttempt: now };
+      
+      // Reset counter if more than an hour has passed
+      if (now - attempts.firstAttempt > 3600000) {
+        attempts.count = 0;
+        attempts.firstAttempt = now;
+      }
+      
+      if (attempts.count >= 3) {
+        await sendMessage(chatId, "❌ Too many attempts. Try again in an hour.");
+        await log("telegram", "reset_password", "warning", { context: { chatId, reason: "rate_limited" } });
+        return;
+      }
+      
+      attempts.count++;
+      resetPasswordAttempts.set(resetAttemptKey, attempts);
+      
+      const resetArgs = args.trim().split(/\s+/);
+      if (resetArgs.length !== 3) {
+        await sendMessage(chatId, "Usage: /reset_password [username] [new_password] [admin_code]\n\n⚠️ Only works for admin accounts. Rate limited to 3 attempts/hour.");
+        return;
+      }
+      const [resetUsername, newPassword, adminCode] = resetArgs;
+      
+      if (adminCode !== ADMIN_CODEWORD) {
+        await sendMessage(chatId, "❌ Invalid admin code.");
+        await log("telegram", "reset_password", "warning", { context: { chatId, attemptedUsername: resetUsername, reason: "wrong_code" } });
+        return;
+      }
+      
+      if (newPassword.length < 6) {
+        await sendMessage(chatId, "❌ Password must be at least 6 characters.");
+        return;
+      }
+      
+      const userToReset = await db.select().from(users).where(eq(users.username, resetUsername)).limit(1);
+      if (userToReset.length === 0) {
+        await sendMessage(chatId, `❌ User "${resetUsername}" not found.`);
+        return;
+      }
+      
+      // Security: Only allow reset for admin accounts
+      if (!userToReset[0].isAdmin) {
+        await sendMessage(chatId, "❌ This command only works for admin accounts. Use the web password reset for regular users.");
+        await log("telegram", "reset_password", "warning", { context: { chatId, attemptedUsername: resetUsername, reason: "not_admin" } });
+        return;
+      }
+      
+      const newPasswordHash = hashPassword(newPassword);
+      await db.update(users).set({ passwordHash: newPasswordHash }).where(eq(users.username, resetUsername));
+      await log("telegram", "reset_password", "success", { context: { chatId, username: resetUsername } });
+      await sendMessage(chatId, `✅ Password reset for ${resetUsername}. You can now log in with your new password.`);
       break;
 
     default:
