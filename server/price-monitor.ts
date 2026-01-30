@@ -23,7 +23,10 @@ import {
   updateScoreOnPriceMove, 
   batchUpdatePositionScores, 
   batchRecordSnapshots,
-  resolvePositionScoreSnapshots 
+  resolvePositionScoreSnapshots,
+  addEventToBucket,
+  updateCurrentSnapshot,
+  runBucketRollups
 } from "./position-score";
 import { discoverNewFactors, saveDiscoveredFactor } from "./adaptive-scoring";
 
@@ -187,6 +190,24 @@ export async function checkPricesAndReclaim(): Promise<void> {
           console.log(`[PositionScore] Recorded ${count} snapshots for adaptive learning`);
         }
       }).catch(e => console.error(`[PositionScore] Snapshot recording error: ${e}`));
+      
+      // Update current snapshots for all holdings with latest price data
+      for (const holding of holdingsList) {
+        const priceData = batchPrices.get(holding.tokenMint);
+        if (priceData && priceData.price !== null) {
+          updateCurrentSnapshot(holding.id, {
+            holderCount: 0, // Will be updated on holder refresh
+            price: priceData.price,
+            marketCap: priceData.marketCap || 0,
+            peakMultiplier: Math.max(1, priceData.price / (holding.buyPrice || priceData.price)),
+            significantEvents: 0,
+            timestamp: now,
+          }).catch(e => console.error(`[EventBuckets] Error updating current snapshot: ${e}`));
+        }
+      }
+      
+      // Run bucket rollups (15min → hourly after 24h, hourly → daily after 7d)
+      runBucketRollups().catch(e => console.error(`[EventBuckets] Rollup error: ${e}`));
     }
     
     for (const holding of holdingsToProcess) {
@@ -559,6 +580,8 @@ async function checkHoldingPriceWithBatch(
     // Stop-loss execution: auto-sell entire position if loss exceeds threshold
     const stopLossPercent = holding.stopLossPercent ?? config.stopLossPercent ?? null;
     const stopLossFloorUsd = holding.stopLossFloorUsd ?? config.stopLossFloorUsd ?? null;
+    const stopLossMode = (holding.stopLossMode as "auto" | "alert") ?? "auto";
+    const STOP_LOSS_ALERT_DEBOUNCE_SECONDS = 15 * 60; // 15 minutes between alerts
     
     if (stopLossPercent !== null && !holding.stopLossTriggered && holding.currentAmount > 0) {
       // Use avgEntryPrice if available (for positions with top-ups), else fallback to buyPrice
@@ -575,8 +598,27 @@ async function checkHoldingPriceWithBatch(
         const floorBypass = stopLossFloorUsd !== null && positionValueUsd < stopLossFloorUsd;
         
         if (shouldTriggerStopLoss && !floorBypass) {
-          console.log(`Stop-loss triggered for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss >= ${stopLossPercent}% threshold`);
-          await executeStopLoss(userId, holding, currentPrice, lossPercent);
+          if (stopLossMode === "auto") {
+            // Auto mode: execute stop-loss immediately
+            console.log(`Stop-loss AUTO triggered for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss >= ${stopLossPercent}% threshold`);
+            await executeStopLoss(userId, holding, currentPrice, lossPercent);
+          } else {
+            // Alert mode: send notification and wait for user confirmation
+            const now = Math.floor(Date.now() / 1000);
+            const lastAlerted = holding.stopLossLastAlertedAt ?? 0;
+            
+            if (now - lastAlerted >= STOP_LOSS_ALERT_DEBOUNCE_SECONDS) {
+              console.log(`Stop-loss ALERT for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss >= ${stopLossPercent}% threshold`);
+              
+              // Update debounce timestamp
+              await db.update(holdings).set({
+                stopLossLastAlertedAt: now,
+              }).where(eq(holdings.id, holding.id));
+              
+              // Send stop-loss alert notification
+              await sendStopLossAlert(userId, holding, lossPercent, currentPrice);
+            }
+          }
         }
       }
     }
@@ -1227,6 +1269,99 @@ async function sendMilestoneAlert(
   }
 }
 
+async function sendStopLossAlert(
+  userId: number,
+  holding: typeof holdings.$inferSelect,
+  lossPercent: number,
+  currentPrice: number
+): Promise<void> {
+  const settings = await storage.getNotificationSettings(userId);
+  
+  // Priority: Telegram > Email
+  const telegramSettings = await storage.getTelegramSettings(userId);
+  if (telegramSettings?.enabled && telegramSettings.chatId) {
+    try {
+      const { sendTelegramMessage } = await import("./telegram");
+      const message = `*STOP-LOSS ALERT*
+
+*${holding.tokenSymbol}* has dropped ${lossPercent.toFixed(1)}%
+
+Current Price: $${currentPrice < 0.0001 ? currentPrice.toExponential(2) : currentPrice.toFixed(6)}
+Entry Price: $${holding.buyPrice < 0.0001 ? holding.buyPrice.toExponential(2) : holding.buyPrice.toFixed(6)}
+Position Value: ${(holding.currentAmount * currentPrice).toFixed(2)} USD
+
+Mode is set to *alert* - position will NOT auto-sell.
+
+Reply with "sell ${holding.tokenSymbol}" to execute stop-loss manually.`;
+      
+      await sendTelegramMessage(telegramSettings.chatId, message, { parse_mode: "Markdown" });
+      console.log(`Stop-loss Telegram alert sent for ${holding.tokenSymbol}`);
+      return;
+    } catch (error) {
+      console.error(`Failed to send stop-loss Telegram alert:`, error);
+    }
+  }
+  
+  // Fallback to email
+  if (!settings?.enabled || !settings.emails?.length) {
+    console.log(`No notification channels available for stop-loss alert on ${holding.tokenSymbol}`);
+    return;
+  }
+
+  const subject = `STOP-LOSS ALERT: ${holding.tokenSymbol} -${lossPercent.toFixed(1)}%`;
+  
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #fff; padding: 20px; border-radius: 12px;">
+      <h2 style="color: #ff4444; margin-bottom: 20px;">Stop-Loss Alert: ${holding.tokenSymbol}</h2>
+      
+      <div style="background: #16213e; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+        <table style="width: 100%; color: #e0e0e0;">
+          <tr>
+            <td style="padding: 4px 0;">Loss:</td>
+            <td style="text-align: right; color: #ff4444; font-weight: bold;">-${lossPercent.toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Current Price:</td>
+            <td style="text-align: right; color: #fff;">$${currentPrice < 0.0001 ? currentPrice.toExponential(2) : currentPrice.toFixed(6)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Entry Price:</td>
+            <td style="text-align: right; color: #fff;">$${holding.buyPrice < 0.0001 ? holding.buyPrice.toExponential(2) : holding.buyPrice.toFixed(6)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Position Value:</td>
+            <td style="text-align: right; color: #fff;">$${(holding.currentAmount * currentPrice).toFixed(2)}</td>
+          </tr>
+        </table>
+      </div>
+      
+      <p style="color: #f59e0b; font-size: 14px;">
+        Stop-loss mode is set to <strong>alert</strong>. This position will NOT auto-sell.
+        Log in to Penny Pincher to execute the stop-loss manually.
+      </p>
+      
+      <div style="margin-top: 16px;">
+        <a href="https://dexscreener.com/solana/${holding.tokenMint}" style="color: #00ff88; text-decoration: none;">
+          View on DexScreener
+        </a>
+      </div>
+      
+      <p style="color: #888; font-size: 12px; margin-top: 20px;">
+        Stop-loss alert at ${new Date().toLocaleString()}
+      </p>
+    </div>
+  `;
+
+  for (const email of settings.emails) {
+    try {
+      await sendEmail(email, subject, html);
+      console.log(`Stop-loss email alert sent to ${email}`);
+    } catch (error) {
+      console.error(`Failed to send stop-loss alert to ${email}:`, error);
+    }
+  }
+}
+
 async function sendReclaimNotification(
   userId: number,
   holding: typeof holdings.$inferSelect,
@@ -1409,8 +1544,8 @@ export function startPriceMonitor(): void {
   // Start the aggregation job (runs every 60 seconds)
   startAggregationJob(60000);
   
-  // Start factor discovery (runs every 6 hours)
-  const FACTOR_DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+  // Start factor discovery (runs hourly for faster learning)
+  const FACTOR_DISCOVERY_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
   factorDiscoveryInterval = setInterval(runFactorDiscovery, FACTOR_DISCOVERY_INTERVAL_MS);
   // Run initial discovery after 5 minutes
   setTimeout(runFactorDiscovery, 5 * 60 * 1000);

@@ -44,7 +44,11 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - **Position Model**: Each trading position is stored in the `holdings` table, which tracks: token wallet (`tokenWalletPublicKey`), token (`tokenMint`), source (`sourceWalletAddress`, `signalWalletId`), and per-position config (`takeProfitThresholds`, `stopLossPercent`, `positionSource`). Multiple positions on the same token are allowed from different signal sources.
 - **Per-Wallet Copy Config**: Granular settings for buy amounts, minimum balances, trade filters, score thresholds, and timing.
 - **Risk Management**: Configurable take-profit, stop-loss, auto-mirroring, and trading budget limits.
-- **Adaptive AI & Autonomous Mode (Planned)**: Future enhancements include adaptive scoring based on outcome feedback, continuous position scoring updates, familiar whale tracking, and an autonomous trading mode with user-defined risk profiles and stop conditions.
+- **Adaptive AI with Dampening**: Dual learning systems (market factors for predictions, position factors for holdings) with adaptive dampening that caps weight shifts at 2-10% based on data confidence. Factor discovery runs hourly for faster learning.
+- **Familiar Whale Tracking**: Tracks whales across tokens, building success profiles (profitableExits, avgExitMultiplier, reliabilityScore). API endpoints: `/api/whales/top`, `/api/whales/token/:mint`, `/api/whales/history/:wallet`.
+- **Tiered Event Buckets**: Position snapshots store journey data in compressed tiers (15min detailed → hourly summaries → daily), piggybacking on OHLC aggregation to avoid data bloat.
+- **Stop-Loss Mode**: Per-position `stopLossMode` setting: "auto" (immediate sell) or "alert" (notify and wait for user confirmation with 15-min debounce).
+- **Autonomous Mode (Planned)**: Future: user-defined risk profiles, stop conditions, and AI-initiated trades with explicit confirmation.
 - **Swing Trading (Planned)**: Future feature for pattern detection (support/resistance, OHLC patterns, volume spikes) to enable automated swing trading.
 
 ## External Dependencies

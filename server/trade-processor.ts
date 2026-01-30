@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { pendingBuys, holdings, tradeConfig } from "@shared/schema";
+import { pendingBuys, holdings, tradeConfig, positionScoreSnapshots } from "@shared/schema";
 import { eq, and, lte, or } from "drizzle-orm";
 import { 
   getTradeConfig, 
@@ -158,7 +158,7 @@ export async function executePendingBuy(
     }
     
     // Calculate intended trade amount in USD
-    const intendedSolAmount = buy.buyAmount ?? (balance * (config.buyPercentage || 10) / 100);
+    const intendedSolAmount = buy.solAmount ?? (balance * (config.buyPercentage || 10) / 100);
     const intendedUsd = intendedSolAmount * solPriceUsd;
     
     // 2. Check max per-trade limit
@@ -335,7 +335,7 @@ export async function executePendingBuy(
       console.log(`Topped up holding for ${buy.tokenSymbol}${segmentInfo} (${newBuys} buys, avg price: ${newAvgPrice.toFixed(8)})`);
     } else {
       // Create new position for this signal source
-      await db.insert(holdings).values({
+      const [newHolding] = await db.insert(holdings).values({
         userId: userId,
         tokenMint: buy.tokenMint,
         tokenSymbol: buy.tokenSymbol,
@@ -362,7 +362,39 @@ export async function executePendingBuy(
         avgEntryPrice: entryPrice,
         totalTokensBought: tokensReceived,
         totalSolInvested: solSpentActual,
-      });
+      }).returning();
+      
+      // Record entry snapshot for tiered event tracking
+      if (newHolding) {
+        await db.insert(positionScoreSnapshots).values({
+          holdingId: newHolding.id,
+          userId: userId,
+          tokenMint: buy.tokenMint,
+          factorsSnapshot: { priceChange: 0, timeDecay: 0, whaleActivity: 0, signalWalletStatus: 0, volumeTrend: 0 },
+          computedScore: 50,
+          scoreTier: "neutral",
+          priceAtScoring: currentPrice,
+          entryPrice: entryPrice,
+          holdTimeHours: 0,
+          entrySnapshot: {
+            holderCount: 0, // Will be populated on first price check
+            price: currentPrice,
+            marketCap: 0,
+            timestamp: now,
+          },
+          eventBuckets: [],
+          currentSnapshot: {
+            holderCount: 0,
+            price: currentPrice,
+            marketCap: 0,
+            peakMultiplier: 1,
+            significantEvents: 0,
+            timestamp: now,
+          },
+          scoredAt: now,
+        });
+        console.log(`[EventBuckets] Created entry snapshot for holding ${newHolding.id}`);
+      }
       
       console.log(`Created holding for ${buy.tokenSymbol}${segmentInfo} from signal wallet ${buy.sourceWalletLabel || buy.sourceWalletAddress}`);
     }

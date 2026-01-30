@@ -547,3 +547,249 @@ export async function batchRecordSnapshots(
   
   return recordedCount;
 }
+
+// Tiered Event Bucket System - tracks position journey with compressed tiers
+// 15min: detailed events (24 hours), hourly: summaries (7 days), daily: long-term
+
+export interface EventBucket {
+  tier: "15min" | "hourly" | "daily";
+  bucketStart: number;
+  holderDelta: number;
+  priceRange: { low: number; high: number };
+  whaleEvents: Array<{ wallet: string; action: "buy" | "sell"; rank: number; timestamp: number }>;
+  eventCount: number;
+  peakMultiplier: number;
+}
+
+export interface PositionEntrySnapshot {
+  holderCount: number;
+  price: number;
+  marketCap: number;
+  timestamp: number;
+}
+
+export interface PositionCurrentSnapshot {
+  holderCount: number;
+  price: number;
+  marketCap: number;
+  peakMultiplier: number;
+  significantEvents: number;
+  timestamp: number;
+}
+
+// Record entry snapshot when position is created
+export async function recordPositionEntrySnapshot(
+  holdingId: number,
+  snapshot: PositionEntrySnapshot
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  // Find or create the snapshot record
+  const existing = await db.select().from(positionScoreSnapshots)
+    .where(eq(positionScoreSnapshots.holdingId, holdingId))
+    .then(rows => rows[0]);
+  
+  if (!existing) {
+    // Will be created when first position score is recorded
+    console.log(`[EventBuckets] Will record entry snapshot for holding ${holdingId} on first score`);
+    return;
+  }
+  
+  await db.update(positionScoreSnapshots)
+    .set({
+      entrySnapshot: snapshot,
+    })
+    .where(eq(positionScoreSnapshots.id, existing.id));
+  
+  console.log(`[EventBuckets] Recorded entry snapshot for holding ${holdingId}`);
+}
+
+// Add event to appropriate bucket
+export async function addEventToBucket(
+  holdingId: number,
+  event: { wallet?: string; action?: "buy" | "sell"; rank?: number; price: number; holderChange?: number }
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const BUCKET_15MIN = 15 * 60;
+  
+  const existing = await db.select().from(positionScoreSnapshots)
+    .where(eq(positionScoreSnapshots.holdingId, holdingId))
+    .then(rows => rows[0]);
+  
+  if (!existing) return;
+  
+  const buckets: EventBucket[] = (existing.eventBuckets as EventBucket[]) || [];
+  const currentBucketStart = Math.floor(now / BUCKET_15MIN) * BUCKET_15MIN;
+  
+  // Find or create current 15-min bucket
+  let currentBucket = buckets.find(b => 
+    b.tier === "15min" && b.bucketStart === currentBucketStart
+  );
+  
+  if (!currentBucket) {
+    currentBucket = {
+      tier: "15min",
+      bucketStart: currentBucketStart,
+      holderDelta: 0,
+      priceRange: { low: event.price, high: event.price },
+      whaleEvents: [],
+      eventCount: 0,
+      peakMultiplier: 1,
+    };
+    buckets.push(currentBucket);
+  }
+  
+  // Update bucket
+  currentBucket.eventCount++;
+  currentBucket.priceRange.low = Math.min(currentBucket.priceRange.low, event.price);
+  currentBucket.priceRange.high = Math.max(currentBucket.priceRange.high, event.price);
+  currentBucket.holderDelta += event.holderChange || 0;
+  
+  if (event.wallet && event.action && event.rank !== undefined) {
+    currentBucket.whaleEvents.push({
+      wallet: event.wallet.slice(0, 8), // Truncate for privacy
+      action: event.action,
+      rank: event.rank,
+      timestamp: now,
+    });
+  }
+  
+  // Rollup old 15min buckets to hourly (after 24 hours)
+  const oneDayAgo = now - 24 * 60 * 60;
+  const needsRollup = buckets.filter(b => 
+    b.tier === "15min" && b.bucketStart < oneDayAgo
+  );
+  
+  if (needsRollup.length >= 4) { // Rollup when we have 4+ old 15min buckets (1 hour)
+    await rollupBuckets(holdingId, buckets);
+    return;
+  }
+  
+  await db.update(positionScoreSnapshots)
+    .set({ eventBuckets: buckets })
+    .where(eq(positionScoreSnapshots.id, existing.id));
+}
+
+// Rollup 15min buckets to hourly, and hourly to daily
+async function rollupBuckets(holdingId: number, buckets: EventBucket[]): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const HOUR = 60 * 60;
+  const DAY = 24 * HOUR;
+  const oneDayAgo = now - DAY;
+  const sevenDaysAgo = now - 7 * DAY;
+  
+  // Group old 15min buckets by hour
+  const old15min = buckets.filter(b => b.tier === "15min" && b.bucketStart < oneDayAgo);
+  const hourlyGroups = new Map<number, EventBucket[]>();
+  
+  for (const bucket of old15min) {
+    const hourStart = Math.floor(bucket.bucketStart / HOUR) * HOUR;
+    if (!hourlyGroups.has(hourStart)) {
+      hourlyGroups.set(hourStart, []);
+    }
+    hourlyGroups.get(hourStart)!.push(bucket);
+  }
+  
+  // Create hourly summaries
+  const newBuckets: EventBucket[] = buckets.filter(b => 
+    !(b.tier === "15min" && b.bucketStart < oneDayAgo)
+  );
+  
+  Array.from(hourlyGroups.entries()).forEach(([hourStart, group]: [number, EventBucket[]]) => {
+    const hourlyBucket: EventBucket = {
+      tier: "hourly",
+      bucketStart: hourStart,
+      holderDelta: group.reduce((sum: number, b: EventBucket) => sum + b.holderDelta, 0),
+      priceRange: {
+        low: Math.min(...group.map((b: EventBucket) => b.priceRange.low)),
+        high: Math.max(...group.map((b: EventBucket) => b.priceRange.high)),
+      },
+      whaleEvents: group.flatMap((b: EventBucket) => b.whaleEvents).slice(0, 5), // Keep top 5 whale events
+      eventCount: group.reduce((sum: number, b: EventBucket) => sum + b.eventCount, 0),
+      peakMultiplier: Math.max(...group.map((b: EventBucket) => b.peakMultiplier)),
+    };
+    newBuckets.push(hourlyBucket);
+  });
+  
+  // Rollup old hourly to daily (after 7 days)
+  const oldHourly = newBuckets.filter(b => b.tier === "hourly" && b.bucketStart < sevenDaysAgo);
+  const dailyGroups = new Map<number, EventBucket[]>();
+  
+  for (const bucket of oldHourly) {
+    const dayStart = Math.floor(bucket.bucketStart / DAY) * DAY;
+    if (!dailyGroups.has(dayStart)) {
+      dailyGroups.set(dayStart, []);
+    }
+    dailyGroups.get(dayStart)!.push(bucket);
+  }
+  
+  const finalBuckets: EventBucket[] = newBuckets.filter(b => 
+    !(b.tier === "hourly" && b.bucketStart < sevenDaysAgo)
+  );
+  
+  Array.from(dailyGroups.entries()).forEach(([dayStart, group]: [number, EventBucket[]]) => {
+    const dailyBucket: EventBucket = {
+      tier: "daily",
+      bucketStart: dayStart,
+      holderDelta: group.reduce((sum: number, b: EventBucket) => sum + b.holderDelta, 0),
+      priceRange: {
+        low: Math.min(...group.map((b: EventBucket) => b.priceRange.low)),
+        high: Math.max(...group.map((b: EventBucket) => b.priceRange.high)),
+      },
+      whaleEvents: [], // No whale events in daily summaries
+      eventCount: group.reduce((sum: number, b: EventBucket) => sum + b.eventCount, 0),
+      peakMultiplier: Math.max(...group.map((b: EventBucket) => b.peakMultiplier)),
+    };
+    finalBuckets.push(dailyBucket);
+  });
+  
+  const existing = await db.select().from(positionScoreSnapshots)
+    .where(eq(positionScoreSnapshots.holdingId, holdingId))
+    .then(rows => rows[0]);
+  
+  if (existing) {
+    await db.update(positionScoreSnapshots)
+      .set({ eventBuckets: finalBuckets })
+      .where(eq(positionScoreSnapshots.id, existing.id));
+    
+    console.log(`[EventBuckets] Rolled up buckets for holding ${holdingId}: ${finalBuckets.length} total`);
+  }
+}
+
+// Update current snapshot during position lifecycle
+export async function updateCurrentSnapshot(
+  holdingId: number,
+  current: PositionCurrentSnapshot
+): Promise<void> {
+  const existing = await db.select().from(positionScoreSnapshots)
+    .where(eq(positionScoreSnapshots.holdingId, holdingId))
+    .then(rows => rows[0]);
+  
+  if (!existing) return;
+  
+  await db.update(positionScoreSnapshots)
+    .set({
+      currentSnapshot: current,
+    })
+    .where(eq(positionScoreSnapshots.id, existing.id));
+}
+
+// Exported wrapper to run bucket rollups for all snapshots
+export async function runBucketRollups(): Promise<number> {
+  const snapshots = await db.select().from(positionScoreSnapshots);
+  let rolledUp = 0;
+  
+  for (const snapshot of snapshots) {
+    const buckets = (snapshot.eventBuckets || []) as EventBucket[];
+    if (buckets.length === 0) continue;
+    
+    try {
+      await rollupBuckets(snapshot.holdingId, buckets);
+      rolledUp++;
+    } catch (e) {
+      console.error(`[EventBuckets] Rollup error for holding ${snapshot.holdingId}: ${e}`);
+    }
+  }
+  
+  return rolledUp;
+}

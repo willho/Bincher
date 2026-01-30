@@ -195,9 +195,12 @@ export const holdings = pgTable("holdings", {
   takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>(), // Percent to sell at each threshold [25, 25, 25, 25]
   stopLossPercent: real("stop_loss_percent"), // Sell if price drops by this %
   stopLossFloorUsd: real("stop_loss_floor_usd"), // Sell if value drops below this $
+  stopLossMode: text("stop_loss_mode").default("auto"), // "auto" (sell immediately) | "alert" (notify, wait for confirmation)
   stopLossTriggered: boolean("stop_loss_triggered").default(false), // True if stop-loss was executed
   stopLossTimestamp: integer("stop_loss_timestamp"), // Unix timestamp when stop-loss was triggered
   stopLossSignature: text("stop_loss_signature"), // Transaction signature of stop-loss sell
+  stopLossLastAlertedAt: integer("stop_loss_last_alerted_at"), // Debounce: last time stop-loss alert was sent
+  takeProfitLastTriggeredAt: integer("take_profit_last_triggered_at"), // Debounce: prevent oscillation re-triggers
   autoMirrorSells: boolean("auto_mirror_sells").default(false), // Mirror signal wallet sells
   positionSource: text("position_source").default("copy"), // "copy" | "manual" | "autonomous" | "swing"
   signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet that signaled
@@ -1078,6 +1081,17 @@ export const insertAiAccuracyStatsSchema = createInsertSchema(aiAccuracyStats).o
 export type AiAccuracyStats = typeof aiAccuracyStats.$inferSelect;
 export type InsertAiAccuracyStats = z.infer<typeof insertAiAccuracyStatsSchema>;
 
+// Event bucket type for tiered event tracking
+export interface EventBucket {
+  tier: "15min" | "hourly" | "daily";
+  bucketStart: number; // timestamp
+  holderDelta: number;
+  priceRange: { low: number; high: number };
+  whaleEvents: Array<{ wallet: string; action: "buy" | "sell"; rank: number; timestamp: number }>;
+  eventCount: number;
+  peakMultiplier: number;
+}
+
 // Position scoring snapshots - track position factor performance for adaptive learning
 export const positionScoreSnapshots = pgTable("position_score_snapshots", {
   id: serial("id").primaryKey(),
@@ -1102,6 +1116,23 @@ export const positionScoreSnapshots = pgTable("position_score_snapshots", {
   priceAtScoring: real("price_at_scoring"),
   entryPrice: real("entry_price"),
   holdTimeHours: real("hold_time_hours"),
+  
+  // Tiered event buckets - detailed recent, summarized historical
+  entrySnapshot: jsonb("entry_snapshot").$type<{
+    holderCount: number;
+    price: number;
+    marketCap: number;
+    timestamp: number;
+  }>(),
+  eventBuckets: jsonb("event_buckets").$type<EventBucket[]>().default([]),
+  currentSnapshot: jsonb("current_snapshot").$type<{
+    holderCount: number;
+    price: number;
+    marketCap: number;
+    peakMultiplier: number;
+    significantEvents: number;
+    timestamp: number;
+  }>(),
   
   // Outcome tracking (filled in when position closes or later)
   exitPrice: real("exit_price"),

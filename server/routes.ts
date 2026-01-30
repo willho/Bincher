@@ -3191,6 +3191,42 @@ export async function registerRoutes(
     }
   });
 
+  // Familiar Whales - get top performing whales
+  app.get("/api/whales/top", requireAuth, async (_req: AuthenticatedRequest, res) => {
+    try {
+      const { getTopPerformingWhales } = await import("./familiar-whales");
+      const whales = await getTopPerformingWhales(20);
+      res.json(whales);
+    } catch (error) {
+      console.error("Error getting top whales:", error);
+      res.status(500).json({ error: "Failed to get top whales" });
+    }
+  });
+
+  // Familiar Whales - check if familiar whales are in a token
+  app.get("/api/whales/token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { checkTokenForFamiliarWhales } = await import("./familiar-whales");
+      const whalesInToken = await checkTokenForFamiliarWhales(req.params.tokenMint);
+      res.json(whalesInToken);
+    } catch (error) {
+      console.error("Error checking token for whales:", error);
+      res.status(500).json({ error: "Failed to check token for familiar whales" });
+    }
+  });
+
+  // Familiar Whales - get whale history by wallet
+  app.get("/api/whales/history/:walletAddress", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getWhaleHistory } = await import("./familiar-whales");
+      const history = await getWhaleHistory(req.params.walletAddress);
+      res.json(history);
+    } catch (error) {
+      console.error("Error getting whale history:", error);
+      res.status(500).json({ error: "Failed to get whale history" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
   

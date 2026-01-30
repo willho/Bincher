@@ -133,6 +133,17 @@ export async function getAdaptivePositionWeights(): Promise<PositionFactorWeight
   }
 }
 
+// Adaptive dampening - cap weight shifts based on data confidence
+// With low samples, learn slowly (2% max). With high samples, learn faster (10% max)
+function calculateDampening(sampleSize: number): number {
+  const MIN_DAMPENING = 0.02; // 2% max shift with minimal data
+  const MAX_DAMPENING = 0.10; // 10% max shift with abundant data
+  const CONFIDENCE_THRESHOLD = 100; // Samples needed for full confidence
+  
+  const confidence = Math.min(1, sampleSize / CONFIDENCE_THRESHOLD);
+  return MIN_DAMPENING + (MAX_DAMPENING - MIN_DAMPENING) * confidence;
+}
+
 // Learn market factor weights from AI prediction outcomes
 async function calculateMarketFactorWeights(): Promise<MarketFactorWeights> {
   const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
@@ -150,6 +161,10 @@ async function calculateMarketFactorWeights(): Promise<MarketFactorWeights> {
     console.log(`[AdaptiveScoring] Not enough market predictions (${recentPredictions.length}), using base weights`);
     return BASE_MARKET_WEIGHTS;
   }
+  
+  // Calculate dampening based on sample size
+  const dampening = calculateDampening(recentPredictions.length);
+  console.log(`[AdaptiveScoring] Using dampening factor: ${(dampening * 100).toFixed(1)}% (${recentPredictions.length} samples)`);
 
   const factorPerformance = {
     liquidityHealth: { totalWeight: 0, successWeight: 0 },
@@ -182,8 +197,10 @@ async function calculateMarketFactorWeights(): Promise<MarketFactorWeights> {
     if (perf.totalWeight > 0) {
       const successRate = perf.successWeight / perf.totalWeight;
       const baseWeight = BASE_MARKET_WEIGHTS[factor as keyof MarketFactorWeights];
-      const adjustment = (successRate - 0.5) * WEIGHT_ADJUSTMENT_RATE;
-      adjustedWeights[factor as keyof MarketFactorWeights] = Math.max(0.05, Math.min(0.50, baseWeight + adjustment));
+      // Apply dampening to cap maximum adjustment
+      const rawAdjustment = (successRate - 0.5) * WEIGHT_ADJUSTMENT_RATE;
+      const cappedAdjustment = Math.max(-dampening, Math.min(dampening, rawAdjustment));
+      adjustedWeights[factor as keyof MarketFactorWeights] = Math.max(0.05, Math.min(0.50, baseWeight + cappedAdjustment));
     }
   }
 
@@ -214,6 +231,10 @@ async function calculatePositionFactorWeights(): Promise<PositionFactorWeights> 
     console.log(`[AdaptiveScoring] Not enough position snapshots (${recentSnapshots.length}), using base weights`);
     return BASE_POSITION_WEIGHTS;
   }
+  
+  // Calculate dampening based on sample size
+  const dampening = calculateDampening(recentSnapshots.length);
+  console.log(`[AdaptiveScoring] Position weights dampening: ${(dampening * 100).toFixed(1)}% (${recentSnapshots.length} samples)`);
 
   const factorPerformance = {
     priceChange: { totalWeight: 0, successWeight: 0 },
@@ -246,8 +267,10 @@ async function calculatePositionFactorWeights(): Promise<PositionFactorWeights> 
     if (perf.totalWeight > 0) {
       const successRate = perf.successWeight / perf.totalWeight;
       const baseWeight = BASE_POSITION_WEIGHTS[factor as keyof PositionFactorWeights];
-      const adjustment = (successRate - 0.5) * WEIGHT_ADJUSTMENT_RATE;
-      adjustedWeights[factor as keyof PositionFactorWeights] = Math.max(0.05, Math.min(0.50, baseWeight + adjustment));
+      // Apply dampening to cap maximum adjustment
+      const rawAdjustment = (successRate - 0.5) * WEIGHT_ADJUSTMENT_RATE;
+      const cappedAdjustment = Math.max(-dampening, Math.min(dampening, rawAdjustment));
+      adjustedWeights[factor as keyof PositionFactorWeights] = Math.max(0.05, Math.min(0.50, baseWeight + cappedAdjustment));
     }
   }
 

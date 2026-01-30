@@ -1,4 +1,7 @@
 import { getHotWalletBalance, updateTradeConfig, getHoldings, getPendingBuys } from "./wallet";
+import { db } from "./db";
+import { holdings } from "@shared/schema";
+import { eq, and } from "drizzle-orm";
 
 export interface ParsedIntent {
   type: 'buy' | 'sell' | 'balance' | 'holdings' | 'pending' | 'enable_copy' | 'disable_copy' | 'set_config' | 'confirm' | 'cancel' | 'conversation';
@@ -184,7 +187,82 @@ export async function executeIntent(userId: number, intent: ParsedIntent): Promi
     }
     
     case 'buy':
-    case 'sell':
+      return { handled: false, shouldCallAI: true };
+    
+    case 'sell': {
+      // Direct sell handler for alert-mode stop-loss confirmations
+      const token = intent.params?.token?.toUpperCase();
+      if (!token) {
+        return { handled: true, response: "Which token do you want to sell? Say 'sell <token>'" };
+      }
+      
+      // Find holding by symbol
+      const userHoldings = await db.select().from(holdings)
+        .where(and(
+          eq(holdings.userId, userId),
+          eq(holdings.isDead, false)
+        ));
+      
+      const holding = userHoldings.find(h => 
+        h.tokenSymbol?.toUpperCase() === token || 
+        h.tokenMint === token
+      );
+      
+      if (!holding || holding.currentAmount <= 0) {
+        return { handled: true, response: `No active position found for ${token}` };
+      }
+      
+      // Execute the sell directly
+      try {
+        const { sellTokenWithWallet } = await import("./jupiter");
+        const { decryptPrivateKey } = await import("./encryption");
+        
+        // Get token wallet keypair for this position
+        if (!holding.tokenWalletEncryptedKey) {
+          return { handled: true, response: "Position has no token wallet configured." };
+        }
+        
+        const { Keypair } = await import("@solana/web3.js");
+        const privateKeyBytes = decryptPrivateKey(holding.tokenWalletEncryptedKey);
+        const tokenWalletKeypair = Keypair.fromSecretKey(privateKeyBytes);
+        
+        const amount = intent.params?.amount || 'all';
+        const sellPercent = amount === 'all' ? 100 : 
+          typeof amount === 'string' && amount.endsWith('%') ? parseInt(amount) : 100;
+        
+        const tokensToSell = holding.currentAmount * (sellPercent / 100);
+        
+        const result = await sellTokenWithWallet(
+          tokenWalletKeypair,
+          holding.tokenMint,
+          tokensToSell
+        );
+        
+        if (result.success) {
+          const now = Math.floor(Date.now() / 1000);
+          const solReceived = result.outputAmount ? result.outputAmount / 1_000_000_000 : 0;
+          
+          await db.update(holdings).set({
+            currentAmount: holding.currentAmount - tokensToSell,
+            isDead: sellPercent >= 100,
+            stopLossTriggered: true,
+            stopLossTimestamp: now,
+            stopLossSignature: result.signature,
+          }).where(eq(holdings.id, holding.id));
+          
+          return { 
+            handled: true, 
+            response: `Sold ${sellPercent}% of ${holding.tokenSymbol} (${tokensToSell.toFixed(2)} tokens). ${solReceived.toFixed(4)} SOL received.` 
+          };
+        } else {
+          return { handled: true, response: `Failed to sell ${holding.tokenSymbol}: ${result.error}` };
+        }
+      } catch (error: any) {
+        console.error(`Error executing sell for ${token}:`, error);
+        return { handled: true, response: `Error selling ${token}: ${error.message || 'Unknown error'}` };
+      }
+    }
+    
     case 'confirm':
     case 'cancel':
       return { handled: false, shouldCallAI: true };
