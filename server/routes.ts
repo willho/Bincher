@@ -66,6 +66,7 @@ import {
   unlinkTelegram,
   sendSwapAlert as sendTelegramSwapAlert,
   sendWhaleAlert as sendTelegramWhaleAlert,
+  sendActivityAlert as sendTelegramActivityAlert,
   log as telegramLog,
 } from "./telegram";
 import { isAIAvailable } from "./ai-health";
@@ -730,17 +731,29 @@ export async function registerRoutes(
         // Get the monitored wallet details (used for alerts and copy trading)
         const sourceWallet = await storage.getMonitoredWalletByAddress(swapWalletAddress);
         
-        // Send Telegram swap alert
-        sendTelegramSwapAlert(userId, {
+        // Check if user has a position for this token (for sell button context)
+        const tokenMintForAlert = isBuy ? swap.toToken : swap.fromToken;
+        const userHasPosition = await db.select({ id: holdings.id }).from(holdings)
+          .where(and(
+            eq(holdings.userId, userId),
+            eq(holdings.tokenMint, tokenMintForAlert),
+            eq(holdings.reclaimed, false)
+          ))
+          .limit(1);
+        
+        // Send Telegram activity alert with actionable buttons
+        sendTelegramActivityAlert(userId, {
           walletLabel: sourceWallet?.label || "Wallet",
           walletAddress: swapWalletAddress,
-          tokenSymbol: swap.type === "BUY" ? swap.toTokenSymbol : swap.fromTokenSymbol,
-          tokenMint: swap.type === "BUY" ? swap.toToken : swap.fromToken,
-          type: swap.type === "BUY" ? "buy" : "sell",
-          amount: swap.type === "BUY" ? swap.toAmount : swap.fromAmount,
-          solAmount: swap.type === "BUY" ? swap.fromAmount : swap.toAmount,
+          tokenSymbol: isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol,
+          tokenMint: tokenMintForAlert,
+          type: isBuy ? "buy" : "sell",
+          amount: isBuy ? swap.toAmount : swap.fromAmount,
+          solAmount: isBuy ? swap.fromAmount : swap.toAmount,
           priceUsd: toTokenMetadata?.priceUsd,
-        }).catch(err => console.error("Telegram alert error:", err));
+          walletId: sourceWallet?.id,
+          hasPosition: userHasPosition.length > 0,
+        }).catch(err => console.error("Telegram activity alert error:", err));
 
         // Copy trading: Queue pending buy if this is a BUY (SOL/USDC -> Token)
         // Check both global copy trading setting AND wallet-specific copy trade setting

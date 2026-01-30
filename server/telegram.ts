@@ -485,6 +485,13 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
   const start = Date.now();
 
   try {
+    // Handle callback queries (inline button presses)
+    if (update.callback_query) {
+      await handleCallbackQuery(update.callback_query);
+      await log("telegram", "webhook_update", "success", { latencyMs: Date.now() - start, context: { type: "callback_query" } });
+      return;
+    }
+
     const message = update.message;
     if (!message || !message.chat || !message.text) {
       await log("telegram", "webhook_update", "info", { context: { type: "non_text_message" } });
@@ -517,6 +524,118 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
   }
 }
 
+async function handleCallbackQuery(callbackQuery: any): Promise<void> {
+  const chatId = callbackQuery.message?.chat?.id?.toString();
+  const data = callbackQuery.data;
+  const callbackQueryId = callbackQuery.id;
+
+  if (!chatId || !data) {
+    await answerCallbackQuery(callbackQueryId, "Invalid callback");
+    return;
+  }
+
+  const user = await getUserByChatId(chatId);
+  if (!user) {
+    await answerCallbackQuery(callbackQueryId, "Please link your account first with /start");
+    return;
+  }
+
+  // Parse callback data: action:tokenMint:walletId
+  const [action, tokenMint, walletIdStr] = data.split(":");
+  
+  try {
+    switch (action) {
+      case "buy": {
+        // Queue a manual buy for this token
+        const { addPendingBuy } = await import("./wallet");
+        const { getTokenInfo, getTokenPrice } = await import("./jupiter");
+        
+        const [tokenInfo, tokenPrice] = await Promise.all([
+          getTokenInfo(tokenMint),
+          getTokenPrice(tokenMint)
+        ]);
+        
+        if (tokenInfo) {
+          await addPendingBuy(
+            user.id,
+            tokenMint,
+            tokenInfo.symbol || "UNKNOWN",
+            tokenInfo.name,
+            tokenPrice ?? undefined,
+            undefined, // No liquidity info
+            undefined, // No source wallet (manual)
+            undefined,
+            undefined,
+            undefined
+          );
+          await answerCallbackQuery(callbackQueryId, `Queued buy for ${tokenInfo.symbol}`);
+          await sendMessage(chatId, `Queued buy for *${tokenInfo.symbol}*. Check your pending buys.`);
+        } else {
+          await answerCallbackQuery(callbackQueryId, "Could not fetch token info");
+        }
+        break;
+      }
+      
+      case "ignore": {
+        await answerCallbackQuery(callbackQueryId, "Ignored");
+        break;
+      }
+      
+      case "sell": {
+        // Find user's holdings for this token and trigger a sell
+        const userHoldings = await db.select().from(holdings)
+          .where(and(
+            eq(holdings.userId, user.id),
+            eq(holdings.tokenMint, tokenMint),
+            eq(holdings.reclaimed, false)
+          ));
+        
+        if (userHoldings.length === 0) {
+          await answerCallbackQuery(callbackQueryId, "No position to sell");
+          return;
+        }
+
+        // Sell all matching positions at 100%
+        const { executeAutoMirrorSell } = await import("./price-monitor");
+        let soldCount = 0;
+        for (const holding of userHoldings) {
+          try {
+            await executeAutoMirrorSell(user.id, holding, 100, "Manual sell via Telegram");
+            soldCount++;
+          } catch (e) {
+            console.error(`Failed to sell holding ${holding.id}:`, e);
+          }
+        }
+        
+        await answerCallbackQuery(callbackQueryId, `Sold ${soldCount} position(s)`);
+        await sendMessage(chatId, `Sold ${soldCount} position(s) for this token.`);
+        break;
+      }
+      
+      case "view": {
+        // Send token page link
+        const appUrl = process.env.REPLIT_DEV_DOMAIN || "your-app.replit.dev";
+        await answerCallbackQuery(callbackQueryId);
+        await sendMessage(chatId, `View token: https://${appUrl}/token/${tokenMint}`);
+        break;
+      }
+      
+      default:
+        await answerCallbackQuery(callbackQueryId, "Unknown action");
+    }
+  } catch (e: any) {
+    console.error(`Callback query error:`, e);
+    await answerCallbackQuery(callbackQueryId, "Error processing action");
+  }
+}
+
+async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
+  await telegramRequest("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text: text,
+  });
+}
+
 export async function sendSwapAlert(
   userId: number,
   data: {
@@ -542,6 +661,74 @@ export async function sendSwapAlert(
 
   await log("telegram", "send_swap_alert", "info", { userId, context: { tokenSymbol: data.tokenSymbol, type: data.type } });
   return await sendMessage(user.telegramChatId, message);
+}
+
+export async function sendActivityAlert(
+  userId: number,
+  data: {
+    walletLabel: string;
+    walletAddress: string;
+    tokenSymbol: string;
+    tokenMint: string;
+    type: "buy" | "sell";
+    amount: number;
+    solAmount?: number;
+    priceUsd?: number;
+    walletId?: number;
+    hasPosition?: boolean;
+  }
+): Promise<boolean> {
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user?.telegramChatId) return false;
+
+  const emoji = data.type === "buy" ? "🟢" : "🔴";
+  const action = data.type === "buy" ? "bought" : "sold";
+  const priceInfo = data.priceUsd ? ` @ $${data.priceUsd.toFixed(6)}` : "";
+  const solInfo = data.solAmount ? ` (${data.solAmount.toFixed(3)} SOL)` : "";
+  const amountInfo = data.amount ? `\nAmount: ${data.amount.toLocaleString()} tokens` : "";
+
+  const message = `${emoji} *Signal Wallet Activity*\n\n*${data.walletLabel || "Wallet"}* ${action} *${data.tokenSymbol}*${priceInfo}${solInfo}${amountInfo}\n\n\`${data.walletAddress.slice(0, 8)}...${data.walletAddress.slice(-4)}\``;
+
+  // Build inline keyboard with actionable buttons
+  const buttons = [];
+  
+  if (data.type === "buy") {
+    // Signal bought - offer to buy or view
+    buttons.push([
+      { text: "Buy", callback_data: `buy:${data.tokenMint}:${data.walletId || 0}` },
+      { text: "View Token", callback_data: `view:${data.tokenMint}:${data.walletId || 0}` },
+      { text: "Ignore", callback_data: `ignore:${data.tokenMint}:${data.walletId || 0}` }
+    ]);
+  } else {
+    // Signal sold - offer to sell (if we hold), view, or ignore
+    if (data.hasPosition) {
+      buttons.push([
+        { text: "Sell Position", callback_data: `sell:${data.tokenMint}:${data.walletId || 0}` },
+        { text: "View Token", callback_data: `view:${data.tokenMint}:${data.walletId || 0}` },
+        { text: "Ignore", callback_data: `ignore:${data.tokenMint}:${data.walletId || 0}` }
+      ]);
+    } else {
+      buttons.push([
+        { text: "View Token", callback_data: `view:${data.tokenMint}:${data.walletId || 0}` },
+        { text: "Ignore", callback_data: `ignore:${data.tokenMint}:${data.walletId || 0}` }
+      ]);
+    }
+  }
+
+  const keyboard = { inline_keyboard: buttons };
+
+  await log("telegram", "send_activity_alert", "info", { userId, context: { tokenSymbol: data.tokenSymbol, type: data.type } });
+  return await sendMessageWithKeyboard(user.telegramChatId, message, keyboard);
+}
+
+async function sendMessageWithKeyboard(chatId: string, text: string, replyMarkup: any): Promise<boolean> {
+  const result = await telegramRequest("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "Markdown",
+    reply_markup: replyMarkup,
+  });
+  return result !== null;
 }
 
 export async function sendWhaleAlert(
