@@ -1,7 +1,8 @@
 import { db } from "./db";
-import { holdings } from "@shared/schema";
+import { holdings, positionScoreSnapshots } from "@shared/schema";
 import { eq, and, isNotNull } from "drizzle-orm";
 import { getHoldersCached } from "./price-aggregator";
+import { getAdaptivePositionWeights, PositionFactorWeights } from "./adaptive-scoring";
 
 // Market-level factor computation for AI predictions
 // Maps market data to the same factor interface used by position scoring
@@ -25,7 +26,7 @@ export function computeMarketFactors(
     volume24h?: number | null;
   },
   whaleData?: {
-    top5Concentration: number;
+    topConcentration: number; // Can be top5 or top10, normalized to same scale
     recentWhaleActivity: boolean;
   }
 ): MarketFactors {
@@ -64,14 +65,14 @@ export function computeMarketFactors(
     }
   }
 
-  // Whale data
+  // Whale data (topConcentration can be top5 or top10 - uses same thresholds)
   if (whaleData) {
     // Whale concentration risk
-    if (whaleData.top5Concentration > 80) {
+    if (whaleData.topConcentration > 80) {
       factors.whaleConcentration = -40;
-    } else if (whaleData.top5Concentration > 60) {
+    } else if (whaleData.topConcentration > 60) {
       factors.whaleConcentration = -20;
-    } else if (whaleData.top5Concentration > 40) {
+    } else if (whaleData.topConcentration > 40) {
       factors.whaleConcentration = 0;
     } else {
       factors.whaleConcentration = 15; // Well distributed
@@ -101,18 +102,24 @@ export interface PositionScoreResult {
   factors: PositionScoreFactors;
 }
 
-// Position scoring uses fixed weights optimized for holding management
-// These are different from adaptive market-level weights which are for new token predictions
-// Position factors (entry price change, hold time, signal wallet sold) are fundamentally 
-// different from market factors (liquidity ratio, volume, concentration) so they need
-// separate weight systems
-const POSITION_SCORE_WEIGHTS = {
+// Base position weights (used if not enough data for adaptive learning)
+const BASE_POSITION_WEIGHTS: PositionFactorWeights = {
   priceChange: 0.35,     // Entry price vs current price movement
   timeDecay: 0.15,       // How long position has been held without gains
   whaleActivity: 0.20,   // Recent whale activity on the token
   signalWalletStatus: 0.20, // Whether signal wallet is still holding
   volumeTrend: 0.10,     // Volume change direction
 };
+
+// Get position weights (adaptive or base)
+async function getPositionWeights(): Promise<PositionFactorWeights> {
+  try {
+    return await getAdaptivePositionWeights();
+  } catch (error) {
+    console.log("[PositionScore] Using base weights due to error:", error);
+    return BASE_POSITION_WEIGHTS;
+  }
+}
 
 export async function calculatePositionScore(
   holdingId: number,
@@ -216,14 +223,14 @@ export async function calculatePositionScore(
     }
   }
 
-  // Use fixed position weights (not adaptive market weights)
-  // Position factors are fundamentally different from market factors
+  // Use adaptive position weights (learned from position outcomes)
+  const positionWeights = await getPositionWeights();
   const rawScore =
-    (factors.priceChange * POSITION_SCORE_WEIGHTS.priceChange) +
-    (factors.timeDecay * POSITION_SCORE_WEIGHTS.timeDecay) +
-    (factors.whaleActivity * POSITION_SCORE_WEIGHTS.whaleActivity) +
-    (factors.signalWalletStatus * POSITION_SCORE_WEIGHTS.signalWalletStatus) +
-    (factors.volumeTrend * POSITION_SCORE_WEIGHTS.volumeTrend);
+    (factors.priceChange * positionWeights.priceChange) +
+    (factors.timeDecay * positionWeights.timeDecay) +
+    (factors.whaleActivity * positionWeights.whaleActivity) +
+    (factors.signalWalletStatus * positionWeights.signalWalletStatus) +
+    (factors.volumeTrend * positionWeights.volumeTrend);
 
   let normalizedScore = Math.round(Math.max(0, Math.min(100, 50 + rawScore)));
 
@@ -395,4 +402,148 @@ function getEmptyFactors(): PositionScoreFactors {
     signalWalletStatus: 0,
     volumeTrend: 0,
   };
+}
+
+// ============================================
+// POSITION SCORE SNAPSHOTS FOR ADAPTIVE LEARNING
+// ============================================
+
+// Record a position score snapshot for learning
+export async function recordPositionScoreSnapshot(
+  holdingId: number,
+  result: PositionScoreResult,
+  currentPrice: number | null,
+  entryPrice: number | null,
+  holdTimeHours: number
+): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  // Get holding details
+  const [holding] = await db.select().from(holdings).where(eq(holdings.id, holdingId)).limit(1);
+  if (!holding) return 0;
+  
+  try {
+    const [inserted] = await db.insert(positionScoreSnapshots).values({
+      holdingId,
+      userId: holding.userId,
+      tokenMint: holding.tokenMint,
+      factorsSnapshot: result.factors,
+      computedScore: result.score,
+      scoreTier: result.tier,
+      priceAtScoring: currentPrice,
+      entryPrice: entryPrice,
+      holdTimeHours: holdTimeHours,
+      scoredAt: now,
+    }).returning({ id: positionScoreSnapshots.id });
+    
+    return inserted.id;
+  } catch (error) {
+    console.error("[PositionScore] Error recording snapshot:", error);
+    return 0;
+  }
+}
+
+// Resolve position score snapshots when a position closes
+export async function resolvePositionScoreSnapshots(
+  holdingId: number,
+  exitPrice: number,
+  outcomeType: "profit_exit" | "loss_exit" | "held_through"
+): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  // Get all unresolved snapshots for this holding
+  const snapshots = await db.select()
+    .from(positionScoreSnapshots)
+    .where(and(
+      eq(positionScoreSnapshots.holdingId, holdingId),
+      isNotNull(positionScoreSnapshots.entryPrice)
+    ));
+  
+  let updatedCount = 0;
+  
+  for (const snapshot of snapshots) {
+    if (snapshot.resolvedAt) continue;
+    
+    const entryPrice = snapshot.entryPrice || 0;
+    const exitMultiplier = entryPrice > 0 ? exitPrice / entryPrice : 1;
+    
+    // Determine if score was "good" - high score predicted profit, low score predicted loss
+    let wasGoodScore = false;
+    if (outcomeType === "profit_exit") {
+      // If we made profit, high scores were correct, low scores were wrong
+      wasGoodScore = snapshot.computedScore >= 50;
+    } else if (outcomeType === "loss_exit") {
+      // If we lost, low scores were correct (warned us), high scores were wrong
+      wasGoodScore = snapshot.computedScore < 50;
+    } else {
+      // Held through - neutral
+      wasGoodScore = snapshot.computedScore >= 40 && snapshot.computedScore <= 60;
+    }
+    
+    await db.update(positionScoreSnapshots)
+      .set({
+        exitPrice,
+        exitMultiplier,
+        wasGoodScore,
+        outcomeType,
+        resolvedAt: now,
+      })
+      .where(eq(positionScoreSnapshots.id, snapshot.id));
+    
+    updatedCount++;
+  }
+  
+  if (updatedCount > 0) {
+    console.log(`[PositionScore] Resolved ${updatedCount} snapshots for holding ${holdingId} (${outcomeType})`);
+  }
+  
+  return updatedCount;
+}
+
+// Batch record snapshots for learning (call periodically during price updates)
+export async function batchRecordSnapshots(
+  priceMap: Map<string, { price: number }>
+): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  const SNAPSHOT_INTERVAL_SECONDS = 3600; // Record snapshot every hour max
+  
+  const allHoldings = await db.select()
+    .from(holdings)
+    .where(and(
+      eq(holdings.isDead, false),
+      eq(holdings.isDust, false)
+    ));
+
+  let recordedCount = 0;
+  
+  for (const holding of allHoldings) {
+    const priceData = priceMap.get(holding.tokenMint);
+    if (!priceData || !holding.positionScore) continue;
+    
+    // Only record if we haven't recorded recently
+    const lastScoreUpdate = holding.scoreLastUpdated || 0;
+    if (now - lastScoreUpdate < SNAPSHOT_INTERVAL_SECONDS) continue;
+    
+    const holdTimeHours = (now - holding.buyTimestamp) / 3600;
+    
+    await recordPositionScoreSnapshot(
+      holding.id,
+      {
+        score: holding.positionScore,
+        tier: (holding.positionScoreTier as "strong" | "neutral" | "weak") || "neutral",
+        factors: (holding.scoreFactors as PositionScoreFactors) || getEmptyFactors(),
+      },
+      priceData.price,
+      holding.avgEntryPrice,
+      holdTimeHours
+    );
+    
+    recordedCount++;
+  }
+  
+  if (recordedCount > 0) {
+    console.log(`[PositionScore] Recorded ${recordedCount} position snapshots for learning`);
+  }
+  
+  return recordedCount;
 }

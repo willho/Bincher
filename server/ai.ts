@@ -839,12 +839,11 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
       // Record prediction for accuracy tracking with real factors
       try {
         const { recordPredictionFromScore } = await import("./ai-accuracy");
-        const { detectMarketRegime, applyRegimeAdjustment } = await import("./adaptive-scoring");
+        const { detectMarketRegime, applyRegimeAdjustment, getAdaptiveMarketWeights } = await import("./adaptive-scoring");
         const { computeMarketFactors } = await import("./position-score");
         
         // Compute market-level factors for this snapshot
-        // These are different from position factors (which use entry price/hold time)
-        // Both factor types contribute to adaptive learning for their respective use cases
+        // Market factors: liquidityHealth, volumeStrength, whaleConcentration, whaleActivity, tokenFreshness
         const factorsSnapshot = computeMarketFactors(
           {
             priceUsd: snapshot.priceUsd,
@@ -853,20 +852,19 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
             volume24h: snapshot.volume24h,
           },
           whaleData ? {
-            top5Concentration: whaleData.top5Concentration,
+            topConcentration: whaleData.top10Percent || 0,
             recentWhaleActivity: whaleData.recentWhaleActivity,
-          } : undefined,
-          true // Signal wallet is holding (snapshot was just created)
+          } : undefined
         );
         
-        // Compute factor-weighted score using adaptive weights
-        const adaptiveWeights = await (await import("./adaptive-scoring")).getAdaptiveWeights();
+        // Compute factor-weighted score using adaptive MARKET weights
+        const adaptiveMarketWeights = await getAdaptiveMarketWeights();
         const factorWeightedScore = 50 + (
-          (factorsSnapshot.priceChange || 0) * adaptiveWeights.priceChange +
-          (factorsSnapshot.timeDecay || 0) * adaptiveWeights.timeDecay +
-          (factorsSnapshot.whaleActivity || 0) * adaptiveWeights.whaleActivity +
-          (factorsSnapshot.signalWalletStatus || 0) * adaptiveWeights.signalWalletStatus +
-          (factorsSnapshot.volumeTrend || 0) * adaptiveWeights.volumeTrend
+          (factorsSnapshot.liquidityHealth || 0) * adaptiveMarketWeights.liquidityHealth +
+          (factorsSnapshot.volumeStrength || 0) * adaptiveMarketWeights.volumeStrength +
+          (factorsSnapshot.whaleConcentration || 0) * adaptiveMarketWeights.whaleConcentration +
+          (factorsSnapshot.whaleActivity || 0) * adaptiveMarketWeights.whaleActivity +
+          (factorsSnapshot.tokenFreshness || 0) * adaptiveMarketWeights.tokenFreshness
         );
         
         // Blend AI score with factor-weighted score (80% AI, 20% factors)

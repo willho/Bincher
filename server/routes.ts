@@ -71,7 +71,7 @@ import {
 } from "./telegram";
 import { isAIAvailable } from "./ai-health";
 import { getNetworkMode, setNetworkMode, getSolanaFaucetUrl, type NetworkMode } from "./network-mode";
-import { markSignalWalletSold, updateScoreOnWhaleActivity } from "./position-score";
+import { markSignalWalletSold, updateScoreOnWhaleActivity, resolvePositionScoreSnapshots } from "./position-score";
 
 let wss: WebSocketServer;
 
@@ -1846,6 +1846,16 @@ export async function registerRoutes(
       await db.update(holdings).set({
         currentAmount: newAmount,
       }).where(eq(holdings.id, holdingId));
+      
+      // Resolve position score snapshots for learning
+      const currentPrice = result.inputAmount ? (result.inputAmount / tokensToSell) : 0;
+      const entryPrice = holding.avgEntryPrice || holding.buyPrice || 0;
+      const outcomeType = entryPrice > 0 && currentPrice >= entryPrice ? "profit_exit" : "loss_exit";
+      try {
+        await resolvePositionScoreSnapshots(holdingId, currentPrice, outcomeType);
+      } catch (e) {
+        console.error(`Failed to resolve position snapshots:`, e);
+      }
       
       if (sellPercentage === 100 && holding.sourceWalletAddress && holding.buyPrice > 0) {
         try {

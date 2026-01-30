@@ -1027,13 +1027,13 @@ export const aiPredictions = pgTable("ai_predictions", {
     whaleActivity?: boolean;
   }>(),
   
-  // Factor snapshot for adaptive learning
+  // Market factor snapshot for adaptive learning (AI predictions)
   factorsSnapshot: jsonb("factors_snapshot").$type<{
-    priceChange?: number;
-    timeDecay?: number;
-    whaleActivity?: number;
-    signalWalletStatus?: number;
-    volumeTrend?: number;
+    liquidityHealth?: number;      // Liquidity/mcap ratio quality
+    volumeStrength?: number;       // Trading volume level
+    whaleConcentration?: number;   // Holder concentration risk
+    whaleActivity?: number;        // Recent whale movements
+    tokenFreshness?: number;       // How new/fresh the token is
   }>(),
 });
 
@@ -1077,6 +1077,73 @@ export const aiAccuracyStats = pgTable("ai_accuracy_stats", {
 export const insertAiAccuracyStatsSchema = createInsertSchema(aiAccuracyStats).omit({ id: true });
 export type AiAccuracyStats = typeof aiAccuracyStats.$inferSelect;
 export type InsertAiAccuracyStats = z.infer<typeof insertAiAccuracyStatsSchema>;
+
+// Position scoring snapshots - track position factor performance for adaptive learning
+export const positionScoreSnapshots = pgTable("position_score_snapshots", {
+  id: serial("id").primaryKey(),
+  holdingId: integer("holding_id").notNull(),
+  userId: integer("user_id"),
+  tokenMint: text("token_mint").notNull(),
+  
+  // Position factors at time of scoring
+  factorsSnapshot: jsonb("factors_snapshot").$type<{
+    priceChange: number;       // Entry price vs current price movement
+    timeDecay: number;         // Holding duration penalty
+    whaleActivity: number;     // Recent whale movements
+    signalWalletStatus: number; // Signal wallet still holding?
+    volumeTrend: number;       // Volume change direction
+  }>().notNull(),
+  
+  // Score computed
+  computedScore: integer("computed_score").notNull(),
+  scoreTier: text("score_tier").notNull(), // strong/neutral/weak
+  
+  // Context at scoring time
+  priceAtScoring: real("price_at_scoring"),
+  entryPrice: real("entry_price"),
+  holdTimeHours: real("hold_time_hours"),
+  
+  // Outcome tracking (filled in when position closes or later)
+  exitPrice: real("exit_price"),
+  exitMultiplier: real("exit_multiplier"),
+  wasGoodScore: boolean("was_good_score"), // true if score matched eventual outcome
+  outcomeType: text("outcome_type"), // profit_exit, loss_exit, held_through
+  
+  scoredAt: integer("scored_at").notNull(),
+  resolvedAt: integer("resolved_at"),
+});
+
+export const insertPositionScoreSnapshotSchema = createInsertSchema(positionScoreSnapshots).omit({ id: true });
+export type PositionScoreSnapshot = typeof positionScoreSnapshots.$inferSelect;
+export type InsertPositionScoreSnapshot = z.infer<typeof insertPositionScoreSnapshotSchema>;
+
+// Discovered factors - AI-discovered correlations for potential new factors
+export const discoveredFactors = pgTable("discovered_factors", {
+  id: serial("id").primaryKey(),
+  factorType: text("factor_type").notNull(), // market | position
+  factorName: text("factor_name").notNull(), // e.g., "superLiquidity", "fastFlipperSource"
+  description: text("description").notNull(),
+  
+  // Discovery stats
+  correlationStrength: real("correlation_strength"), // 0-1 how strongly it correlates
+  sampleSize: integer("sample_size").notNull(),
+  successRate: real("success_rate"), // % of positive outcomes with this factor
+  avgMultiplier: real("avg_multiplier"),
+  
+  // Status
+  status: text("status").default("proposed"), // proposed, testing, active, rejected
+  addedToScoringAt: integer("added_to_scoring_at"),
+  
+  // Examples
+  exampleConditions: jsonb("example_conditions").$type<string[]>(),
+  
+  discoveredAt: integer("discovered_at").notNull(),
+  lastUpdated: integer("last_updated").notNull(),
+});
+
+export const insertDiscoveredFactorSchema = createInsertSchema(discoveredFactors).omit({ id: true });
+export type DiscoveredFactor = typeof discoveredFactors.$inferSelect;
+export type InsertDiscoveredFactor = z.infer<typeof insertDiscoveredFactorSchema>;
 
 // Pattern triggers - Pincher learns patterns and correlates to outcomes
 export const patternTriggers = pgTable("pattern_triggers", {

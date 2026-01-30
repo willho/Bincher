@@ -1,14 +1,27 @@
 import { db } from "./db";
-import { aiPredictions, aiAccuracyStats } from "@shared/schema";
+import { aiPredictions, aiAccuracyStats, positionScoreSnapshots, discoveredFactors } from "@shared/schema";
 import { eq, and, isNotNull, gte, lte, desc, sql, isNull } from "drizzle-orm";
 
-export interface AdaptiveWeights {
+// Market factors - used for AI predictions on new tokens
+export interface MarketFactorWeights {
+  liquidityHealth: number;
+  volumeStrength: number;
+  whaleConcentration: number;
+  whaleActivity: number;
+  tokenFreshness: number;
+}
+
+// Position factors - used for managing existing holdings
+export interface PositionFactorWeights {
   priceChange: number;
   timeDecay: number;
   whaleActivity: number;
   signalWalletStatus: number;
   volumeTrend: number;
 }
+
+// Legacy alias for backward compatibility
+export type AdaptiveWeights = PositionFactorWeights;
 
 export interface MarketRegime {
   type: "bullish" | "bearish" | "sideways" | "volatile";
@@ -30,7 +43,17 @@ export interface PatternInsight {
   lastSeen: number;
 }
 
-const BASE_WEIGHTS: AdaptiveWeights = {
+// Base weights for market factors (AI predictions)
+const BASE_MARKET_WEIGHTS: MarketFactorWeights = {
+  liquidityHealth: 0.25,
+  volumeStrength: 0.20,
+  whaleConcentration: 0.20,
+  whaleActivity: 0.15,
+  tokenFreshness: 0.20,
+};
+
+// Base weights for position factors (holding decisions)
+const BASE_POSITION_WEIGHTS: PositionFactorWeights = {
   priceChange: 0.35,
   timeDecay: 0.15,
   whaleActivity: 0.20,
@@ -38,81 +61,102 @@ const BASE_WEIGHTS: AdaptiveWeights = {
   volumeTrend: 0.10,
 };
 
+// Legacy alias
+const BASE_WEIGHTS = BASE_POSITION_WEIGHTS;
+
 const WEIGHT_ADJUSTMENT_RATE = 0.1;
-const MIN_PREDICTIONS_FOR_LEARNING = 10;
+const MIN_SAMPLES_FOR_LEARNING = 10;
 const PATTERN_MEMORY_DAYS = 30;
 
-let cachedWeights: AdaptiveWeights | null = null;
+// Caches
+let cachedMarketWeights: MarketFactorWeights | null = null;
+let cachedPositionWeights: PositionFactorWeights | null = null;
 let cachedMarketRegime: MarketRegime | null = null;
 let cachedPatterns: PatternInsight[] = [];
-let lastWeightUpdate = 0;
+let lastMarketWeightUpdate = 0;
+let lastPositionWeightUpdate = 0;
 let lastRegimeUpdate = 0;
 let lastPatternUpdate = 0;
+
+// Legacy
+let cachedWeights: AdaptiveWeights | null = null;
+let lastWeightUpdate = 0;
 
 const WEIGHT_CACHE_TTL = 3600 * 1000;
 const REGIME_CACHE_TTL = 900 * 1000;
 const PATTERN_CACHE_TTL = 3600 * 1000;
 
 // Global caches - adaptive scoring uses global market data, not user-specific
-// Rationale: Market factors (liquidity, volume, whale concentration) are global token properties
-// Individual users don't have different "versions" of market conditions
-// Position factors (entry price, hold time) are user-specific but stored in holdings, not predictions
+// Market factors (liquidity, volume, whale concentration) are global token properties
+// Position factors are also global (we learn from all outcomes to help everyone)
 
+// Legacy function for backward compatibility
 export async function getAdaptiveWeights(): Promise<AdaptiveWeights> {
+  return getAdaptivePositionWeights();
+}
+
+// Get adaptive weights for MARKET factors (AI predictions on new tokens)
+export async function getAdaptiveMarketWeights(): Promise<MarketFactorWeights> {
   const now = Date.now();
   
-  // Global cache for market-level adaptive weights
-  if (cachedWeights && (now - lastWeightUpdate) < WEIGHT_CACHE_TTL) {
-    return cachedWeights;
+  if (cachedMarketWeights && (now - lastMarketWeightUpdate) < WEIGHT_CACHE_TTL) {
+    return cachedMarketWeights;
   }
 
   try {
-    // Use null userId for global market-factor learning
-    const weights = await calculateAdaptiveWeights(null);
-    cachedWeights = weights;
-    lastWeightUpdate = now;
+    const weights = await calculateMarketFactorWeights();
+    cachedMarketWeights = weights;
+    lastMarketWeightUpdate = now;
     return weights;
   } catch (error) {
-    console.error("[AdaptiveScoring] Error calculating weights:", error);
-    return BASE_WEIGHTS;
+    console.error("[AdaptiveScoring] Error calculating market weights:", error);
+    return BASE_MARKET_WEIGHTS;
   }
 }
 
-async function calculateAdaptiveWeights(userId: number | null): Promise<AdaptiveWeights> {
-  const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+// Get adaptive weights for POSITION factors (managing existing holdings)
+export async function getAdaptivePositionWeights(): Promise<PositionFactorWeights> {
+  const now = Date.now();
   
-  let recentPredictions;
-  if (userId !== null) {
-    recentPredictions = await db.select().from(aiPredictions)
-      .where(and(
-        eq(aiPredictions.userId, userId),
-        isNotNull(aiPredictions.resolvedAt),
-        gte(aiPredictions.predictedAt, thirtyDaysAgo)
-      ))
-      .orderBy(desc(aiPredictions.resolvedAt))
-      .limit(100);
-  } else {
-    recentPredictions = await db.select().from(aiPredictions)
-      .where(and(
-        isNull(aiPredictions.userId),
-        isNotNull(aiPredictions.resolvedAt),
-        gte(aiPredictions.predictedAt, thirtyDaysAgo)
-      ))
-      .orderBy(desc(aiPredictions.resolvedAt))
-      .limit(100);
+  if (cachedPositionWeights && (now - lastPositionWeightUpdate) < WEIGHT_CACHE_TTL) {
+    return cachedPositionWeights;
   }
 
-  if (recentPredictions.length < MIN_PREDICTIONS_FOR_LEARNING) {
-    console.log(`[AdaptiveScoring] Not enough predictions (${recentPredictions.length}), using base weights`);
-    return BASE_WEIGHTS;
+  try {
+    const weights = await calculatePositionFactorWeights();
+    cachedPositionWeights = weights;
+    lastPositionWeightUpdate = now;
+    return weights;
+  } catch (error) {
+    console.error("[AdaptiveScoring] Error calculating position weights:", error);
+    return BASE_POSITION_WEIGHTS;
+  }
+}
+
+// Learn market factor weights from AI prediction outcomes
+async function calculateMarketFactorWeights(): Promise<MarketFactorWeights> {
+  const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+  
+  const recentPredictions = await db.select().from(aiPredictions)
+    .where(and(
+      isNotNull(aiPredictions.resolvedAt),
+      isNotNull(aiPredictions.factorsSnapshot),
+      gte(aiPredictions.predictedAt, thirtyDaysAgo)
+    ))
+    .orderBy(desc(aiPredictions.resolvedAt))
+    .limit(200);
+
+  if (recentPredictions.length < MIN_SAMPLES_FOR_LEARNING) {
+    console.log(`[AdaptiveScoring] Not enough market predictions (${recentPredictions.length}), using base weights`);
+    return BASE_MARKET_WEIGHTS;
   }
 
   const factorPerformance = {
-    priceChange: { totalWeight: 0, successWeight: 0 },
-    timeDecay: { totalWeight: 0, successWeight: 0 },
+    liquidityHealth: { totalWeight: 0, successWeight: 0 },
+    volumeStrength: { totalWeight: 0, successWeight: 0 },
+    whaleConcentration: { totalWeight: 0, successWeight: 0 },
     whaleActivity: { totalWeight: 0, successWeight: 0 },
-    signalWalletStatus: { totalWeight: 0, successWeight: 0 },
-    volumeTrend: { totalWeight: 0, successWeight: 0 },
+    tokenFreshness: { totalWeight: 0, successWeight: 0 },
   };
 
   for (const prediction of recentPredictions) {
@@ -123,7 +167,7 @@ async function calculateAdaptiveWeights(userId: number | null): Promise<Adaptive
     for (const [key, value] of Object.entries(factors)) {
       if (key in factorPerformance) {
         const k = key as keyof typeof factorPerformance;
-        const absValue = Math.abs(value);
+        const absValue = Math.abs(value || 0);
         factorPerformance[k].totalWeight += absValue;
         if (wasSuccessful) {
           factorPerformance[k].successWeight += absValue * multiplier;
@@ -132,26 +176,88 @@ async function calculateAdaptiveWeights(userId: number | null): Promise<Adaptive
     }
   }
 
-  const adjustedWeights = { ...BASE_WEIGHTS };
-  let totalAdjustment = 0;
+  const adjustedWeights = { ...BASE_MARKET_WEIGHTS };
 
   for (const [factor, perf] of Object.entries(factorPerformance)) {
     if (perf.totalWeight > 0) {
       const successRate = perf.successWeight / perf.totalWeight;
-      const baseWeight = BASE_WEIGHTS[factor as keyof AdaptiveWeights];
-      
+      const baseWeight = BASE_MARKET_WEIGHTS[factor as keyof MarketFactorWeights];
       const adjustment = (successRate - 0.5) * WEIGHT_ADJUSTMENT_RATE;
-      adjustedWeights[factor as keyof AdaptiveWeights] = Math.max(0.05, Math.min(0.50, baseWeight + adjustment));
-      totalAdjustment += adjustedWeights[factor as keyof AdaptiveWeights] - baseWeight;
+      adjustedWeights[factor as keyof MarketFactorWeights] = Math.max(0.05, Math.min(0.50, baseWeight + adjustment));
     }
   }
 
+  // Normalize to sum to 1
   const sum = Object.values(adjustedWeights).reduce((a, b) => a + b, 0);
   for (const factor of Object.keys(adjustedWeights)) {
-    adjustedWeights[factor as keyof AdaptiveWeights] /= sum;
+    adjustedWeights[factor as keyof MarketFactorWeights] /= sum;
   }
 
-  console.log("[AdaptiveScoring] Calculated adaptive weights:", adjustedWeights);
+  console.log("[AdaptiveScoring] Calculated adaptive market weights:", adjustedWeights);
+  return adjustedWeights;
+}
+
+// Learn position factor weights from position scoring outcomes
+async function calculatePositionFactorWeights(): Promise<PositionFactorWeights> {
+  const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+  
+  const recentSnapshots = await db.select().from(positionScoreSnapshots)
+    .where(and(
+      isNotNull(positionScoreSnapshots.resolvedAt),
+      isNotNull(positionScoreSnapshots.wasGoodScore),
+      gte(positionScoreSnapshots.scoredAt, thirtyDaysAgo)
+    ))
+    .orderBy(desc(positionScoreSnapshots.resolvedAt))
+    .limit(200);
+
+  if (recentSnapshots.length < MIN_SAMPLES_FOR_LEARNING) {
+    console.log(`[AdaptiveScoring] Not enough position snapshots (${recentSnapshots.length}), using base weights`);
+    return BASE_POSITION_WEIGHTS;
+  }
+
+  const factorPerformance = {
+    priceChange: { totalWeight: 0, successWeight: 0 },
+    timeDecay: { totalWeight: 0, successWeight: 0 },
+    whaleActivity: { totalWeight: 0, successWeight: 0 },
+    signalWalletStatus: { totalWeight: 0, successWeight: 0 },
+    volumeTrend: { totalWeight: 0, successWeight: 0 },
+  };
+
+  for (const snapshot of recentSnapshots) {
+    const factors = snapshot.factorsSnapshot || {};
+    const wasGood = snapshot.wasGoodScore;
+    const multiplier = snapshot.exitMultiplier || 1;
+
+    for (const [key, value] of Object.entries(factors)) {
+      if (key in factorPerformance) {
+        const k = key as keyof typeof factorPerformance;
+        const absValue = Math.abs(value || 0);
+        factorPerformance[k].totalWeight += absValue;
+        if (wasGood) {
+          factorPerformance[k].successWeight += absValue * multiplier;
+        }
+      }
+    }
+  }
+
+  const adjustedWeights = { ...BASE_POSITION_WEIGHTS };
+
+  for (const [factor, perf] of Object.entries(factorPerformance)) {
+    if (perf.totalWeight > 0) {
+      const successRate = perf.successWeight / perf.totalWeight;
+      const baseWeight = BASE_POSITION_WEIGHTS[factor as keyof PositionFactorWeights];
+      const adjustment = (successRate - 0.5) * WEIGHT_ADJUSTMENT_RATE;
+      adjustedWeights[factor as keyof PositionFactorWeights] = Math.max(0.05, Math.min(0.50, baseWeight + adjustment));
+    }
+  }
+
+  // Normalize to sum to 1
+  const sum = Object.values(adjustedWeights).reduce((a, b) => a + b, 0);
+  for (const factor of Object.keys(adjustedWeights)) {
+    adjustedWeights[factor as keyof PositionFactorWeights] /= sum;
+  }
+
+  console.log("[AdaptiveScoring] Calculated adaptive position weights:", adjustedWeights);
   return adjustedWeights;
 }
 
@@ -363,6 +469,26 @@ async function analyzePatterns(userId: number | null): Promise<PatternInsight[]>
 function classifyPattern(factors: Record<string, number>, prediction: string): string {
   const components: string[] = [];
   
+  // Market factors (for AI predictions)
+  if (factors.liquidityHealth !== undefined) {
+    if (factors.liquidityHealth > 60) components.push("high_liquidity");
+    else if (factors.liquidityHealth > 30) components.push("ok_liquidity");
+    else components.push("low_liquidity");
+  }
+  
+  if (factors.volumeStrength !== undefined) {
+    if (factors.volumeStrength > 50) components.push("high_volume");
+    else if (factors.volumeStrength > 20) components.push("ok_volume");
+    else components.push("low_volume");
+  }
+
+  if (factors.whaleConcentration !== undefined) {
+    if (factors.whaleConcentration > 50) components.push("concentrated");
+    else if (factors.whaleConcentration > 20) components.push("moderate_concentration");
+    else components.push("distributed");
+  }
+
+  // Position factors (for holding decisions)
   if (factors.priceChange !== undefined) {
     if (factors.priceChange > 50) components.push("strong_momentum");
     else if (factors.priceChange > 10) components.push("positive_momentum");
@@ -372,10 +498,9 @@ function classifyPattern(factors: Record<string, number>, prediction: string): s
   }
 
   if (factors.whaleActivity !== undefined) {
-    if (factors.whaleActivity > 30) components.push("high_whale");
-    else if (factors.whaleActivity > 0) components.push("some_whale");
-    else if (factors.whaleActivity < -20) components.push("concentrated");
-    else components.push("no_whale");
+    if (factors.whaleActivity > 30) components.push("high_whale_activity");
+    else if (factors.whaleActivity > 0) components.push("some_whale_activity");
+    else components.push("no_whale_activity");
   }
 
   if (factors.signalWalletStatus !== undefined) {
@@ -392,6 +517,224 @@ function classifyPattern(factors: Record<string, number>, prediction: string): s
   components.push(`pred_${prediction}`);
 
   return components.join("+");
+}
+
+// ============================================
+// FACTOR DISCOVERY ENGINE
+// ============================================
+
+export interface DiscoveredFactorSuggestion {
+  factorType: "market" | "position";
+  factorName: string;
+  description: string;
+  correlationStrength: number;
+  sampleSize: number;
+  successRate: number;
+  avgMultiplier: number;
+  exampleConditions: string[];
+}
+
+// Analyze outcomes to discover potential new factors
+export async function discoverNewFactors(): Promise<DiscoveredFactorSuggestion[]> {
+  const suggestions: DiscoveredFactorSuggestion[] = [];
+  
+  try {
+    // Discover market-related patterns
+    const marketSuggestions = await analyzeMarketPatterns();
+    suggestions.push(...marketSuggestions);
+    
+    // Discover position-related patterns
+    const positionSuggestions = await analyzePositionPatterns();
+    suggestions.push(...positionSuggestions);
+    
+    console.log(`[FactorDiscovery] Found ${suggestions.length} potential new factors`);
+    return suggestions;
+  } catch (error) {
+    console.error("[FactorDiscovery] Error discovering factors:", error);
+    return [];
+  }
+}
+
+async function analyzeMarketPatterns(): Promise<DiscoveredFactorSuggestion[]> {
+  const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+  const suggestions: DiscoveredFactorSuggestion[] = [];
+  
+  const predictions = await db.select().from(aiPredictions)
+    .where(and(
+      isNotNull(aiPredictions.resolvedAt),
+      gte(aiPredictions.predictedAt, thirtyDaysAgo)
+    ))
+    .limit(500);
+
+  if (predictions.length < 50) return suggestions;
+
+  // Analyze high liquidity tokens
+  const highLiquidityTokens = predictions.filter(p => {
+    const ctx = p.priceContextAt as any;
+    const mcap = ctx?.marketCap || 1;
+    const liq = ctx?.liquidity || 0;
+    return liq / mcap > 0.5;
+  });
+  
+  if (highLiquidityTokens.length >= 20) {
+    const successCount = highLiquidityTokens.filter(p => p.wasAccurate).length;
+    const successRate = successCount / highLiquidityTokens.length;
+    const avgMult = highLiquidityTokens.reduce((sum, p) => sum + (p.outcomeMultiplier || 1), 0) / highLiquidityTokens.length;
+    
+    if (successRate > 0.65) {
+      suggestions.push({
+        factorType: "market",
+        factorName: "superLiquidity",
+        description: "Tokens with >50% liquidity/mcap ratio have significantly better outcomes",
+        correlationStrength: successRate,
+        sampleSize: highLiquidityTokens.length,
+        successRate,
+        avgMultiplier: avgMult,
+        exampleConditions: ["liquidity > 50% of market cap"],
+      });
+    }
+  }
+
+  // Analyze early tokens (< 24h old)
+  const earlyTokens = predictions.filter(p => {
+    const ctx = p.priceContextAt as any;
+    return ctx?.heatScore && ctx.heatScore > 80;
+  });
+  
+  if (earlyTokens.length >= 20) {
+    const successCount = earlyTokens.filter(p => p.wasAccurate).length;
+    const successRate = successCount / earlyTokens.length;
+    const avgMult = earlyTokens.reduce((sum, p) => sum + (p.outcomeMultiplier || 1), 0) / earlyTokens.length;
+    
+    if (successRate > 0.6 || successRate < 0.35) {
+      suggestions.push({
+        factorType: "market",
+        factorName: "heatMomentum",
+        description: successRate > 0.5 
+          ? "High-heat tokens (>80) correlate with positive outcomes"
+          : "High-heat tokens (>80) actually underperform - consider as warning",
+        correlationStrength: Math.abs(successRate - 0.5) * 2,
+        sampleSize: earlyTokens.length,
+        successRate,
+        avgMultiplier: avgMult,
+        exampleConditions: ["heat score > 80"],
+      });
+    }
+  }
+
+  return suggestions;
+}
+
+async function analyzePositionPatterns(): Promise<DiscoveredFactorSuggestion[]> {
+  const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
+  const suggestions: DiscoveredFactorSuggestion[] = [];
+  
+  const snapshots = await db.select().from(positionScoreSnapshots)
+    .where(and(
+      isNotNull(positionScoreSnapshots.resolvedAt),
+      gte(positionScoreSnapshots.scoredAt, thirtyDaysAgo)
+    ))
+    .limit(500);
+
+  if (snapshots.length < 50) return suggestions;
+
+  // Analyze quick exits (< 30 min hold time)
+  const quickExits = snapshots.filter(s => (s.holdTimeHours || 0) < 0.5);
+  
+  if (quickExits.length >= 20) {
+    const goodCount = quickExits.filter(s => s.wasGoodScore).length;
+    const successRate = goodCount / quickExits.length;
+    const avgMult = quickExits.reduce((sum, s) => sum + (s.exitMultiplier || 1), 0) / quickExits.length;
+    
+    if (successRate < 0.4) {
+      suggestions.push({
+        factorType: "position",
+        factorName: "quickFlipPenalty",
+        description: "Positions held <30 minutes often result in losses - penalize quick flips",
+        correlationStrength: (0.5 - successRate) * 2,
+        sampleSize: quickExits.length,
+        successRate,
+        avgMultiplier: avgMult,
+        exampleConditions: ["hold time < 30 minutes"],
+      });
+    }
+  }
+
+  // Analyze signal wallet sold but user held
+  const signalSoldUserHeld = snapshots.filter(s => {
+    const factors = s.factorsSnapshot || {};
+    return factors.signalWalletStatus < 0 && (s.holdTimeHours || 0) > 1;
+  });
+  
+  if (signalSoldUserHeld.length >= 15) {
+    const goodCount = signalSoldUserHeld.filter(s => s.wasGoodScore).length;
+    const successRate = goodCount / signalSoldUserHeld.length;
+    const avgMult = signalSoldUserHeld.reduce((sum, s) => sum + (s.exitMultiplier || 1), 0) / signalSoldUserHeld.length;
+    
+    if (successRate < 0.35) {
+      suggestions.push({
+        factorType: "position",
+        factorName: "signalExitIgnored",
+        description: "Holding after signal wallet exits correlates with losses",
+        correlationStrength: (0.5 - successRate) * 2,
+        sampleSize: signalSoldUserHeld.length,
+        successRate,
+        avgMultiplier: avgMult,
+        exampleConditions: ["signal wallet sold", "user continued holding >1hr"],
+      });
+    }
+  }
+
+  return suggestions;
+}
+
+// Save a discovered factor to the database
+export async function saveDiscoveredFactor(suggestion: DiscoveredFactorSuggestion): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const [inserted] = await db.insert(discoveredFactors).values({
+    factorType: suggestion.factorType,
+    factorName: suggestion.factorName,
+    description: suggestion.description,
+    correlationStrength: suggestion.correlationStrength,
+    sampleSize: suggestion.sampleSize,
+    successRate: suggestion.successRate,
+    avgMultiplier: suggestion.avgMultiplier,
+    status: "proposed",
+    exampleConditions: suggestion.exampleConditions,
+    discoveredAt: now,
+    lastUpdated: now,
+  }).returning({ id: discoveredFactors.id });
+  
+  console.log(`[FactorDiscovery] Saved new factor "${suggestion.factorName}" with id ${inserted.id}`);
+  return inserted.id;
+}
+
+// Get all discovered factors
+export async function getDiscoveredFactors(status?: string): Promise<typeof discoveredFactors.$inferSelect[]> {
+  if (status) {
+    return db.select().from(discoveredFactors)
+      .where(eq(discoveredFactors.status, status))
+      .orderBy(desc(discoveredFactors.correlationStrength));
+  }
+  return db.select().from(discoveredFactors)
+    .orderBy(desc(discoveredFactors.discoveredAt));
+}
+
+// Activate a discovered factor (add to scoring system)
+export async function activateDiscoveredFactor(factorId: number): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  await db.update(discoveredFactors)
+    .set({ 
+      status: "active",
+      addedToScoringAt: now,
+      lastUpdated: now,
+    })
+    .where(eq(discoveredFactors.id, factorId));
+  
+  console.log(`[FactorDiscovery] Activated factor ${factorId}`);
+  return true;
 }
 
 export async function getAdaptiveScoringContext(): Promise<{
@@ -478,11 +821,53 @@ export function applyRegimeAdjustment(
 // This keeps factor logic centralized and consistent
 
 export function invalidateCaches(): void {
-  cachedWeights = null;
+  cachedMarketWeights = null;
+  cachedPositionWeights = null;
   cachedMarketRegime = null;
   cachedPatterns = [];
+  cachedWeights = null;
+  lastMarketWeightUpdate = 0;
+  lastPositionWeightUpdate = 0;
   lastWeightUpdate = 0;
   lastRegimeUpdate = 0;
   lastPatternUpdate = 0;
-  console.log("[AdaptiveScoring] Caches invalidated");
+  console.log("[AdaptiveScoring] All caches invalidated");
+}
+
+// Get full context for both scoring systems
+export async function getFullAdaptiveScoringContext(): Promise<{
+  marketWeights: MarketFactorWeights;
+  positionWeights: PositionFactorWeights;
+  regime: MarketRegime;
+  patterns: PatternInsight[];
+  discoveredFactors: DiscoveredFactorSuggestion[];
+  recommendations: string[];
+}> {
+  const [marketWeights, positionWeights, regime, patterns, newFactors] = await Promise.all([
+    getAdaptiveMarketWeights(),
+    getAdaptivePositionWeights(),
+    detectMarketRegime(),
+    discoverPatterns(),
+    discoverNewFactors(),
+  ]);
+
+  const recommendations = generateRecommendations(positionWeights, regime, patterns);
+
+  // Add factor discovery recommendations
+  if (newFactors.length > 0) {
+    const topFactor = newFactors[0];
+    recommendations.push(
+      `Discovered potential new ${topFactor.factorType} factor: "${topFactor.factorName}" ` +
+      `(${(topFactor.successRate * 100).toFixed(0)}% success rate, ${topFactor.sampleSize} samples)`
+    );
+  }
+
+  return { 
+    marketWeights, 
+    positionWeights, 
+    regime, 
+    patterns, 
+    discoveredFactors: newFactors,
+    recommendations 
+  };
 }

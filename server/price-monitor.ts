@@ -19,7 +19,13 @@ import {
   stopAggregationJob,
   triggerHolderRefresh 
 } from "./price-aggregator";
-import { updateScoreOnPriceMove, batchUpdatePositionScores } from "./position-score";
+import { 
+  updateScoreOnPriceMove, 
+  batchUpdatePositionScores, 
+  batchRecordSnapshots,
+  resolvePositionScoreSnapshots 
+} from "./position-score";
+import { discoverNewFactors, saveDiscoveredFactor } from "./adaptive-scoring";
 
 const PRICE_CHECK_INTERVAL_MS = 30000;
 const MIN_CHECK_INTERVAL_PER_TOKEN_MS = 30000;
@@ -174,6 +180,13 @@ export async function checkPricesAndReclaim(): Promise<void> {
           console.log(`[PositionScore] Batch updated ${count} position scores`);
         }
       }).catch(e => console.error(`[PositionScore] Batch update error: ${e}`));
+      
+      // Also record snapshots for adaptive learning (hourly throttled internally)
+      batchRecordSnapshots(priceMapForScoring).then(count => {
+        if (count > 0) {
+          console.log(`[PositionScore] Recorded ${count} snapshots for adaptive learning`);
+        }
+      }).catch(e => console.error(`[PositionScore] Snapshot recording error: ${e}`));
     }
     
     for (const holding of holdingsToProcess) {
@@ -739,6 +752,14 @@ async function executeReclaim(
       currentAmount: newAmount,
       reclaimedMilestones: newReclaimedMilestones,
     }).where(eq(holdings.id, holding.id));
+    
+    // Resolve position score snapshots for learning (profitable partial exit)
+    const currentPrice = (holding.buyPrice || 0) * reclaimMultiplier;
+    try {
+      await resolvePositionScoreSnapshots(holding.id, currentPrice, "profit_exit");
+    } catch (e) {
+      console.error(`Failed to resolve position snapshots:`, e);
+    }
 
     console.log(`Reclaim successful for ${holding.tokenSymbol}:`);
     console.log(`  Signature: ${result.signature}`);
@@ -829,6 +850,13 @@ async function executeProgressiveReclaim(
       currentAmount: newAmount,
       reclaimedMilestones: newReclaimedMilestones,
     }).where(eq(holdings.id, holding.id));
+    
+    // Resolve position score snapshots for learning (profitable exit)
+    try {
+      await resolvePositionScoreSnapshots(holding.id, currentPrice, "profit_exit");
+    } catch (e) {
+      console.error(`Failed to resolve position snapshots:`, e);
+    }
 
     console.log(`Progressive reclaim successful for ${holding.tokenSymbol}:`);
     console.log(`  Milestone: ${milestone}x`);
@@ -911,6 +939,13 @@ async function executeStopLoss(
       stopLossTimestamp: now,
       stopLossSignature: result.signature,
     }).where(eq(holdings.id, holding.id));
+    
+    // Resolve position score snapshots for learning (position closed at loss)
+    try {
+      await resolvePositionScoreSnapshots(holding.id, currentPrice, "loss_exit");
+    } catch (e) {
+      console.error(`Failed to resolve position snapshots:`, e);
+    }
 
     console.log(`Stop-loss executed for ${holding.tokenSymbol}:`);
     console.log(`  Loss: ${lossPercent.toFixed(1)}%`);
@@ -990,6 +1025,17 @@ export async function executeAutoMirrorSell(
       lastSellTimestamp: now,
       lastSellSignature: result.signature,
     }).where(eq(holdings.id, holding.id));
+    
+    // Resolve position score snapshots for learning (signal wallet exited)
+    // Calculate actual exit price from trade proceeds
+    const exitPrice = (result.inputAmount && tokensToSell > 0) ? (result.inputAmount / tokensToSell) : 0;
+    const entryPrice = holding.avgEntryPrice || holding.buyPrice || 0;
+    const outcomeType = (entryPrice > 0 && exitPrice >= entryPrice) ? "profit_exit" : "loss_exit";
+    try {
+      await resolvePositionScoreSnapshots(holding.id, exitPrice, outcomeType as "profit_exit" | "loss_exit");
+    } catch (e) {
+      console.error(`Failed to resolve position snapshots:`, e);
+    }
 
     console.log(`Auto-mirror sell successful for ${holding.tokenSymbol}:`);
     console.log(`  Reason: ${reason}`);
@@ -1332,6 +1378,25 @@ async function sendDumpAlert(
   }
 }
 
+let factorDiscoveryInterval: ReturnType<typeof setInterval> | null = null;
+
+// Run factor discovery periodically to find new correlations
+async function runFactorDiscovery(): Promise<void> {
+  try {
+    const suggestions = await discoverNewFactors();
+    
+    // Save any new factors that meet the threshold
+    for (const suggestion of suggestions) {
+      if (suggestion.correlationStrength > 0.3 && suggestion.sampleSize >= 20) {
+        await saveDiscoveredFactor(suggestion);
+        console.log(`[FactorDiscovery] Saved new ${suggestion.factorType} factor: ${suggestion.factorName}`);
+      }
+    }
+  } catch (error) {
+    console.error("[FactorDiscovery] Error running discovery:", error);
+  }
+}
+
 export function startPriceMonitor(): void {
   if (priceMonitorInterval) {
     return;
@@ -1343,6 +1408,12 @@ export function startPriceMonitor(): void {
   
   // Start the aggregation job (runs every 60 seconds)
   startAggregationJob(60000);
+  
+  // Start factor discovery (runs every 6 hours)
+  const FACTOR_DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+  factorDiscoveryInterval = setInterval(runFactorDiscovery, FACTOR_DISCOVERY_INTERVAL_MS);
+  // Run initial discovery after 5 minutes
+  setTimeout(runFactorDiscovery, 5 * 60 * 1000);
 }
 
 export function stopPriceMonitor(): void {
@@ -1350,6 +1421,11 @@ export function stopPriceMonitor(): void {
     clearInterval(priceMonitorInterval);
     priceMonitorInterval = null;
     console.log("Price monitor stopped");
+  }
+  
+  if (factorDiscoveryInterval) {
+    clearInterval(factorDiscoveryInterval);
+    factorDiscoveryInterval = null;
   }
   
   // Stop the aggregation job
