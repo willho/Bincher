@@ -1571,6 +1571,21 @@ export async function registerRoutes(
         currentAmount: newAmount,
       }).where(eq(holdings.id, holdingId));
       
+      if (sellPercentage === 100 && holding.sourceWalletAddress && holding.buyPrice > 0) {
+        try {
+          const { updateSignalWalletProfile } = await import("./signal-wallet-profiler");
+          const currentPrice = result.inputAmount ? (result.inputAmount / tokensToSell) : 0;
+          if (currentPrice > 0) {
+            const multiplier = currentPrice / holding.buyPrice;
+            const holdTimeMinutes = Math.floor((Date.now() / 1000 - holding.buyTimestamp) / 60);
+            await updateSignalWalletProfile(holding.sourceWalletAddress, multiplier, holdTimeMinutes);
+            console.log(`Updated signal wallet profile for manual sell: ${holding.sourceWalletAddress} - ${multiplier.toFixed(2)}x`);
+          }
+        } catch (error) {
+          console.error("Failed to update signal wallet profile:", error);
+        }
+      }
+      
       res.json({ 
         success: true, 
         signature: result.signature,

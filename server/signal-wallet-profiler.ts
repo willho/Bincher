@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { signalWalletProfiles, tokenSnapshots, holdings } from "@shared/schema";
+import { signalWalletProfiles, holdings } from "@shared/schema";
 import { eq, and, gte, isNotNull, desc } from "drizzle-orm";
 
 export type TradingStyle = "insider" | "degen" | "quality" | "whale" | "unknown";
@@ -142,32 +142,44 @@ export async function updateSignalWalletProfile(
 async function updateRecentPerformance(walletAddress: string): Promise<void> {
   const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
   
-  const recentSnapshots = await db.select({
-    finalMultiplier: tokenSnapshots.finalMultiplier,
+  const recentHoldings = await db.select({
+    highestMultiplier: holdings.highestMultiplier,
+    reclaimed: holdings.reclaimed,
+    reclaimTimestamp: holdings.reclaimTimestamp,
+    buyPrice: holdings.buyPrice,
+    lastPrice: holdings.lastPrice,
   })
-    .from(tokenSnapshots)
-    .innerJoin(holdings, eq(holdings.tokenMint, tokenSnapshots.tokenMint))
+    .from(holdings)
     .where(
       and(
         eq(holdings.sourceWalletAddress, walletAddress),
-        isNotNull(tokenSnapshots.finalMultiplier),
-        gte(tokenSnapshots.outcomeUpdatedAt, thirtyDaysAgo)
+        gte(holdings.buyTimestamp, thirtyDaysAgo)
       )
     )
     .limit(50);
   
-  if (recentSnapshots.length === 0) return;
+  if (recentHoldings.length === 0) return;
   
   let wins = 0;
   let totalMultiplier = 0;
+  let countedTrades = 0;
   
-  for (const snap of recentSnapshots) {
-    if (snap.finalMultiplier && snap.finalMultiplier >= 1) wins++;
-    totalMultiplier += snap.finalMultiplier ?? 0;
+  for (const holding of recentHoldings) {
+    const multiplier = holding.reclaimed 
+      ? (holding.highestMultiplier ?? 1)
+      : (holding.lastPrice && holding.buyPrice ? holding.lastPrice / holding.buyPrice : null);
+    
+    if (multiplier !== null) {
+      if (multiplier >= 1) wins++;
+      totalMultiplier += multiplier;
+      countedTrades++;
+    }
   }
   
-  const recentWinRate = wins / recentSnapshots.length;
-  const recentAvgMultiplier = totalMultiplier / recentSnapshots.length;
+  if (countedTrades === 0) return;
+  
+  const recentWinRate = wins / countedTrades;
+  const recentAvgMultiplier = totalMultiplier / countedTrades;
   
   await db.update(signalWalletProfiles)
     .set({

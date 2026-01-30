@@ -25,6 +25,9 @@ interface PendingTrade {
   proposedAt: number;
   expiresAt: number;
   userConfirmed: boolean; // Server-side: must be true before execution
+  sourceWalletAddress?: string | null; // For signal wallet profile tracking on sells
+  buyPrice?: number; // For calculating multiplier on sells
+  buyTimestamp?: number; // For calculating hold time on sells
 }
 const pendingTrades: Map<number, PendingTrade> = new Map();
 const PENDING_TRADE_TTL = 3 * 60 * 1000; // 3 minutes to confirm
@@ -1232,6 +1235,9 @@ async function executeProposeSell(
     proposedAt: Date.now(),
     expiresAt: Date.now() + PENDING_TRADE_TTL,
     userConfirmed: false,
+    sourceWalletAddress: holding.sourceWalletAddress,
+    buyPrice: holding.buyPrice,
+    buyTimestamp: holding.buyTimestamp,
   });
   
   return {
@@ -1273,6 +1279,22 @@ async function executeConfirmedTrade(userId: number): Promise<{ success: boolean
   } else {
     const result = await sellToken(userId, pending.tokenMint, pending.amount);
     if (result.success) {
+      if (pending.sourceWalletAddress && pending.buyPrice && pending.buyPrice > 0) {
+        try {
+          const { updateSignalWalletProfile } = await import("./signal-wallet-profiler");
+          const currentPrice = result.inputAmount ? (result.inputAmount / pending.amount) : 0;
+          if (currentPrice > 0) {
+            const multiplier = currentPrice / pending.buyPrice;
+            const holdTimeMinutes = pending.buyTimestamp 
+              ? Math.floor((Date.now() / 1000 - pending.buyTimestamp) / 60) 
+              : 60;
+            await updateSignalWalletProfile(pending.sourceWalletAddress, multiplier, holdTimeMinutes);
+            console.log(`Updated signal wallet profile for AI sell: ${pending.sourceWalletAddress} - ${multiplier.toFixed(2)}x`);
+          }
+        } catch (error) {
+          console.error("Failed to update signal wallet profile:", error);
+        }
+      }
       return {
         success: true,
         message: `SELL EXECUTED: Sold ${pending.tokenSymbol}. Signature: ${result.signature?.slice(0, 20)}...`
