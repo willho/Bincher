@@ -3369,6 +3369,59 @@ export async function registerRoutes(
     }
   });
 
+  // === SWING TRADING ROUTES ===
+  
+  // Get swing trading settings
+  app.get("/api/swing/settings", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getUserSwingSettings } = await import("./swing-trading");
+      const settings = await getUserSwingSettings(req.userId!);
+      res.json({ settings });
+    } catch (error) {
+      console.error("Error getting swing settings:", error);
+      res.status(500).json({ error: "Failed to get swing settings" });
+    }
+  });
+  
+  // Update swing trading settings
+  app.post("/api/swing/settings", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { updateSwingSettings } = await import("./swing-trading");
+      const settings = await updateSwingSettings(req.userId!, req.body);
+      res.json({ settings });
+    } catch (error) {
+      console.error("Error updating swing settings:", error);
+      res.status(500).json({ error: "Failed to update swing settings" });
+    }
+  });
+  
+  // Analyze a specific token for swing trading opportunities
+  app.get("/api/swing/analyze/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { analyzeTokenForSwing } = await import("./swing-trading");
+      const { getTokenPrice } = await import("./jupiter");
+      const tokenMint = req.params.tokenMint;
+      const currentPrice = await getTokenPrice(tokenMint) || 0;
+      const analysis = await analyzeTokenForSwing(tokenMint, currentPrice);
+      res.json({ analysis });
+    } catch (error) {
+      console.error("Error analyzing token:", error);
+      res.status(500).json({ error: "Failed to analyze token" });
+    }
+  });
+  
+  // Get swing trading opportunities across user's holdings
+  app.get("/api/swing/opportunities", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getSwingOpportunities } = await import("./swing-trading");
+      const result = await getSwingOpportunities(req.userId!);
+      res.json(result);
+    } catch (error) {
+      console.error("Error getting swing opportunities:", error);
+      res.status(500).json({ error: "Failed to get swing opportunities" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
   
