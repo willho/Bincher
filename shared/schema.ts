@@ -26,12 +26,23 @@ export const users = pgTable("users", {
   isAdmin: boolean("is_admin").default(false),
   createdAt: integer("created_at").notNull(),
   lastLoginAt: integer("last_login_at"),
-  // Default cashout wallet for withdrawals
+  // Recovery email for password resets
+  recoveryEmail: text("recovery_email"),
+  // User's Helius API key (free tier available)
+  heliusApiKey: text("helius_api_key"),
+  // Default cashout wallet for emergency fund recovery
   defaultCashoutWallet: text("default_cashout_wallet"),
   // Telegram integration
   telegramChatId: text("telegram_chat_id"),
   telegramLinkToken: text("telegram_link_token"),
   telegramLinkedAt: integer("telegram_linked_at"),
+  // Email notification settings (user provides own keys)
+  emailProvider: text("email_provider"), // "resend" | "sendgrid" | "mailgun" | "smtp"
+  emailApiKey: text("email_api_key"),
+  emailFromAddress: text("email_from_address"),
+  smtpConfig: jsonb("smtp_config"), // { host, port, user, pass } for SMTP provider
+  // Onboarding state
+  onboardingCompleted: boolean("onboarding_completed").default(false),
 });
 
 // Monitored wallets - multiple wallet addresses per user

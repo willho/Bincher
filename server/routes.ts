@@ -275,7 +275,7 @@ export async function registerRoutes(
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      const { username, password, heliusApiKey, cashoutWallet, adminCodeword } = req.body;
+      const { username, password, recoveryEmail, heliusApiKey, cashoutWallet, adminCodeword } = req.body;
       
       if (!username || !password) {
         return res.status(400).json({ error: "Username and password required" });
@@ -310,7 +310,11 @@ export async function registerRoutes(
         grantAdmin = true;
       }
 
-      const result = await createUser(username, password, cashoutWallet, grantAdmin);
+      const result = await createUser(username, password, {
+        defaultCashoutWallet: cashoutWallet,
+        recoveryEmail,
+        isAdmin: grantAdmin
+      });
       if (!result.success) {
         return res.status(400).json({ error: result.error });
       }
@@ -1025,6 +1029,38 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error updating settings:", error);
       res.status(500).json({ error: "Failed to update settings" });
+    }
+  });
+
+  // Update email provider settings for alerts
+  app.post("/api/settings/email-provider", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { emailProvider, emailApiKey, emailFromAddress, smtpConfig } = req.body;
+      
+      if (emailProvider && !["resend", "sendgrid", "mailgun", "smtp"].includes(emailProvider)) {
+        return res.status(400).json({ error: "Invalid email provider" });
+      }
+      
+      if (emailProvider === "smtp" && smtpConfig) {
+        if (!smtpConfig.host || !smtpConfig.port) {
+          return res.status(400).json({ error: "SMTP requires host and port" });
+        }
+      }
+      
+      const [updated] = await db.update(users)
+        .set({
+          emailProvider: emailProvider || null,
+          emailApiKey: emailApiKey || null,
+          emailFromAddress: emailFromAddress || null,
+          smtpConfig: smtpConfig || null
+        })
+        .where(eq(users.id, req.userId!))
+        .returning();
+      
+      res.json({ success: true, emailProvider: updated.emailProvider });
+    } catch (error) {
+      console.error("Error updating email provider:", error);
+      res.status(500).json({ error: "Failed to update email provider" });
     }
   });
 

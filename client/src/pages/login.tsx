@@ -8,7 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Lock, User, Mail, ArrowLeft, Key, Wallet, Shield, CheckCircle, Settings, Sparkles, AlertCircle, XCircle, Database, Bot, Send, Cpu } from "lucide-react";
+import { Loader2, Lock, User, Mail, ArrowLeft, Key, Wallet, Shield, CheckCircle, Settings, Sparkles, AlertCircle, XCircle, Database, Bot, Send, Cpu, Bell } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 
 interface LoginProps {
   onLoginSuccess: () => void;
@@ -19,6 +20,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [recoveryEmail, setRecoveryEmail] = useState("");
   const [heliusApiKey, setHeliusApiKey] = useState("");
   const [cashoutWallet, setCashoutWallet] = useState("");
   const [adminCodeword, setAdminCodeword] = useState("");
@@ -39,6 +41,16 @@ export default function Login({ onLoginSuccess }: LoginProps) {
   const [healthCheckLoading, setHealthCheckLoading] = useState(false);
   const [healthCheckError, setHealthCheckError] = useState(false);
   const [selectedNetwork, setSelectedNetwork] = useState<"mainnet" | "devnet">("devnet");
+  // Alert preferences for wizard step 2
+  const [alertMethod, setAlertMethod] = useState<"telegram" | "email" | "skip">("telegram");
+  const [telegramLinkToken, setTelegramLinkToken] = useState("");
+  const [emailProvider, setEmailProvider] = useState<"resend" | "sendgrid" | "mailgun" | "smtp">("resend");
+  const [emailApiKey, setEmailApiKey] = useState("");
+  const [emailFromAddress, setEmailFromAddress] = useState("");
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState("587");
+  const [smtpUser, setSmtpUser] = useState("");
+  const [smtpPass, setSmtpPass] = useState("");
 
   const { data: needsSetup, isLoading: checkingSetup } = useQuery<{ needsSetup: boolean }>({
     queryKey: ["/api/auth/check-setup"],
@@ -70,6 +82,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
     mutationFn: () => apiRequest("POST", "/api/auth/register", { 
       username, 
       password, 
+      recoveryEmail: recoveryEmail || undefined,
       heliusApiKey,
       cashoutWallet: cashoutWallet || undefined,
       adminCodeword: needsSetup?.needsSetup ? adminCodeword : undefined
@@ -191,6 +204,27 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                     data-testid="input-confirm-password"
                   />
                 </div>
+              </div>
+            )}
+
+            {isSetup && (
+              <div className="space-y-2">
+                <Label htmlFor="recovery-email">Recovery Email (Optional)</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="recovery-email"
+                    type="email"
+                    placeholder="your@email.com"
+                    value={recoveryEmail}
+                    onChange={(e) => setRecoveryEmail(e.target.value)}
+                    className="pl-10"
+                    data-testid="input-recovery-email"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  For password recovery and important alerts
+                </p>
               </div>
             )}
 
@@ -418,7 +452,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               Welcome, Admin!
             </DialogTitle>
             <DialogDescription>
-              {wizardStep === 0 ? "Choose your network environment to get started." : "System checks complete. Here's your setup status."}
+              {wizardStep === 0 ? "Choose your network environment to get started." : wizardStep === 1 ? "System checks complete. Here's your setup status." : "Set up notifications to stay informed."}
             </DialogDescription>
           </DialogHeader>
           
@@ -695,12 +729,9 @@ export default function Login({ onLoginSuccess }: LoginProps) {
 
                 <Button 
                   className="w-full" 
-                  onClick={() => {
-                    setShowWizard(false);
-                    login.mutate();
-                  }}
+                  onClick={() => setWizardStep(2)}
                   disabled={healthCheckLoading}
-                  data-testid="button-wizard-done"
+                  data-testid="button-continue-alerts"
                 >
                   {healthCheckLoading ? (
                     <>
@@ -708,8 +739,229 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                       Checking...
                     </>
                   ) : (
-                    "Got it, let's go!"
+                    "Continue to Alerts Setup"
                   )}
+                </Button>
+              </div>
+            )}
+
+            {wizardStep === 2 && (
+              <div className="space-y-4">
+                <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/50">
+                  <Bell className="h-5 w-5 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium">Stay Connected</p>
+                    <p className="text-sm text-muted-foreground">
+                      Get instant alerts when signal wallets swap, price targets hit, or when Penny has insights
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setAlertMethod("telegram")}
+                    className={`w-full p-4 rounded-lg border-2 text-left transition-all ${
+                      alertMethod === "telegram"
+                        ? "border-primary bg-primary/10"
+                        : "border-muted hover-elevate"
+                    }`}
+                    data-testid="button-select-telegram"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Bot className="h-5 w-5 text-primary" />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Telegram</span>
+                          <Badge variant="secondary" className="text-xs">Recommended</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Instant push notifications + chat with Miss Pincher directly
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAlertMethod("email")}
+                    className={`w-full p-4 rounded-lg border-2 text-left transition-all ${
+                      alertMethod === "email"
+                        ? "border-primary bg-primary/10"
+                        : "border-muted hover-elevate"
+                    }`}
+                    data-testid="button-select-email"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Mail className="h-5 w-5 text-muted-foreground" />
+                      <div className="flex-1">
+                        <span className="font-medium">Email</span>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Provide your own email API key (Resend, SendGrid, Mailgun, or SMTP)
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAlertMethod("skip")}
+                    className={`w-full p-3 rounded-lg border-2 text-left transition-all ${
+                      alertMethod === "skip"
+                        ? "border-muted-foreground/50 bg-muted/30"
+                        : "border-muted hover-elevate"
+                    }`}
+                    data-testid="button-select-skip-alerts"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <span className="text-sm text-muted-foreground">Skip for now</span>
+                        <p className="text-xs text-muted-foreground">You can set this up later in Settings</p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+
+                {alertMethod === "telegram" && (
+                  <div className="p-4 rounded-lg border bg-muted/30 space-y-3">
+                    <p className="text-sm font-medium">Connect to Telegram</p>
+                    <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
+                      <li>Open Telegram and search for <strong>@PennyPincherBot</strong></li>
+                      <li>Send the command <code className="bg-muted px-1 rounded">/start</code></li>
+                      <li>You'll receive a verification code - enter it in Settings after login</li>
+                    </ol>
+                    <div className="flex items-start gap-2 p-2 rounded bg-primary/10 text-xs">
+                      <AlertCircle className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                      <p>You'll complete the connection after signing in. The bot will send you a unique link.</p>
+                    </div>
+                  </div>
+                )}
+
+                {alertMethod === "email" && (
+                  <div className="p-4 rounded-lg border bg-muted/30 space-y-3">
+                    <div className="space-y-2">
+                      <Label className="text-sm">Email Provider</Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {(["resend", "sendgrid", "mailgun", "smtp"] as const).map((provider) => (
+                          <button
+                            key={provider}
+                            type="button"
+                            onClick={() => setEmailProvider(provider)}
+                            className={`p-2 rounded border text-sm capitalize ${
+                              emailProvider === provider
+                                ? "border-primary bg-primary/10"
+                                : "border-muted hover-elevate"
+                            }`}
+                          >
+                            {provider === "smtp" ? "SMTP (Custom)" : provider}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {emailProvider !== "smtp" && (
+                      <div className="space-y-2">
+                        <Label htmlFor="email-api-key" className="text-sm">API Key</Label>
+                        <Input
+                          id="email-api-key"
+                          type="password"
+                          placeholder={`Your ${emailProvider} API key`}
+                          value={emailApiKey}
+                          onChange={(e) => setEmailApiKey(e.target.value)}
+                          data-testid="input-email-api-key"
+                        />
+                      </div>
+                    )}
+
+                    {emailProvider === "smtp" && (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label htmlFor="smtp-host" className="text-xs">SMTP Host</Label>
+                            <Input
+                              id="smtp-host"
+                              placeholder="smtp.example.com"
+                              value={smtpHost}
+                              onChange={(e) => setSmtpHost(e.target.value)}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="smtp-port" className="text-xs">Port</Label>
+                            <Input
+                              id="smtp-port"
+                              placeholder="587"
+                              value={smtpPort}
+                              onChange={(e) => setSmtpPort(e.target.value)}
+                              className="h-8 text-sm"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label htmlFor="smtp-user" className="text-xs">Username</Label>
+                          <Input
+                            id="smtp-user"
+                            placeholder="username"
+                            value={smtpUser}
+                            onChange={(e) => setSmtpUser(e.target.value)}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor="smtp-pass" className="text-xs">Password</Label>
+                          <Input
+                            id="smtp-pass"
+                            type="password"
+                            placeholder="password"
+                            value={smtpPass}
+                            onChange={(e) => setSmtpPass(e.target.value)}
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label htmlFor="email-from" className="text-sm">From Address</Label>
+                      <Input
+                        id="email-from"
+                        type="email"
+                        placeholder="alerts@yourdomain.com"
+                        value={emailFromAddress}
+                        onChange={(e) => setEmailFromAddress(e.target.value)}
+                        data-testid="input-email-from"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <Button 
+                  className="w-full" 
+                  onClick={async () => {
+                    // Save alert preferences if email is selected
+                    if (alertMethod === "email" && emailApiKey) {
+                      try {
+                        await apiRequest("POST", "/api/settings/email-provider", {
+                          emailProvider,
+                          emailApiKey,
+                          emailFromAddress,
+                          smtpConfig: emailProvider === "smtp" ? {
+                            host: smtpHost,
+                            port: parseInt(smtpPort) || 587,
+                            user: smtpUser,
+                            pass: smtpPass
+                          } : undefined
+                        });
+                      } catch (e) {
+                        console.error("Failed to save email settings:", e);
+                      }
+                    }
+                    setShowWizard(false);
+                    login.mutate();
+                  }}
+                  data-testid="button-wizard-done"
+                >
+                  {alertMethod === "skip" ? "Skip & Enter App" : "Save & Enter App"}
                 </Button>
               </div>
             )}
