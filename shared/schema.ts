@@ -220,6 +220,12 @@ export const holdings = pgTable("holdings", {
   }>(), // Breakdown of score factors
   signalWalletSold: boolean("signal_wallet_sold").default(false), // True if signal wallet has exited
   signalWalletSoldAt: integer("signal_wallet_sold_at"), // Unix timestamp when signal wallet sold
+  
+  // Position status (active/pending/inactive for filtering and swing trading)
+  positionStatus: text("position_status").default("active"), // "active" (holding), "pending" (buy order), "inactive" (sold/watching)
+  
+  // Autonomy controls - per-position AI trading permissions
+  autonomyEnabled: boolean("autonomy_enabled").default(false), // Allow AI to manage this position
 });
 
 // Pending buys - tokens queued for purchase with delay
@@ -337,6 +343,75 @@ export const autonomousSettings = pgTable("autonomous_settings", {
   // User acknowledgment
   warningAcknowledged: boolean("warning_acknowledged").default(false),
   acknowledgedAt: integer("acknowledged_at"),
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+// Trade rules - flexible buy/sell triggers with configurable parameters
+// Can be applied at hot wallet (default), signal wallet, or position level
+export const tradeRules = pgTable("trade_rules", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  
+  // Rule scope: where this rule applies
+  scope: text("scope").notNull().default("hotWallet"), // "hotWallet" | "signalWallet" | "position" | "token"
+  scopeId: integer("scope_id"), // signalWalletId, holdingId, or null for hotWallet
+  tokenMint: text("token_mint"), // For token-specific rules
+  
+  // Rule name and status
+  name: text("name").notNull(),
+  enabled: boolean("enabled").default(true),
+  
+  // Action type
+  action: text("action").notNull(), // "buy" | "sell"
+  
+  // Trigger conditions
+  direction: text("direction").notNull(), // "up" | "down" - price direction
+  percentChange: real("percent_change").notNull(), // Trigger at this % change
+  timeframeMinutes: integer("timeframe_minutes"), // Within this time window (null = any)
+  
+  // Execution parameters
+  amountType: text("amount_type").notNull().default("percent"), // "percent" | "fixed"
+  amountValue: real("amount_value").notNull(), // % of position or fixed USD
+  maxAmountUsd: real("max_amount_usd"), // Cap for fixed amounts
+  
+  // Execution count limits
+  maxTriggerCount: integer("max_trigger_count"), // How many times this can fire (null = unlimited)
+  triggerCount: integer("trigger_count").default(0), // How many times it has fired
+  cooldownMinutes: integer("cooldown_minutes").default(15), // Min time between triggers
+  lastTriggeredAt: integer("last_triggered_at"),
+  
+  // Additional filters
+  requireAutonomy: boolean("require_autonomy").default(true), // Only execute if position has autonomy enabled
+  minPositionValueUsd: real("min_position_value_usd"), // Only for positions above this value
+  maxPositionValueUsd: real("max_position_value_usd"), // Only for positions below this value
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+// Trade rule presets - saved parameter sets for quick application
+export const tradeRulePresets = pgTable("trade_rule_presets", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  
+  name: text("name").notNull(), // User-defined preset name
+  description: text("description"),
+  isDefault: boolean("is_default").default(false), // Apply to new positions automatically
+  
+  // Stored rules as JSON array
+  rules: jsonb("rules").$type<{
+    name: string;
+    action: "buy" | "sell";
+    direction: "up" | "down";
+    percentChange: number;
+    timeframeMinutes: number | null;
+    amountType: "percent" | "fixed";
+    amountValue: number;
+    maxAmountUsd?: number;
+    cooldownMinutes: number;
+  }[]>().notNull(),
   
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
@@ -559,6 +634,14 @@ export const insertCommunityInsightSchema = createInsertSchema(communityInsights
 export const insertSignalWalletProfileSchema = createInsertSchema(signalWalletProfiles).omit({ id: true });
 export const insertAutonomousSettingsSchema = createInsertSchema(autonomousSettings).omit({ id: true });
 export const insertSwingTradeSettingsSchema = createInsertSchema(swingTradeSettings).omit({ id: true });
+export const insertTradeRuleSchema = createInsertSchema(tradeRules).omit({ id: true });
+export const insertTradeRulePresetSchema = createInsertSchema(tradeRulePresets).omit({ id: true });
+
+// Trade rule types
+export type TradeRule = typeof tradeRules.$inferSelect;
+export type InsertTradeRule = z.infer<typeof insertTradeRuleSchema>;
+export type TradeRulePreset = typeof tradeRulePresets.$inferSelect;
+export type InsertTradeRulePreset = z.infer<typeof insertTradeRulePresetSchema>;
 
 // Price aggregate types
 export type PriceAggregate = typeof priceAggregates.$inferSelect;
