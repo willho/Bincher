@@ -89,6 +89,15 @@ export async function executePendingBuy(
   triggerReason: string
 ): Promise<boolean> {
   try {
+    // Check autonomous mode stop conditions before executing
+    const { canExecuteTrade } = await import("./autonomous-mode");
+    const tradeCheck = await canExecuteTrade(userId);
+    if (!tradeCheck.allowed) {
+      console.log(`[Autonomous] Trade blocked for user ${userId}: ${tradeCheck.reason}`);
+      await cancelPendingBuy(pendingId, `autonomous_blocked: ${tradeCheck.reason}`);
+      return false;
+    }
+    
     // Atomic lock: only update if not already processing/triggered/cancelled
     const updateResult = await db.update(pendingBuys)
       .set({ triggerReason: `processing:${triggerReason}` })

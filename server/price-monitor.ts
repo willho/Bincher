@@ -810,6 +810,20 @@ async function executeReclaim(
     console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
 
     await sendReclaimNotification(userId, holding, tokensToSell, result.inputAmount || 0, reclaimMultiplier, result.signature, "initial");
+    
+    // Record trade result for autonomous mode (proportional cost basis)
+    const { getSolPriceUsd } = await import("./jupiter");
+    const solPrice = await getSolPriceUsd();
+    const percentSold = tokensToSell / (holding.currentAmount || tokensToSell);
+    const proportionalCostSol = (holding.solSpent || 0) * percentSold;
+    const profitSol = (result.inputAmount || 0) - proportionalCostSol;
+    const profitUsd = profitSol * solPrice;
+    try {
+      const { recordTradeResult } = await import("./autonomous-mode");
+      await recordTradeResult(userId, profitUsd);
+    } catch (e) {
+      console.error(`Failed to record trade result:`, e);
+    }
 
   } catch (error) {
     console.error(`Error executing reclaim for ${holding.tokenSymbol}:`, error);
@@ -908,6 +922,20 @@ async function executeProgressiveReclaim(
     console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
 
     await sendReclaimNotification(userId, holding, tokensToSell, result.inputAmount || 0, milestone, result.signature, "progressive");
+    
+    // Record trade result for autonomous mode (proportional cost basis for partial sell)
+    const { getSolPriceUsd } = await import("./jupiter");
+    const solPrice = await getSolPriceUsd();
+    const percentSold = sellPercent / 100;
+    const proportionalCostSol = (holding.solSpent || 0) * percentSold;
+    const profitSol = (result.inputAmount || 0) - proportionalCostSol;
+    const profitUsd = profitSol * solPrice;
+    try {
+      const { recordTradeResult } = await import("./autonomous-mode");
+      await recordTradeResult(userId, profitUsd);
+    } catch (e) {
+      console.error(`Failed to record progressive reclaim trade result:`, e);
+    }
 
   } catch (error) {
     console.error(`Error executing progressive reclaim for ${holding.tokenSymbol}:`, error);
@@ -996,6 +1024,18 @@ async function executeStopLoss(
     console.log(`  SOL recovered: ~${result.inputAmount} SOL`);
 
     await sendStopLossNotification(userId, holding, tokensToSell, result.inputAmount || 0, lossPercent, result.signature);
+    
+    // Record trade result for autonomous mode tracking (stop-loss = loss)
+    const { getSolPriceUsd } = await import("./jupiter");
+    const solPrice = await getSolPriceUsd();
+    const lossSol = (result.inputAmount || 0) - (holding.solSpent || 0); // Will be negative
+    const lossUsd = lossSol * solPrice;
+    try {
+      const { recordTradeResult } = await import("./autonomous-mode");
+      await recordTradeResult(userId, lossUsd);
+    } catch (e) {
+      console.error(`Failed to record stop-loss trade result:`, e);
+    }
 
   } catch (error) {
     console.error(`Error executing stop-loss for ${holding.tokenSymbol}:`, error);
@@ -1088,6 +1128,20 @@ export async function executeAutoMirrorSell(
 
     // Send notification
     await sendAutoMirrorSellNotification(userId, holding, tokensToSell, result.inputAmount || 0, sellPercent, result.signature, reason);
+    
+    // Record trade result for autonomous mode (proportional cost basis)
+    const { getSolPriceUsd } = await import("./jupiter");
+    const solPrice = await getSolPriceUsd();
+    const percentSold = sellPercent / 100;
+    const proportionalCostSol = (holding.solSpent || 0) * percentSold;
+    const profitSol = (result.inputAmount || 0) - proportionalCostSol;
+    const profitUsd = profitSol * solPrice;
+    try {
+      const { recordTradeResult } = await import("./autonomous-mode");
+      await recordTradeResult(userId, profitUsd);
+    } catch (e) {
+      console.error(`Failed to record auto-mirror sell trade result:`, e);
+    }
 
   } catch (error) {
     console.error(`Error executing auto-mirror sell for ${holding.tokenSymbol}:`, error);

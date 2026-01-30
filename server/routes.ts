@@ -1905,6 +1905,20 @@ export async function registerRoutes(
         }
       }
       
+      // Record trade result for autonomous mode (proportional cost basis)
+      try {
+        const { getSolPriceUsd } = await import("./jupiter");
+        const { recordTradeResult } = await import("./autonomous-mode");
+        const solPrice = await getSolPriceUsd();
+        const percentSold = sellPercentage / 100;
+        const proportionalCostSol = (holding.solSpent || 0) * percentSold;
+        const profitSol = (result.inputAmount || 0) - proportionalCostSol;
+        const profitUsd = profitSol * solPrice;
+        await recordTradeResult(req.userId!, profitUsd);
+      } catch (e) {
+        console.error("Failed to record manual sell trade result:", e);
+      }
+      
       res.json({ 
         success: true, 
         signature: result.signature,
@@ -2047,6 +2061,14 @@ export async function registerRoutes(
       } else if (action === "auto" && manualPositions.length === 1) {
         targetPosition = manualPositions[0];
         isTopUp = true;
+      }
+      
+      // Check autonomous mode stop conditions before executing buy
+      const { canExecuteTrade } = await import("./autonomous-mode");
+      const tradeCheck = await canExecuteTrade(req.userId!);
+      if (!tradeCheck.allowed) {
+        console.log(`[Autonomous] Manual buy blocked: ${tradeCheck.reason}`);
+        return res.status(400).json({ error: `Trade blocked by autonomous mode: ${tradeCheck.reason}` });
       }
       
       // Check hot wallet balance
@@ -3224,6 +3246,126 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting whale history:", error);
       res.status(500).json({ error: "Failed to get whale history" });
+    }
+  });
+
+  // Autonomous Mode - get available risk profiles
+  app.get("/api/autonomous/profiles", requireAuth, async (_req: AuthenticatedRequest, res) => {
+    try {
+      const { getRiskProfiles } = await import("./autonomous-mode");
+      const profiles = getRiskProfiles();
+      res.json(profiles);
+    } catch (error) {
+      console.error("Error getting risk profiles:", error);
+      res.status(500).json({ error: "Failed to get risk profiles" });
+    }
+  });
+
+  // Autonomous Mode - get user settings
+  app.get("/api/autonomous/settings", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getAutonomousSettings } = await import("./autonomous-mode");
+      const settings = await getAutonomousSettings(req.userId!);
+      res.json(settings || { enabled: false, needsSetup: true });
+    } catch (error) {
+      console.error("Error getting autonomous settings:", error);
+      res.status(500).json({ error: "Failed to get autonomous settings" });
+    }
+  });
+
+  // Autonomous Mode - create or update settings
+  app.post("/api/autonomous/settings", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getAutonomousSettings, createAutonomousSettings, updateAutonomousSettings } = await import("./autonomous-mode");
+      const existing = await getAutonomousSettings(req.userId!);
+      
+      if (!existing) {
+        const riskProfile = req.body.riskProfile || "balanced";
+        const settings = await createAutonomousSettings(req.userId!, riskProfile);
+        res.json(settings);
+      } else {
+        const settings = await updateAutonomousSettings(req.userId!, req.body);
+        res.json(settings);
+      }
+    } catch (error) {
+      console.error("Error updating autonomous settings:", error);
+      res.status(500).json({ error: "Failed to update autonomous settings" });
+    }
+  });
+
+  // Autonomous Mode - apply risk profile preset
+  app.post("/api/autonomous/apply-profile", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { applyRiskProfile } = await import("./autonomous-mode");
+      const { profile } = req.body;
+      
+      if (!profile) {
+        return res.status(400).json({ error: "Profile name is required" });
+      }
+      
+      const settings = await applyRiskProfile(req.userId!, profile);
+      res.json(settings);
+    } catch (error: any) {
+      console.error("Error applying risk profile:", error);
+      res.status(400).json({ error: error.message || "Failed to apply risk profile" });
+    }
+  });
+
+  // Autonomous Mode - enable
+  app.post("/api/autonomous/enable", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { enableAutonomousMode } = await import("./autonomous-mode");
+      const { acknowledged } = req.body;
+      const settings = await enableAutonomousMode(req.userId!, acknowledged === true);
+      res.json(settings);
+    } catch (error: any) {
+      console.error("Error enabling autonomous mode:", error);
+      res.status(400).json({ error: error.message || "Failed to enable autonomous mode" });
+    }
+  });
+
+  // Autonomous Mode - disable (kill switch)
+  app.post("/api/autonomous/disable", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { disableAutonomousMode } = await import("./autonomous-mode");
+      const { reason } = req.body;
+      const settings = await disableAutonomousMode(req.userId!, reason || "manual_disable");
+      res.json(settings);
+    } catch (error) {
+      console.error("Error disabling autonomous mode:", error);
+      res.status(500).json({ error: "Failed to disable autonomous mode" });
+    }
+  });
+
+  // Autonomous Mode - check stop conditions
+  app.get("/api/autonomous/status", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getAutonomousSettings, checkStopConditions, canExecuteTrade } = await import("./autonomous-mode");
+      const settings = await getAutonomousSettings(req.userId!);
+      
+      if (!settings) {
+        return res.json({ enabled: false, needsSetup: true });
+      }
+      
+      const stopCheck = await checkStopConditions(req.userId!);
+      const tradeCheck = await canExecuteTrade(req.userId!);
+      
+      res.json({
+        enabled: settings.enabled,
+        riskProfile: settings.riskProfile,
+        todayLossUsd: settings.todayLossUsd,
+        todayWinUsd: settings.todayWinUsd,
+        todayTradeCount: settings.todayTradeCount,
+        consecutiveLosses: settings.consecutiveLosses,
+        peakBalanceSol: settings.peakBalanceSol,
+        stoppedReason: settings.stoppedReason,
+        stoppedAt: settings.stoppedAt,
+        stopCondition: stopCheck,
+        canTrade: tradeCheck,
+      });
+    } catch (error) {
+      console.error("Error getting autonomous status:", error);
+      res.status(500).json({ error: "Failed to get autonomous status" });
     }
   });
 
