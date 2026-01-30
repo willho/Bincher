@@ -71,6 +71,7 @@ import {
 } from "./telegram";
 import { isAIAvailable } from "./ai-health";
 import { getNetworkMode, setNetworkMode, getSolanaFaucetUrl, type NetworkMode } from "./network-mode";
+import { markSignalWalletSold, updateScoreOnWhaleActivity } from "./position-score";
 
 let wss: WebSocketServer;
 
@@ -637,6 +638,11 @@ export async function registerRoutes(
           // Trigger holder refresh for this token since we just saw whale activity
           triggerHolderRefresh(tokenForWhaleCheck);
           
+          // Update position scores for this token due to whale activity
+          updateScoreOnWhaleActivity(tokenForWhaleCheck).catch(err => 
+            console.error(`[PositionScore] Error updating scores on whale activity:`, err)
+          );
+          
           // Broadcast whale event to connected clients
           if (wss) {
             const whaleEvent = {
@@ -868,45 +874,59 @@ export async function registerRoutes(
               );
               console.log(`Auto-mirror: Queued top-up buy for ${swap.toTokenSymbol}`);
               
-            } else if (!isBuy && position.autoMirrorSells) {
-              // Auto-mirror SELL: Signal wallet is selling a token we hold from them
-              // Mirror proportionally based on signal wallet's original buy vs current sell
-              console.log(`Auto-mirror SELL detected: ${sourceWallet.label} sold ${swap.fromTokenSymbol}, mirroring for position ${position.id}`);
-              
-              // Get the original swap that triggered our copy trade
-              let signalOriginalBuyAmount: number | null = null;
-              if (position.sourceSwapId) {
-                const [sourceSwap] = await db.select().from(swaps)
-                  .where(eq(swaps.id, position.sourceSwapId))
-                  .limit(1);
-                if (sourceSwap && sourceSwap.toAmount) {
-                  signalOriginalBuyAmount = sourceSwap.toAmount;
-                }
-              }
-              
-              const sellAmountTokens = parseFloat(swap.fromAmount?.toString() || "0");
-              
-              // Calculate sell percentage: what % of their original position did they sell?
-              let sellPercent = 100; // Default to full sell
-              if (signalOriginalBuyAmount && signalOriginalBuyAmount > 0 && sellAmountTokens > 0) {
-                // sellPercent = (tokens they're selling / tokens they originally bought) * 100
-                sellPercent = Math.min(100, Math.max(10, (sellAmountTokens / signalOriginalBuyAmount) * 100));
-                console.log(`Auto-mirror: Signal sold ${sellAmountTokens.toLocaleString()} of ${signalOriginalBuyAmount.toLocaleString()} original tokens (${sellPercent.toFixed(1)}%)`);
-              } else {
-                console.log(`Auto-mirror: No original buy data, defaulting to 100% sell`);
-              }
-              
+            } else if (!isBuy) {
+              // Signal wallet is selling this token - update position scores
+              // Mark this signal wallet as having sold, which affects position scoring
+              const tokenMintForSell = swap.fromTokenMint;
               try {
-                const { executeAutoMirrorSell } = await import("./price-monitor");
-                await executeAutoMirrorSell(
-                  userId,
-                  position,
-                  sellPercent,
-                  `Signal wallet ${sourceWallet.label} sold ${sellPercent.toFixed(0)}%`
-                );
-                console.log(`Auto-mirror: Executed ${sellPercent.toFixed(1)}% sell for ${position.tokenSymbol}`);
+                const markedCount = await markSignalWalletSold(sourceWallet.id, tokenMintForSell);
+                if (markedCount > 0) {
+                  console.log(`[PositionScore] Marked ${markedCount} positions as signal wallet sold for ${swap.fromTokenSymbol}`);
+                }
               } catch (error) {
-                console.error(`Auto-mirror sell failed for ${position.tokenSymbol}:`, error);
+                console.error(`[PositionScore] Error marking signal wallet sold:`, error);
+              }
+              
+              if (position.autoMirrorSells) {
+                // Auto-mirror SELL: Signal wallet is selling a token we hold from them
+                // Mirror proportionally based on signal wallet's original buy vs current sell
+                console.log(`Auto-mirror SELL detected: ${sourceWallet.label} sold ${swap.fromTokenSymbol}, mirroring for position ${position.id}`);
+                
+                // Get the original swap that triggered our copy trade
+                let signalOriginalBuyAmount: number | null = null;
+                if (position.sourceSwapId) {
+                  const [sourceSwap] = await db.select().from(swaps)
+                    .where(eq(swaps.id, position.sourceSwapId))
+                    .limit(1);
+                  if (sourceSwap && sourceSwap.toAmount) {
+                    signalOriginalBuyAmount = sourceSwap.toAmount;
+                  }
+                }
+                
+                const sellAmountTokens = parseFloat(swap.fromAmount?.toString() || "0");
+                
+                // Calculate sell percentage: what % of their original position did they sell?
+                let sellPercent = 100; // Default to full sell
+                if (signalOriginalBuyAmount && signalOriginalBuyAmount > 0 && sellAmountTokens > 0) {
+                  // sellPercent = (tokens they're selling / tokens they originally bought) * 100
+                  sellPercent = Math.min(100, Math.max(10, (sellAmountTokens / signalOriginalBuyAmount) * 100));
+                  console.log(`Auto-mirror: Signal sold ${sellAmountTokens.toLocaleString()} of ${signalOriginalBuyAmount.toLocaleString()} original tokens (${sellPercent.toFixed(1)}%)`);
+                } else {
+                  console.log(`Auto-mirror: No original buy data, defaulting to 100% sell`);
+                }
+                
+                try {
+                  const { executeAutoMirrorSell } = await import("./price-monitor");
+                  await executeAutoMirrorSell(
+                    userId,
+                    position,
+                    sellPercent,
+                    `Signal wallet ${sourceWallet.label} sold ${sellPercent.toFixed(0)}%`
+                  );
+                  console.log(`Auto-mirror: Executed ${sellPercent.toFixed(1)}% sell for ${position.tokenSymbol}`);
+                } catch (error) {
+                  console.error(`Auto-mirror sell failed for ${position.tokenSymbol}:`, error);
+                }
               }
             }
           }

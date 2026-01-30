@@ -19,6 +19,7 @@ import {
   stopAggregationJob,
   triggerHolderRefresh 
 } from "./price-aggregator";
+import { updateScoreOnPriceMove, batchUpdatePositionScores } from "./position-score";
 
 const PRICE_CHECK_INTERVAL_MS = 30000;
 const MIN_CHECK_INTERVAL_PER_TOKEN_MS = 30000;
@@ -136,6 +137,43 @@ export async function checkPricesAndReclaim(): Promise<void> {
       if (priceData.price !== null) {
         recordTick(tokenMint, priceData);
       }
+    }
+    
+    // Update position scores based on price moves
+    const priceMapForScoring = new Map<string, { price: number; volumeChange24h?: number }>();
+    for (const [tokenMint, priceData] of Array.from(batchPrices.entries())) {
+      if (priceData.price !== null) {
+        priceMapForScoring.set(tokenMint, { 
+          price: priceData.price,
+          volumeChange24h: undefined // Volume change would need to be calculated from historical data
+        });
+        
+        // Check for significant price moves and update scores immediately
+        // Use the most recent historical price (last entry) as the previous price
+        const history = priceHistory.get(tokenMint);
+        const previousPrice = history && history.length > 0 ? history[history.length - 1].price : null;
+        if (previousPrice) {
+          updateScoreOnPriceMove(tokenMint, priceData.price, previousPrice).catch(e => 
+            console.error(`[PositionScore] Error updating scores on price move: ${e}`)
+          );
+        }
+        
+        // Update price history after checking for moves
+        updatePriceHistory(tokenMint, priceData.price);
+      }
+    }
+    
+    // Batch update all position scores periodically (covers time decay and other factors)
+    // Only run every 5 minutes to avoid excessive updates
+    const BATCH_SCORE_INTERVAL_MS = 5 * 60 * 1000;
+    const lastBatchScoreTime = (global as any).__lastBatchScoreTime || 0;
+    if (now - lastBatchScoreTime > BATCH_SCORE_INTERVAL_MS && priceMapForScoring.size > 0) {
+      (global as any).__lastBatchScoreTime = now;
+      batchUpdatePositionScores(priceMapForScoring).then(count => {
+        if (count > 0) {
+          console.log(`[PositionScore] Batch updated ${count} position scores`);
+        }
+      }).catch(e => console.error(`[PositionScore] Batch update error: ${e}`));
     }
     
     for (const holding of holdingsToProcess) {

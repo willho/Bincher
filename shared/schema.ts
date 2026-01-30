@@ -203,6 +203,20 @@ export const holdings = pgTable("holdings", {
   signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet that signaled
   signalBuyAmountTokens: real("signal_buy_amount_tokens"), // Original tokens signal wallet bought (for proportional mirroring)
   entryReason: text("entry_reason"), // AI-generated or user note about why position was taken
+  
+  // Position scoring - dynamic score based on multiple factors
+  positionScore: integer("position_score"), // Current score 0-100
+  positionScoreTier: text("position_score_tier"), // "strong" | "neutral" | "weak"
+  scoreLastUpdated: integer("score_last_updated"), // Unix timestamp of last score update
+  scoreFactors: jsonb("score_factors").$type<{
+    priceChange: number; // -100 to 100 based on % from entry
+    timeDecay: number; // 0 to -50 based on hold time without movement
+    whaleActivity: number; // -50 to +50 based on recent whale moves
+    signalWalletStatus: number; // -50 to +50 based on signal wallet still holding or sold
+    volumeTrend: number; // -25 to +25 based on volume changes
+  }>(), // Breakdown of score factors
+  signalWalletSold: boolean("signal_wallet_sold").default(false), // True if signal wallet has exited
+  signalWalletSoldAt: integer("signal_wallet_sold_at"), // Unix timestamp when signal wallet sold
 });
 
 // Pending buys - tokens queued for purchase with delay
