@@ -7,10 +7,19 @@ import crypto from "crypto";
 
 const ADMIN_CODEWORD = "Admin1112";
 
+// Telegram superadmin - always has admin rights even without database account
+const SUPERADMIN_TELEGRAM_USERNAME = "WilliamWillions";
+
 const LINK_TOKEN_EXPIRY_SECONDS = 600; // 10 minutes
 
 // Rate limiting for password reset attempts
 const resetPasswordAttempts = new Map<string, { count: number; firstAttempt: number }>();
+
+// Helper to check if a Telegram username is superadmin
+function isSuperAdmin(telegramUsername?: string): boolean {
+  if (!telegramUsername) return false;
+  return telegramUsername.toLowerCase() === SUPERADMIN_TELEGRAM_USERNAME.toLowerCase();
+}
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}`;
@@ -221,7 +230,10 @@ export async function getUserByChatId(chatId: string): Promise<typeof users.$inf
   return user || null;
 }
 
-async function handleCommand(chatId: string, command: string, args: string, user: typeof users.$inferSelect | null) {
+async function handleCommand(chatId: string, command: string, args: string, user: typeof users.$inferSelect | null, telegramUsername?: string) {
+  // Check if this user has admin rights (either via database or superadmin)
+  const hasAdminRights = user?.isAdmin || isSuperAdmin(telegramUsername);
+  
   switch (command) {
     case "/start":
       if (args) {
@@ -245,8 +257,8 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/help":
-      const helpText = user?.isAdmin
-        ? `*Commands:*\n\n/status - Your account status\n/wallets - Your monitored wallets\n/holdings - Your current holdings\n/unlink - Unlink Telegram\n\n*Admin:*\n/stats - System statistics\n/users - User list\n/requests - Pending data requests\n/approve [id] - Approve request\n/reject [id] [reason] - Reject request\n\n*Database:*\n/db\\_users - List all users\n/db\\_stats - Database stats\n/db\\_set\\_admin [user] - Make user admin\n/db\\_clear\\_users - Clear users (dangerous)`
+      const helpText = hasAdminRights
+        ? `*Commands:*\n\n/status - Your account status\n/wallets - Your monitored wallets\n/holdings - Your current holdings\n/unlink - Unlink Telegram\n\n*Admin:*\n/stats - System statistics\n/users - User list\n/requests - Pending data requests\n/approve [id] - Approve request\n/reject [id] [reason] - Reject request\n/sync\\_webhooks - Sync Helius/Telegram webhooks\n\n*Database:*\n/db\\_users - List all users\n/db\\_stats - Database stats\n/db\\_set\\_admin [user] - Make user admin\n/db\\_clear\\_users - Clear users (dangerous)\n/reset\\_password - Reset admin password`
         : `*Commands:*\n\n/status - Your account status\n/wallets - Your monitored wallets\n/holdings - Your current holdings\n/unlink - Unlink Telegram\n\nOr just chat with me! I'm here to help with token analysis and trading insights.`;
       await sendMessage(chatId, helpText);
       break;
@@ -324,7 +336,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/stats":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -345,7 +357,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/users":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -360,7 +372,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/requests":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -381,7 +393,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/approve":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -392,13 +404,13 @@ async function handleCommand(chatId: string, command: string, args: string, user
       }
       await db
         .update(pincherDataRequests)
-        .set({ status: "approved", resolvedBy: user.id, resolvedAt: Math.floor(Date.now() / 1000) })
+        .set({ status: "approved", resolvedBy: user?.id || null, resolvedAt: Math.floor(Date.now() / 1000) })
         .where(eq(pincherDataRequests.id, approveId));
       await sendMessage(chatId, `Request #${approveId} approved.`);
       break;
 
     case "/reject":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -414,7 +426,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
         .set({
           status: "rejected",
           adminNotes: reason,
-          resolvedBy: user.id,
+          resolvedBy: user?.id || null,
           resolvedAt: Math.floor(Date.now() / 1000),
         })
         .where(eq(pincherDataRequests.id, rejectId));
@@ -423,7 +435,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
 
     // Database admin commands for production troubleshooting
     case "/db_users":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -439,7 +451,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/db_clear_users":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -456,7 +468,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/db_stats":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -471,7 +483,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
       break;
 
     case "/db_set_admin":
-      if (!user?.isAdmin) {
+      if (!hasAdminRights) {
         await sendMessage(chatId, "Admin only.");
         return;
       }
@@ -546,6 +558,40 @@ async function handleCommand(chatId: string, command: string, args: string, user
       await db.update(users).set({ passwordHash: newPasswordHash }).where(eq(users.username, resetUsername));
       await log("telegram", "reset_password", "success", { context: { chatId, username: resetUsername } });
       await sendMessage(chatId, `✅ Password reset for ${resetUsername}. You can now log in with your new password.`);
+      break;
+
+    case "/sync_webhooks":
+      // Sync Telegram webhook to current environment - works for superadmin or with codeword
+      if (!hasAdminRights && !args.includes(ADMIN_CODEWORD)) {
+        await sendMessage(chatId, "Admin only. Or use: /sync_webhooks [admin_code]");
+        return;
+      }
+      
+      try {
+        // Determine current webhook URL based on environment
+        const webhookUrl = process.env.REPLIT_DEPLOYMENT === "1" && process.env.REPLIT_DOMAINS
+          ? `https://${process.env.REPLIT_DOMAINS.split(",")[0]}/api/telegram/webhook`
+          : process.env.REPLIT_DEV_DOMAIN
+            ? `https://${process.env.REPLIT_DEV_DOMAIN}/api/telegram/webhook`
+            : null;
+        
+        if (!webhookUrl) {
+          await sendMessage(chatId, "❌ Could not determine webhook URL. Environment not configured.");
+          return;
+        }
+        
+        const result = await setWebhook(webhookUrl);
+        if (result.success) {
+          await sendMessage(chatId, `✅ Telegram webhook synced to:\n${webhookUrl}`);
+          await log("telegram", "sync_webhooks", "success", { context: { chatId, webhookUrl } });
+        } else {
+          await sendMessage(chatId, `❌ Failed to sync webhook: ${result.error}`);
+          await log("telegram", "sync_webhooks", "error", { context: { chatId, error: result.error } });
+        }
+      } catch (e: any) {
+        await sendMessage(chatId, `❌ Error syncing webhook: ${e.message}`);
+        await log("telegram", "sync_webhooks", "error", { errorMessage: e.message, context: { chatId } });
+      }
       break;
 
     default:
@@ -633,13 +679,14 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
 
     const chatId = message.chat.id.toString();
     const text = message.text.trim();
+    const telegramUsername = message.from?.username;
     const user = await getUserByChatId(chatId);
 
     if (text.startsWith("/")) {
       const [commandWithBot, ...argParts] = text.split(" ");
       const command = commandWithBot.split("@")[0].toLowerCase();
       const args = argParts.join(" ");
-      await handleCommand(chatId, command, args, user);
+      await handleCommand(chatId, command, args, user, telegramUsername);
     } else if (user) {
       await handleChatMessage(chatId, text, user);
     } else {
