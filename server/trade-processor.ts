@@ -103,19 +103,28 @@ export async function executePendingBuy(
     const buy = updateResult[0];
     const isSegmentedBuy = (buy.totalSegments ?? 1) > 1;
     
-    // For non-segmented buys only: prevent duplicate holdings
+    // For non-segmented buys only: check for duplicate holdings BY SOURCE
+    // Multiple positions for same token are allowed from different signal wallets
     // Segmented buys are expected to add to existing holdings
     if (!isSegmentedBuy) {
-      const existingHolding = await db.select().from(holdings).where(
-        and(eq(holdings.tokenMint, buy.tokenMint), eq(holdings.userId, userId))
-      ).limit(1);
+      const dupConditions = [
+        eq(holdings.tokenMint, buy.tokenMint),
+        eq(holdings.userId, userId),
+        eq(holdings.reclaimed, false),
+        eq(holdings.positionSource, "copy"),
+      ];
+      
+      // Check by signal source identity
+      if (buy.signalWalletId) {
+        dupConditions.push(eq(holdings.signalWalletId, buy.signalWalletId));
+      } else if (buy.sourceWalletAddress) {
+        dupConditions.push(eq(holdings.sourceWalletAddress, buy.sourceWalletAddress));
+      }
+      
+      const existingHolding = await db.select().from(holdings).where(and(...dupConditions)).limit(1);
       if (existingHolding.length > 0) {
-        console.log(`Already have holding for ${buy.tokenSymbol}, skipping buy`);
-        await db.update(pendingBuys).set({
-          status: "cancelled",
-          triggerReason: "already_holding",
-        }).where(eq(pendingBuys.id, pendingId));
-        return false;
+        // Position already exists for this source - will be topped up later
+        console.log(`Found existing position for ${buy.tokenSymbol} from same source, will top up`);
       }
     }
 
@@ -201,41 +210,68 @@ export async function executePendingBuy(
 
     const currentPrice = await getTokenPrice(buy.tokenMint);
     const now = Math.floor(Date.now() / 1000);
+    const tokensReceived = result.outputAmount || 0;
+    const solSpentActual = result.inputAmount || solAmount;
+    const entryPrice = currentPrice || buy.initialPrice || 0;
 
-    // Check if holding already exists (for segmented buys, any segment can execute first)
-    const existingHolding = await db.select().from(holdings).where(
-      and(eq(holdings.tokenMint, buy.tokenMint), eq(holdings.userId, userId))
-    ).limit(1);
+    // Build conditions for finding existing position by source identity
+    // For copy trades: match by userId + tokenMint + signalWalletId (position per signal source)
+    // For segmented buys: also match by tokenWalletPublicKey (same position)
+    const conditions = [
+      eq(holdings.tokenMint, buy.tokenMint),
+      eq(holdings.userId, userId),
+      eq(holdings.reclaimed, false),
+      eq(holdings.positionSource, "copy"),
+    ];
+    
+    if (buy.signalWalletId) {
+      conditions.push(eq(holdings.signalWalletId, buy.signalWalletId));
+    } else if (buy.sourceWalletAddress) {
+      conditions.push(eq(holdings.sourceWalletAddress, buy.sourceWalletAddress));
+    }
+    
+    const existingHolding = await db.select().from(holdings).where(and(...conditions)).limit(1);
     
     if (existingHolding.length > 0) {
-      // Update existing holding (add to amounts)
+      // Top up existing position with weighted average entry price
       const holding = existingHolding[0];
-      const newAmountBought = (holding.amountBought || 0) + (result.outputAmount || 0);
-      const newSolSpent = (holding.solSpent || 0) + (result.inputAmount || solAmount);
-      const newCurrentAmount = (holding.currentAmount || 0) + (result.outputAmount || 0);
+      const prevTotalSol = holding.totalSolInvested ?? holding.solSpent;
+      const prevTotalTokens = holding.totalTokensBought ?? holding.amountBought;
+      const prevBuys = holding.totalBuys ?? 1;
+      
+      const newTotalSol = prevTotalSol + solSpentActual;
+      const newTotalTokens = prevTotalTokens + tokensReceived;
+      const newCurrentAmount = holding.currentAmount + tokensReceived;
+      const newBuys = prevBuys + 1;
+      const newAvgPrice = newTotalSol / newTotalTokens;
       
       await db.update(holdings).set({
-        amountBought: newAmountBought,
-        solSpent: newSolSpent,
+        amountBought: holding.amountBought + tokensReceived,
+        solSpent: holding.solSpent + solSpentActual,
         currentAmount: newCurrentAmount,
+        avgEntryPrice: newAvgPrice,
+        totalBuys: newBuys,
+        totalTokensBought: newTotalTokens,
+        totalSolInvested: newTotalSol,
+        lastTopUpTimestamp: now,
         lastPriceCheck: now,
         lastPrice: currentPrice,
       }).where(eq(holdings.id, holding.id));
       
-      console.log(`Updated holding for ${buy.tokenSymbol}${segmentInfo}`);
+      console.log(`Topped up holding for ${buy.tokenSymbol}${segmentInfo} (${newBuys} buys, avg price: ${newAvgPrice.toFixed(8)})`);
     } else {
-      // Create new holding
+      // Create new position for this signal source
       await db.insert(holdings).values({
         userId: userId,
         tokenMint: buy.tokenMint,
         tokenSymbol: buy.tokenSymbol,
         tokenName: buy.tokenName,
-        amountBought: result.outputAmount || 0,
-        solSpent: result.inputAmount || solAmount,
-        buyPrice: currentPrice || buy.initialPrice || 0,
+        amountBought: tokensReceived,
+        solSpent: solSpentActual,
+        buyPrice: entryPrice,
         buyTimestamp: now,
         buySignature: result.signature || "",
-        currentAmount: result.outputAmount || 0,
+        currentAmount: tokensReceived,
         reclaimed: false,
         lastPriceCheck: now,
         lastPrice: currentPrice,
@@ -246,9 +282,15 @@ export async function executePendingBuy(
         sourceSwapId: buy.sourceSwapId,
         sourceWalletAddress: buy.sourceWalletAddress,
         sourceWalletLabel: buy.sourceWalletLabel,
+        positionSource: "copy",
+        signalWalletId: buy.signalWalletId ?? null,
+        totalBuys: 1,
+        avgEntryPrice: entryPrice,
+        totalTokensBought: tokensReceived,
+        totalSolInvested: solSpentActual,
       });
       
-      console.log(`Created holding for ${buy.tokenSymbol}${segmentInfo}`);
+      console.log(`Created holding for ${buy.tokenSymbol}${segmentInfo} from signal wallet ${buy.sourceWalletLabel || buy.sourceWalletAddress}`);
     }
 
     await db.update(pendingBuys).set({

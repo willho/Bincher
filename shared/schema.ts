@@ -183,6 +183,13 @@ export const holdings = pgTable("holdings", {
   isDead: boolean("is_dead").default(false),
   isDust: boolean("is_dust").default(false),
   
+  // Position tracking - supports top-ups and aggregation
+  totalBuys: integer("total_buys").default(1), // Number of buys in this position
+  avgEntryPrice: real("avg_entry_price"), // Weighted average entry price (updated on top-ups)
+  totalTokensBought: real("total_tokens_bought"), // Cumulative tokens bought (including partial sells)
+  totalSolInvested: real("total_sol_invested"), // Cumulative SOL invested (including top-ups)
+  lastTopUpTimestamp: integer("last_top_up_timestamp"), // When position was last topped up
+  
   // Position config (Phase 8) - per-position risk management
   takeProfitThresholds: jsonb("take_profit_thresholds").$type<number[]>(), // Custom milestones [2, 4, 10, 25]
   takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>(), // Sell % at each [25, 25, 25, 25]
@@ -223,6 +230,7 @@ export const pendingBuys = pgTable("pending_buys", {
   sourceSwapId: integer("source_swap_id"),
   sourceWalletAddress: text("source_wallet_address"),
   sourceWalletLabel: text("source_wallet_label"),
+  signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet for copy trades
 });
 
 // Trade config - settings for copy trading

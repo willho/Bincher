@@ -762,6 +762,7 @@ export async function registerRoutes(
                 swapId: savedSwap.id,
                 walletAddress: swapWalletAddress,
                 walletLabel: sourceWallet?.label || undefined,
+                signalWalletId: sourceWallet?.id,
               }
             );
             if (pendingBuy) {
@@ -1607,9 +1608,12 @@ export async function registerRoutes(
   });
 
   // Manual buy endpoint - buy any token by mint address
+  // Supports: action="new" (create new position), action="topup" (add to existing), positionId (specific position to top up)
   const manualBuySchema = z.object({
     tokenMint: z.string().min(32).max(44),
     solAmount: z.number().positive().finite().max(100),
+    action: z.enum(["new", "topup", "auto"]).optional().default("auto"),
+    positionId: z.number().optional(),
   });
   
   app.post("/api/copy-trade/manual-buy", requireAuth, async (req: AuthenticatedRequest, res) => {
@@ -1620,14 +1624,57 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Valid token mint and SOL amount are required" });
       }
       
-      const { tokenMint, solAmount } = parsed.data;
+      const { tokenMint, solAmount, action, positionId } = parsed.data;
       
-      // Check if we already have a holding for this token
-      const existingHolding = await db.select().from(holdings).where(
-        and(eq(holdings.tokenMint, tokenMint), eq(holdings.userId, req.userId!))
-      ).limit(1);
-      if (existingHolding.length > 0) {
-        return res.status(400).json({ error: "Already holding this token" });
+      // Find existing manual positions for this token
+      const existingPositions = await db.select().from(holdings).where(
+        and(
+          eq(holdings.tokenMint, tokenMint), 
+          eq(holdings.userId, req.userId!),
+          eq(holdings.reclaimed, false)
+        )
+      );
+      
+      const manualPositions = existingPositions.filter(p => p.positionSource === "manual" || !p.positionSource);
+      
+      // If action is "new", always create new position
+      // If action is "topup", find position to top up
+      // If action is "auto", top up if exactly one manual position exists, otherwise create new
+      let targetPosition: typeof existingPositions[0] | null = null;
+      let isTopUp = false;
+      
+      if (action === "topup") {
+        if (positionId) {
+          targetPosition = existingPositions.find(p => p.id === positionId) || null;
+          if (!targetPosition) {
+            return res.status(404).json({ error: "Position not found" });
+          }
+          // Only allow topping up manual positions via manual buy
+          if (targetPosition.positionSource && targetPosition.positionSource !== "manual") {
+            return res.status(400).json({ 
+              error: `Cannot manually top up ${targetPosition.positionSource} position. Use copy trading for copy positions.`
+            });
+          }
+        } else if (manualPositions.length === 1) {
+          targetPosition = manualPositions[0];
+        } else if (manualPositions.length > 1) {
+          return res.status(400).json({ 
+            error: "Multiple positions exist. Specify positionId to top up.",
+            positions: manualPositions.map(p => ({
+              id: p.id,
+              tokenSymbol: p.tokenSymbol,
+              currentAmount: p.currentAmount,
+              solSpent: p.solSpent,
+              positionSource: p.positionSource
+            }))
+          });
+        } else {
+          return res.status(400).json({ error: "No existing manual position to top up" });
+        }
+        isTopUp = true;
+      } else if (action === "auto" && manualPositions.length === 1) {
+        targetPosition = manualPositions[0];
+        isTopUp = true;
       }
       
       // Check hot wallet balance
@@ -1645,7 +1692,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Cannot determine token price. Try again later or check token mint address." });
       }
       
-      console.log(`Manual buy: ${solAmount} SOL for token ${tokenMint} at price ${tokenPrice}`);
+      console.log(`Manual buy: ${solAmount} SOL for token ${tokenMint} at price ${tokenPrice}, action: ${action}, topUp: ${isTopUp}`);
       
       const result = await buyToken(req.userId!, tokenMint, solAmount);
       
@@ -1654,36 +1701,124 @@ export async function registerRoutes(
       }
       
       const now = Math.floor(Date.now() / 1000);
+      const tokensReceived = result.outputAmount || 0;
+      const solSpentActual = result.inputAmount || solAmount;
       
-      // Create holding record
-      await db.insert(holdings).values({
-        userId: req.userId!,
-        tokenMint: tokenMint,
-        tokenSymbol: tokenInfo?.symbol || "UNKNOWN",
-        tokenName: tokenInfo?.name || "Unknown Token",
-        amountBought: result.outputAmount || 0,
-        solSpent: result.inputAmount || solAmount,
-        buyPrice: tokenPrice || 0,
-        buyTimestamp: now,
-        buySignature: result.signature || "",
-        currentAmount: result.outputAmount || 0,
-        reclaimed: false,
-        lastPriceCheck: now,
-        lastPrice: tokenPrice,
-        highestMultiplier: 1,
-        alertedMilestones: [],
-      });
-      
-      res.json({ 
-        success: true, 
-        signature: result.signature,
-        tokenSymbol: tokenInfo?.symbol || "UNKNOWN",
-        tokensBought: result.outputAmount,
-        solSpent: result.inputAmount
-      });
+      if (isTopUp && targetPosition) {
+        // Top up existing position
+        const prevTotalSol = targetPosition.totalSolInvested ?? targetPosition.solSpent;
+        const prevTotalTokens = targetPosition.totalTokensBought ?? targetPosition.amountBought;
+        const prevBuys = targetPosition.totalBuys ?? 1;
+        
+        const newTotalSol = prevTotalSol + solSpentActual;
+        const newTotalTokens = prevTotalTokens + tokensReceived;
+        const newCurrentAmount = targetPosition.currentAmount + tokensReceived;
+        const newBuys = prevBuys + 1;
+        const newAvgPrice = newTotalSol / newTotalTokens;
+        
+        await db.update(holdings).set({
+          currentAmount: newCurrentAmount,
+          amountBought: targetPosition.amountBought + tokensReceived,
+          solSpent: targetPosition.solSpent + solSpentActual,
+          avgEntryPrice: newAvgPrice,
+          totalBuys: newBuys,
+          totalTokensBought: newTotalTokens,
+          totalSolInvested: newTotalSol,
+          lastTopUpTimestamp: now,
+          lastPrice: tokenPrice,
+          lastPriceCheck: now,
+        }).where(eq(holdings.id, targetPosition.id));
+        
+        res.json({ 
+          success: true, 
+          action: "topped_up",
+          positionId: targetPosition.id,
+          signature: result.signature,
+          tokenSymbol: tokenInfo?.symbol || targetPosition.tokenSymbol,
+          tokensBought: tokensReceived,
+          solSpent: solSpentActual,
+          newTotalBuys: newBuys,
+          newTotalSolInvested: newTotalSol,
+          newAvgEntryPrice: newAvgPrice,
+          newCurrentAmount: newCurrentAmount
+        });
+      } else {
+        // Create new holding record
+        const [newHolding] = await db.insert(holdings).values({
+          userId: req.userId!,
+          tokenMint: tokenMint,
+          tokenSymbol: tokenInfo?.symbol || "UNKNOWN",
+          tokenName: tokenInfo?.name || "Unknown Token",
+          amountBought: tokensReceived,
+          solSpent: solSpentActual,
+          buyPrice: tokenPrice || 0,
+          buyTimestamp: now,
+          buySignature: result.signature || "",
+          currentAmount: tokensReceived,
+          reclaimed: false,
+          lastPriceCheck: now,
+          lastPrice: tokenPrice,
+          highestMultiplier: 1,
+          alertedMilestones: [],
+          positionSource: "manual",
+          totalBuys: 1,
+          avgEntryPrice: tokenPrice,
+          totalTokensBought: tokensReceived,
+          totalSolInvested: solSpentActual,
+        }).returning();
+        
+        res.json({ 
+          success: true,
+          action: "new_position",
+          positionId: newHolding.id,
+          signature: result.signature,
+          tokenSymbol: tokenInfo?.symbol || "UNKNOWN",
+          tokensBought: tokensReceived,
+          solSpent: solSpentActual
+        });
+      }
     } catch (error) {
       console.error("Error in manual buy:", error);
       res.status(500).json({ error: "Failed to execute manual buy" });
+    }
+  });
+  
+  // Get positions for a token - shows all positions user has for this token
+  app.get("/api/positions/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { tokenMint } = req.params;
+      
+      const positions = await db.select().from(holdings).where(
+        and(
+          eq(holdings.tokenMint, tokenMint),
+          eq(holdings.userId, req.userId!),
+          eq(holdings.reclaimed, false)
+        )
+      );
+      
+      res.json(positions.map(p => ({
+        id: p.id,
+        tokenMint: p.tokenMint,
+        tokenSymbol: p.tokenSymbol,
+        tokenName: p.tokenName,
+        currentAmount: p.currentAmount,
+        solSpent: p.solSpent,
+        buyPrice: p.buyPrice,
+        avgEntryPrice: p.avgEntryPrice ?? p.buyPrice,
+        totalBuys: p.totalBuys ?? 1,
+        totalSolInvested: p.totalSolInvested ?? p.solSpent,
+        positionSource: p.positionSource ?? "unknown",
+        signalWalletId: p.signalWalletId,
+        sourceWalletAddress: p.sourceWalletAddress,
+        sourceWalletLabel: p.sourceWalletLabel,
+        buyTimestamp: p.buyTimestamp,
+        lastTopUpTimestamp: p.lastTopUpTimestamp,
+        lastPrice: p.lastPrice,
+        highestMultiplier: p.highestMultiplier,
+      })));
+    } catch (error) {
+      console.error("Error getting positions:", error);
+      res.status(500).json({ error: "Failed to get positions" });
     }
   });
 
