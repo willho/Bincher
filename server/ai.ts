@@ -1249,6 +1249,154 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: ["tokenSymbol"]
       }
     }
+  },
+  // Per-wallet copy configuration
+  {
+    type: "function",
+    function: {
+      name: "configure_wallet_copy",
+      description: "Configure copy trading settings for a specific signal wallet. Use when user wants to customize how trades are copied from a particular wallet - buy amount, timing, filters, etc.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletAddress: {
+            type: "string",
+            description: "The signal wallet address to configure"
+          },
+          buyType: {
+            type: "string",
+            enum: ["fixed_sol", "fixed_usd", "percentage"],
+            description: "How to determine buy amount: fixed SOL, fixed USD value, or percentage of balance"
+          },
+          buyAmount: {
+            type: "number",
+            description: "Amount based on buyType (e.g., 0.5 for fixed_sol, 50 for fixed_usd, 10 for 10% percentage)"
+          },
+          timing: {
+            type: "string",
+            enum: ["immediate", "delayed"],
+            description: "When to execute: immediately or after a delay"
+          },
+          delayMinutes: {
+            type: "number",
+            description: "Minutes to delay before copying (only if timing is 'delayed')"
+          },
+          minTradeUsd: {
+            type: "number",
+            description: "Only copy trades above this USD value"
+          },
+          scoreThreshold: {
+            type: "number",
+            description: "Only copy tokens with AI score above this (0-100)"
+          },
+          autoMirror: {
+            type: "boolean",
+            description: "Automatically mirror additional buys and sells from this wallet"
+          },
+          skipIfHolding: {
+            type: "boolean",
+            description: "Skip copy if already holding the token"
+          },
+          skipIfEverHeld: {
+            type: "boolean",
+            description: "Skip copy if you've ever held the token before"
+          }
+        },
+        required: ["walletAddress"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_wallet_copy_config",
+      description: "Get copy trading configuration for a specific signal wallet. Use when user asks about a wallet's copy settings.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletAddress: {
+            type: "string",
+            description: "The signal wallet address to check"
+          }
+        },
+        required: ["walletAddress"]
+      }
+    }
+  },
+  // Manual buy with new position vs top-up support
+  {
+    type: "function",
+    function: {
+      name: "manual_buy",
+      description: "Queue a manual buy for a token. If already holding the token, this will be a top-up that averages the entry price. Use when user wants to manually buy a token (not copying a signal).",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenMint: {
+            type: "string",
+            description: "The Solana token mint address"
+          },
+          tokenSymbol: {
+            type: "string",
+            description: "The token symbol (e.g., 'BONK')"
+          },
+          solAmount: {
+            type: "number",
+            description: "Amount of SOL to spend on the buy"
+          },
+          isTopUp: {
+            type: "boolean",
+            description: "If true, explicitly add to existing position. If false, create new position if not holding."
+          }
+        },
+        required: ["tokenMint", "tokenSymbol", "solAmount"]
+      }
+    }
+  },
+  // Position queries
+  {
+    type: "function",
+    function: {
+      name: "get_positions",
+      description: "Get detailed information about trading positions. Use when user asks about their positions, holdings by source, or specific position details.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenSymbol: {
+            type: "string",
+            description: "Filter by token symbol"
+          },
+          source: {
+            type: "string",
+            enum: ["copy_trade", "manual", "all"],
+            description: "Filter by position source - copy trades, manual trades, or all"
+          },
+          includeRisk: {
+            type: "boolean",
+            description: "Include take-profit and stop-loss settings in response"
+          }
+        },
+        required: []
+      }
+    }
+  },
+  // Devnet faucet (for testing)
+  {
+    type: "function",
+    function: {
+      name: "request_devnet_faucet",
+      description: "Request SOL from the Solana devnet faucet to fund the hot wallet for testing. Only works on devnet. Use when user asks to fund their wallet on devnet or needs test SOL.",
+      parameters: {
+        type: "object",
+        properties: {
+          amount: {
+            type: "number",
+            description: "Amount of SOL to request (default 1, max 2)"
+          }
+        },
+        required: []
+      }
+    }
   }
 ];
 
@@ -1765,6 +1913,320 @@ function executeCancelSettings(userId: number): { success: boolean; message: str
   return { success: true, message: "Cancelled. Your settings stay as they were." };
 }
 
+// Configure per-wallet copy trading settings
+async function executeConfigureWalletCopy(
+  userId: number,
+  args: {
+    walletAddress: string;
+    buyType?: string;
+    buyAmount?: number;
+    timing?: string;
+    delayMinutes?: number;
+    minTradeUsd?: number;
+    scoreThreshold?: number;
+    autoMirror?: boolean;
+    skipIfHolding?: boolean;
+    skipIfEverHeld?: boolean;
+  }
+): Promise<{ success: boolean; message: string }> {
+  // Find the wallet
+  const existing = await db.select()
+    .from(monitoredWallets)
+    .where(and(
+      eq(monitoredWallets.userId, userId),
+      eq(monitoredWallets.walletAddress, args.walletAddress)
+    ))
+    .limit(1);
+  
+  if (existing.length === 0) {
+    return { success: false, message: `Wallet ${args.walletAddress.slice(0, 8)}... not found in your monitored wallets.` };
+  }
+  
+  const wallet = existing[0];
+  const updates: any = {};
+  const changes: string[] = [];
+  
+  if (args.buyType !== undefined) {
+    updates.copyBuyType = args.buyType;
+    changes.push(`buy type: ${args.buyType}`);
+  }
+  if (args.buyAmount !== undefined) {
+    updates.copyBuyAmount = args.buyAmount;
+    const typeLabel = args.buyType || wallet.copyBuyType || 'percentage';
+    const unit = typeLabel === 'fixed_sol' ? 'SOL' : typeLabel === 'fixed_usd' ? 'USD' : '%';
+    changes.push(`buy amount: ${args.buyAmount}${unit}`);
+  }
+  if (args.timing !== undefined) {
+    updates.copyTiming = args.timing;
+    changes.push(`timing: ${args.timing}`);
+  }
+  if (args.delayMinutes !== undefined) {
+    updates.copyDelayMinutes = args.delayMinutes;
+    changes.push(`delay: ${args.delayMinutes}m`);
+  }
+  if (args.minTradeUsd !== undefined) {
+    updates.copyMinTradeUsd = args.minTradeUsd;
+    changes.push(`min trade: $${args.minTradeUsd}`);
+  }
+  if (args.scoreThreshold !== undefined) {
+    updates.copyScoreThreshold = args.scoreThreshold;
+    changes.push(`score threshold: ${args.scoreThreshold}`);
+  }
+  if (args.autoMirror !== undefined) {
+    updates.copyAutoMirror = args.autoMirror;
+    changes.push(`auto-mirror: ${args.autoMirror ? 'ON' : 'OFF'}`);
+  }
+  if (args.skipIfHolding !== undefined) {
+    updates.dedupSkipIfHolding = args.skipIfHolding;
+    changes.push(`skip if holding: ${args.skipIfHolding ? 'YES' : 'NO'}`);
+  }
+  if (args.skipIfEverHeld !== undefined) {
+    updates.dedupSkipIfEverHeld = args.skipIfEverHeld;
+    changes.push(`skip if ever held: ${args.skipIfEverHeld ? 'YES' : 'NO'}`);
+  }
+  
+  if (Object.keys(updates).length === 0) {
+    return { success: false, message: "No settings specified to change." };
+  }
+  
+  await db.update(monitoredWallets)
+    .set(updates)
+    .where(eq(monitoredWallets.id, wallet.id));
+  
+  const label = wallet.label || wallet.walletAddress.slice(0, 8) + '...';
+  console.log(`[Settings] User ${userId} configured wallet ${label}: ${changes.join(', ')}`);
+  
+  return {
+    success: true,
+    message: `Updated ${label}: ${changes.join(', ')}`
+  };
+}
+
+// Get wallet copy config
+async function executeGetWalletCopyConfig(
+  userId: number,
+  args: { walletAddress: string }
+): Promise<{ success: boolean; message: string }> {
+  const existing = await db.select()
+    .from(monitoredWallets)
+    .where(and(
+      eq(monitoredWallets.userId, userId),
+      eq(monitoredWallets.walletAddress, args.walletAddress)
+    ))
+    .limit(1);
+  
+  if (existing.length === 0) {
+    return { success: false, message: `Wallet ${args.walletAddress.slice(0, 8)}... not found.` };
+  }
+  
+  const w = existing[0];
+  const label = w.label || w.walletAddress.slice(0, 8) + '...';
+  const buyUnit = w.copyBuyType === 'fixed_sol' ? 'SOL' : w.copyBuyType === 'fixed_usd' ? 'USD' : '%';
+  
+  return {
+    success: true,
+    message: `Copy config for ${label}:
+- Copy enabled: ${w.copyTradeEnabled ? 'YES' : 'NO'}
+- Buy type: ${w.copyBuyType || 'percentage'}
+- Buy amount: ${w.copyBuyAmount || 10}${buyUnit}
+- Timing: ${w.copyTiming || 'immediate'}${w.copyDelayMinutes ? ` (${w.copyDelayMinutes}m delay)` : ''}
+- Min trade: ${w.copyMinTradeUsd ? `$${w.copyMinTradeUsd}` : 'none'}
+- Score threshold: ${w.copyScoreThreshold ?? 'none'}
+- Auto-mirror: ${w.copyAutoMirror ? 'ON' : 'OFF'}
+- Skip if holding: ${w.dedupSkipIfHolding ? 'YES' : 'NO'}
+- Skip if ever held: ${w.dedupSkipIfEverHeld ? 'YES' : 'NO'}`
+  };
+}
+
+// Manual buy (queue a buy, supports new position or top-up)
+async function executeManualBuy(
+  userId: number,
+  args: { tokenMint: string; tokenSymbol: string; solAmount: number; isTopUp?: boolean }
+): Promise<{ success: boolean; message: string }> {
+  // Check if already holding this token
+  const existingHoldings = await db.select()
+    .from(holdings)
+    .where(and(
+      eq(holdings.userId, userId),
+      eq(holdings.tokenMint, args.tokenMint)
+    ))
+    .limit(1);
+  
+  const hasExistingPosition = existingHoldings.length > 0;
+  
+  // Honor explicit isTopUp parameter if provided, otherwise infer from holdings
+  let isTopUp: boolean;
+  if (args.isTopUp !== undefined) {
+    // User explicitly specified
+    if (args.isTopUp && !hasExistingPosition) {
+      return { success: false, message: `Can't top up - you don't have a position in ${args.tokenSymbol} yet.` };
+    }
+    isTopUp = args.isTopUp;
+  } else {
+    // Infer from existing holdings
+    isTopUp = hasExistingPosition;
+  }
+  
+  const action = isTopUp ? 'top-up existing position' : 'new position';
+  
+  // Get hot wallet to verify balance
+  const { getOrCreateHotWallet, getHotWalletBalance } = await import("./wallet");
+  const hotWallet = await getOrCreateHotWallet(userId);
+  if (!hotWallet) {
+    return { success: false, message: "No hot wallet found. Create one first." };
+  }
+  
+  const balance = await getHotWalletBalance(userId);
+  if (balance < args.solAmount + 0.01) {
+    return { success: false, message: `Insufficient balance. Have ${balance.toFixed(4)} SOL, need ${(args.solAmount + 0.01).toFixed(4)} SOL.` };
+  }
+  
+  // Create pending buy (manual trade - sourceWalletAddress and signalWalletId null indicates manual)
+  const now = Math.floor(Date.now() / 1000);
+  
+  await db.insert(pendingBuys).values({
+    userId,
+    tokenMint: args.tokenMint,
+    tokenSymbol: args.tokenSymbol,
+    detectedAt: now,
+    scheduledBuyAt: now,
+    solAmount: args.solAmount,
+    status: 'active',
+    sourceWalletAddress: null, // null = manual trade
+    signalWalletId: null, // null = manual trade
+    copyTiming: 'immediate', // Manual trades execute immediately
+  });
+  
+  console.log(`[Manual Buy] User ${userId} queued ${action} for ${args.tokenSymbol}: ${args.solAmount} SOL (isTopUp: ${isTopUp})`);
+  
+  return {
+    success: true,
+    message: `Queued ${action} for ${args.tokenSymbol}: ${args.solAmount} SOL. Will execute shortly.`
+  };
+}
+
+// Get positions with filtering
+async function executeGetPositions(
+  userId: number,
+  args: { tokenSymbol?: string; source?: string; includeRisk?: boolean }
+): Promise<{ success: boolean; message: string }> {
+  let query = db.select()
+    .from(holdings)
+    .where(eq(holdings.userId, userId));
+  
+  const positions = await query;
+  
+  // Filter by token symbol if provided
+  let filtered = positions;
+  if (args.tokenSymbol) {
+    const searchLower = args.tokenSymbol.toLowerCase();
+    filtered = filtered.filter(p => 
+      p.tokenSymbol?.toLowerCase() === searchLower ||
+      p.tokenSymbol?.toLowerCase().includes(searchLower)
+    );
+  }
+  
+  // Filter by source if provided
+  if (args.source && args.source !== 'all') {
+    filtered = filtered.filter(p => p.positionSource === args.source);
+  }
+  
+  if (filtered.length === 0) {
+    return { success: true, message: "No positions found matching your criteria." };
+  }
+  
+  const summaries = filtered.slice(0, 15).map(p => {
+    let line = `${p.tokenSymbol}: ${p.currentAmount?.toFixed(2) || p.amountBought?.toFixed(2) || '?'} tokens`;
+    line += ` (${p.positionSource || 'unknown'} source)`;
+    
+    if (p.buyPrice) {
+      line += `, entry: $${p.buyPrice.toFixed(6)}`;
+    }
+    if (p.avgEntryPrice) {
+      line += `, avg: $${p.avgEntryPrice.toFixed(6)}`;
+    }
+    
+    if (args.includeRisk) {
+      if (p.takeProfitThresholds) {
+        try {
+          const thresholds = typeof p.takeProfitThresholds === 'string' 
+            ? JSON.parse(p.takeProfitThresholds) 
+            : p.takeProfitThresholds;
+          if (Array.isArray(thresholds)) {
+            line += `, TP: ${thresholds.join('x/')}x`;
+          }
+        } catch {}
+      }
+      if (p.stopLossPercent) {
+        line += `, SL: ${p.stopLossPercent}%`;
+      }
+    }
+    
+    if (p.sourceWalletAddress) {
+      line += ` (from ${p.sourceWalletAddress.slice(0, 6)}...)`;
+    }
+    
+    return line;
+  });
+  
+  const sourceBreakdown = {
+    copy_trade: filtered.filter(p => p.positionSource === 'copy_trade').length,
+    manual: filtered.filter(p => p.positionSource === 'manual').length,
+  };
+  
+  return {
+    success: true,
+    message: `Positions (${filtered.length} total, ${sourceBreakdown.copy_trade} copy / ${sourceBreakdown.manual} manual):\n${summaries.join('\n')}`
+  };
+}
+
+// Request devnet faucet
+async function executeDevnetFaucet(
+  userId: number,
+  args: { amount?: number }
+): Promise<{ success: boolean; message: string }> {
+  // Check if on devnet
+  const networkMode = process.env.NETWORK_MODE || 'devnet';
+  if (networkMode !== 'devnet') {
+    return { success: false, message: "Faucet only works on devnet. Switch to devnet mode first." };
+  }
+  
+  // Get hot wallet
+  const { getOrCreateHotWallet } = await import("./wallet");
+  const hotWallet = await getOrCreateHotWallet(userId);
+  if (!hotWallet) {
+    return { success: false, message: "No hot wallet found." };
+  }
+  
+  const amount = Math.min(args.amount || 1, 2); // Max 2 SOL per request
+  
+  try {
+    const { Connection, PublicKey, LAMPORTS_PER_SOL } = await import("@solana/web3.js");
+    const connection = new Connection("https://api.devnet.solana.com", "confirmed");
+    
+    const signature = await connection.requestAirdrop(
+      new PublicKey(hotWallet.publicKey),
+      amount * LAMPORTS_PER_SOL
+    );
+    
+    // Wait for confirmation
+    await connection.confirmTransaction(signature, "confirmed");
+    
+    console.log(`[Faucet] User ${userId} received ${amount} SOL devnet airdrop`);
+    
+    return {
+      success: true,
+      message: `Got ${amount} SOL from the devnet faucet. Should appear in your wallet shortly.`
+    };
+  } catch (err: any) {
+    console.error(`[Faucet] Failed for user ${userId}:`, err.message);
+    return { 
+      success: false, 
+      message: `Faucet request failed: ${err.message}. Try again in a few minutes - devnet faucet has rate limits.` 
+    };
+  }
+}
+
 // Get current copy trading settings
 async function executeGetCopyTradingSettings(userId: number): Promise<{ success: boolean; message: string }> {
   const config = await getTradeConfig(userId);
@@ -2218,6 +2680,16 @@ COPY TRADING CONFIGURATION (always propose first, then confirm):
 - enable_wallet_copy: Enable copy trading for a monitored wallet
 - disable_wallet_copy: Disable copy trading for a wallet (keep monitoring)
 - list_monitored_wallets: Show all monitored wallets and their copy status
+- configure_wallet_copy: Configure per-wallet copy settings (buy amount, timing, filters)
+- get_wallet_copy_config: Get copy config for a specific wallet
+
+POSITIONS & MANUAL TRADING:
+- get_positions: Query positions with filters (by token, source, include risk settings)
+- manual_buy: Queue a manual buy (supports new position or top-up)
+- update_position_risk: Update take-profit or stop-loss for a position
+
+DEVNET (testing only):
+- request_devnet_faucet: Request SOL from devnet faucet (only works on devnet)
 
 TOKEN ANALYSIS:
 - refresh_token_score: Refresh/rescore a specific token
@@ -2353,6 +2825,27 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             toolResults.push(result.message);
           } else if (toolName === "update_position_risk") {
             const result = await executeUpdatePositionRisk(userId, args);
+            toolResults.push(result.message);
+          }
+          // Per-wallet configuration
+          else if (toolName === "configure_wallet_copy") {
+            const result = await executeConfigureWalletCopy(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "get_wallet_copy_config") {
+            const result = await executeGetWalletCopyConfig(userId, args);
+            toolResults.push(result.message);
+          }
+          // Manual trading and positions
+          else if (toolName === "manual_buy") {
+            const result = await executeManualBuy(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "get_positions") {
+            const result = await executeGetPositions(userId, args);
+            toolResults.push(result.message);
+          }
+          // Devnet faucet
+          else if (toolName === "request_devnet_faucet") {
+            const result = await executeDevnetFaucet(userId, args);
             toolResults.push(result.message);
           }
         } catch (parseError) {
