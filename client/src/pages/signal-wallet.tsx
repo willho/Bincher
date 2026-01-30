@@ -22,6 +22,12 @@ interface Trade {
   toTokenSymbol: string;
   toAmount: number;
   isBuy: boolean;
+  solPriceAtTrade?: number;
+  toTokenMetadata?: {
+    name?: string;
+    symbol?: string;
+    marketCap?: number;
+  };
 }
 
 interface MostTradedToken {
@@ -358,8 +364,9 @@ export default function SignalWalletPage() {
                   <tr className="border-b text-left text-sm text-muted-foreground">
                     <th className="pb-3 font-medium">Time</th>
                     <th className="pb-3 font-medium">Type</th>
-                    <th className="pb-3 font-medium">From</th>
-                    <th className="pb-3 font-medium">To</th>
+                    <th className="pb-3 font-medium">Token</th>
+                    <th className="pb-3 font-medium text-right">SOL Value</th>
+                    <th className="pb-3 font-medium text-right">USD Value</th>
                     <th className="pb-3 font-medium text-right">Tx</th>
                   </tr>
                 </thead>
@@ -390,12 +397,32 @@ export default function SignalWalletPage() {
                         </Badge>
                       </td>
                       <td className="py-3">
-                        <div className="font-medium">{trade.fromAmount.toFixed(4)}</div>
-                        <div className="text-xs text-muted-foreground">{trade.fromTokenSymbol}</div>
+                        <div className="font-medium">
+                          {trade.isBuy 
+                            ? (trade.toTokenMetadata?.name || trade.toTokenSymbol)
+                            : (trade.fromTokenSymbol)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {trade.isBuy ? trade.toTokenSymbol : trade.fromTokenSymbol}
+                          {trade.isBuy && trade.toAmount > 0 && ` · ${trade.toAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+                          {!trade.isBuy && trade.fromAmount > 0 && ` · ${trade.fromAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+                        </div>
                       </td>
-                      <td className="py-3">
-                        <div className="font-medium">{trade.toAmount.toFixed(4)}</div>
-                        <div className="text-xs text-muted-foreground">{trade.toTokenSymbol}</div>
+                      <td className="py-3 text-right">
+                        <div className="font-medium">
+                          {trade.isBuy 
+                            ? trade.fromAmount.toFixed(4)
+                            : trade.toAmount.toFixed(4)} SOL
+                        </div>
+                      </td>
+                      <td className="py-3 text-right">
+                        {trade.solPriceAtTrade ? (
+                          <div className="font-medium text-muted-foreground">
+                            ${((trade.isBuy ? trade.fromAmount : trade.toAmount) * trade.solPriceAtTrade).toFixed(2)}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground">-</div>
+                        )}
                       </td>
                       <td className="py-3 text-right">
                         <a

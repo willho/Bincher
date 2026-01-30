@@ -626,6 +626,11 @@ export async function registerRoutes(
           console.log("Token metadata fetched:", toTokenMetadata.symbol, "MC:", toTokenMetadata.marketCap);
         }
 
+        // Get cached SOL price for historical USD value (uses cache, no extra API call)
+        const { getSolPriceUsd } = await import("./jupiter");
+        const solPrice = await getSolPriceUsd();
+        swap.solPriceAtTrade = solPrice;
+
         const savedSwap = await storage.addSwap(swap);
         console.log("Swap detected and saved:", savedSwap.id, "for user:", userId);
 
@@ -1845,6 +1850,8 @@ export async function registerRoutes(
           toTokenSymbol: s.toTokenSymbol,
           toAmount: s.toAmount,
           isBuy: s.fromToken === SOL_MINT,
+          solPriceAtTrade: s.solPriceAtTrade,
+          toTokenMetadata: s.toTokenMetadata,
         })),
         stats: {
           totalTrades: walletSwaps.length,

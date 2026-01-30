@@ -73,6 +73,9 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - Wire `logTokenEvent()` calls into familiar-whales when whale activity is detected
 - Wire `generateAndCacheAlert()` calls at appropriate trigger points for user notifications
 
+### Copy Trading Considerations
+- **dedupSkipIfPending default**: Currently defaults to `true`, which blocks multiple buys of the same token if a pending buy exists. This may prevent copying a signal trader who averages into positions (buys same token multiple times). Consider changing default to `false` to better mirror signal behavior. Needs more thought before implementation.
+
 ### UI Improvements (Proposed)
 - Add real-time alerts for significant market movements
 - Focus on clarity and ease of navigation

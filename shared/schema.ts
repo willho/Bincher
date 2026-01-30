@@ -129,6 +129,7 @@ export const swaps = pgTable("swaps", {
   slot: integer("slot").notNull(),
   notificationSent: boolean("notification_sent").default(false),
   toTokenMetadata: jsonb("to_token_metadata"),
+  solPriceAtTrade: real("sol_price_at_trade"),
 });
 
 export const settings = pgTable("settings", {
