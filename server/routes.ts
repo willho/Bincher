@@ -1737,6 +1737,67 @@ export async function registerRoutes(
     }
   });
 
+  // Update position risk settings (take-profit/stop-loss)
+  const updatePositionRiskSchema = z.object({
+    takeProfitThresholds: z.array(z.number().min(1)).optional(), // [4, 10, 25, 100]
+    takeProfitPercentages: z.array(z.number().min(1).max(100)).optional(), // [25, 25, 25, 25]
+    stopLossPercent: z.number().min(1).max(100).optional(),
+    stopLossFloorUsd: z.number().min(0).optional(),
+  }).refine(data => {
+    // Validate matching lengths if both provided
+    if (data.takeProfitThresholds && data.takeProfitPercentages) {
+      return data.takeProfitThresholds.length === data.takeProfitPercentages.length;
+    }
+    return true;
+  }, { message: "Take-profit thresholds and percentages must have matching lengths" });
+
+  app.patch("/api/positions/:holdingId/risk", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const holdingId = parseInt(req.params.holdingId);
+      if (isNaN(holdingId)) {
+        return res.status(400).json({ error: "Invalid holding ID" });
+      }
+
+      const parsed = updatePositionRiskSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid risk settings", details: parsed.error.errors });
+      }
+
+      const holdingRows = await db.select().from(holdings).where(
+        and(eq(holdings.id, holdingId), eq(holdings.userId, req.userId!))
+      );
+
+      if (holdingRows.length === 0) {
+        return res.status(404).json({ error: "Position not found" });
+      }
+
+      const updates: Partial<typeof holdings.$inferInsert> = {};
+      if (parsed.data.takeProfitThresholds) {
+        updates.takeProfitThresholds = parsed.data.takeProfitThresholds;
+      }
+      if (parsed.data.takeProfitPercentages) {
+        updates.takeProfitPercentages = parsed.data.takeProfitPercentages;
+      }
+      if (parsed.data.stopLossPercent !== undefined) {
+        updates.stopLossPercent = parsed.data.stopLossPercent;
+      }
+      if (parsed.data.stopLossFloorUsd !== undefined) {
+        updates.stopLossFloorUsd = parsed.data.stopLossFloorUsd;
+      }
+
+      await db.update(holdings).set(updates).where(eq(holdings.id, holdingId));
+
+      const updatedRows = await db.select().from(holdings).where(eq(holdings.id, holdingId));
+      
+      console.log(`Updated risk settings for position ${holdingId}: TP thresholds=${JSON.stringify(parsed.data.takeProfitThresholds)}, SL=${parsed.data.stopLossPercent}%`);
+      
+      res.json({ success: true, position: updatedRows[0] });
+    } catch (error) {
+      console.error("Error updating position risk settings:", error);
+      res.status(500).json({ error: "Failed to update position risk settings" });
+    }
+  });
+
   // Manual buy endpoint - buy any token by mint address
   // Supports: action="new" (create new position), action="topup" (add to existing), positionId (specific position to top up)
   const manualBuySchema = z.object({

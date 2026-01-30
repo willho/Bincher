@@ -1,12 +1,16 @@
 import { useRoute } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Save } from "lucide-react";
 import { Link } from "wouter";
-import type { TokenSnapshot } from "@shared/schema";
+import { useState } from "react";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import type { TokenSnapshot, Holding } from "@shared/schema";
 
 interface SignalSource {
   walletAddress: string | null;
@@ -19,6 +23,7 @@ interface SignalSource {
 export default function TokenPage() {
   const [, params] = useRoute("/trading/:token");
   const tokenMint = params?.token;
+  const { toast } = useToast();
 
   const { data: snapshot, isLoading } = useQuery<TokenSnapshot>({
     queryKey: [`/api/snapshots/token/${tokenMint}`],
@@ -29,6 +34,52 @@ export default function TokenPage() {
     queryKey: [`/api/token/${tokenMint}/signal-sources`],
     enabled: !!tokenMint,
   });
+
+  const { data: positions, isLoading: isLoadingPositions } = useQuery<Holding[]>({
+    queryKey: [`/api/positions/${tokenMint}`],
+    enabled: !!tokenMint,
+  });
+
+  const [editingPosition, setEditingPosition] = useState<number | null>(null);
+  const [tpThresholds, setTpThresholds] = useState<string>("");
+  const [tpPercents, setTpPercents] = useState<string>("");
+  const [stopLoss, setStopLoss] = useState<string>("");
+
+  const updateRiskMutation = useMutation({
+    mutationFn: async ({ positionId, data }: { positionId: number; data: any }) => {
+      return apiRequest("PATCH", `/api/positions/${positionId}/risk`, data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/positions/${tokenMint}`] });
+      toast({ title: "Risk settings updated" });
+      setEditingPosition(null);
+    },
+    onError: () => {
+      toast({ title: "Failed to update settings", variant: "destructive" });
+    }
+  });
+
+  const startEditing = (position: Holding) => {
+    setEditingPosition(position.id);
+    setTpThresholds((position.takeProfitThresholds as number[] || [4, 10, 25, 100]).join(", "));
+    setTpPercents((position.takeProfitPercentages as number[] || [25, 25, 25, 25]).join(", "));
+    setStopLoss(position.stopLossPercent?.toString() || "50");
+  };
+
+  const saveRiskSettings = (positionId: number) => {
+    const thresholds = tpThresholds.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+    const percents = tpPercents.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+    const sl = parseFloat(stopLoss);
+
+    updateRiskMutation.mutate({
+      positionId,
+      data: {
+        takeProfitThresholds: thresholds.length > 0 ? thresholds : undefined,
+        takeProfitPercentages: percents.length > 0 ? percents : undefined,
+        stopLossPercent: !isNaN(sl) ? sl : undefined,
+      }
+    });
+  };
 
   function formatTimeAgo(timestamp: number): string {
     const now = Math.floor(Date.now() / 1000);
@@ -286,6 +337,114 @@ export default function TokenPage() {
                   ${snapshot.fdv?.toLocaleString() || "N/A"}
                 </p>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Position Risk Settings */}
+      {positions && positions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Target className="h-5 w-5" />
+              Position Risk Settings
+            </CardTitle>
+            <CardDescription>Configure take-profit and stop-loss for your positions</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {positions.map((position) => (
+                <div key={position.id} className="p-4 rounded-lg border bg-muted/30">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="font-medium">{position.tokenSymbol}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {position.positionSource === "copy" ? `From: ${position.sourceWalletLabel || position.sourceWalletAddress?.slice(0, 8) || "Unknown"}` : position.positionSource}
+                      </p>
+                    </div>
+                    <Badge variant="outline">{position.solSpent?.toFixed(4)} SOL invested</Badge>
+                  </div>
+
+                  {editingPosition === position.id ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs text-muted-foreground">Take-Profit Thresholds (multipliers, comma-separated)</label>
+                        <Input
+                          value={tpThresholds}
+                          onChange={(e) => setTpThresholds(e.target.value)}
+                          placeholder="4, 10, 25, 100"
+                          className="mt-1"
+                          data-testid={`input-tp-thresholds-${position.id}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Sell % at each threshold (comma-separated)</label>
+                        <Input
+                          value={tpPercents}
+                          onChange={(e) => setTpPercents(e.target.value)}
+                          placeholder="25, 25, 25, 25"
+                          className="mt-1"
+                          data-testid={`input-tp-percents-${position.id}`}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs text-muted-foreground">Stop-Loss % (sell if price drops by this much)</label>
+                        <Input
+                          value={stopLoss}
+                          onChange={(e) => setStopLoss(e.target.value)}
+                          placeholder="50"
+                          className="mt-1"
+                          data-testid={`input-stop-loss-${position.id}`}
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button 
+                          size="sm" 
+                          onClick={() => saveRiskSettings(position.id)}
+                          disabled={updateRiskMutation.isPending}
+                          data-testid={`button-save-risk-${position.id}`}
+                        >
+                          <Save className="h-3 w-3 mr-1" />
+                          Save
+                        </Button>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => setEditingPosition(null)}
+                          data-testid={`button-cancel-risk-${position.id}`}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm space-y-1">
+                        <p className="text-muted-foreground">
+                          <Shield className="h-3 w-3 inline mr-1" />
+                          Take-profit: {((position.takeProfitThresholds as number[]) || [4, 10, 25, 100]).map((t, i) => {
+                            const percents = (position.takeProfitPercentages as number[]) || [25, 25, 25, 25];
+                            return `${percents[i] || 25}% @ ${t}x`;
+                          }).join(", ")}
+                        </p>
+                        <p className="text-muted-foreground">
+                          <Target className="h-3 w-3 inline mr-1" />
+                          Stop-loss: {position.stopLossPercent || 50}%
+                        </p>
+                      </div>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => startEditing(position)}
+                        data-testid={`button-edit-risk-${position.id}`}
+                      >
+                        Edit
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </CardContent>
         </Card>

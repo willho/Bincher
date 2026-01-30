@@ -215,6 +215,8 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
       highVolumeBuyCount: result[0].highVolumeBuyCount ?? 10,
       priceRiseTriggerPercent: result[0].priceRiseTriggerPercent ?? 15,
       reclaimMultiplier: result[0].reclaimMultiplier ?? 4,
+      progressiveTakeProfitThresholds: (result[0].progressiveTakeProfitThresholds as number[]) ?? [10, 100, 1000, 10000],
+      progressiveTakeProfitPercents: (result[0].progressiveTakeProfitPercents as number[]) ?? [10, 10, 10, 10],
       milestonesToAlert: (result[0].milestonesToAlert as number[]) ?? [2, 4, 10],
     };
   }
@@ -229,6 +231,8 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
     highVolumeBuyCount: rows[0].highVolumeBuyCount ?? 10,
     priceRiseTriggerPercent: rows[0].priceRiseTriggerPercent ?? 15,
     reclaimMultiplier: rows[0].reclaimMultiplier ?? 4,
+    progressiveTakeProfitThresholds: (rows[0].progressiveTakeProfitThresholds as number[]) ?? [10, 100, 1000, 10000],
+    progressiveTakeProfitPercents: (rows[0].progressiveTakeProfitPercents as number[]) ?? [10, 10, 10, 10],
     milestonesToAlert: (rows[0].milestonesToAlert as number[]) ?? [2, 4, 10],
   };
 }

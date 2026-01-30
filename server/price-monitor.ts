@@ -474,11 +474,20 @@ async function checkHoldingPriceWithBatch(
       await createMilestoneEvent(holding, config.reclaimMultiplier, multiplier, currentPrice, "reclaim_executed");
     }
     
-    const progressiveMilestones = [10, 100, 1000, 10000, 100000];
-    for (const milestone of progressiveMilestones) {
+    // Use per-position thresholds, fallback to user defaults
+    const progressiveMilestones = (holding.takeProfitThresholds as number[]) 
+      || (config.progressiveTakeProfitThresholds as number[]) 
+      || [10, 100, 1000, 10000];
+    const progressivePercents = (holding.takeProfitPercentages as number[])
+      || (config.progressiveTakeProfitPercents as number[])
+      || [10, 10, 10, 10];
+    
+    for (let i = 0; i < progressiveMilestones.length; i++) {
+      const milestone = progressiveMilestones[i];
+      const sellPercent = progressivePercents[i] || 10;
       if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
-        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x`);
-        await executeProgressiveReclaim(userId, holding, currentPrice, milestone);
+        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x (sell ${sellPercent}%)`);
+        await executeProgressiveReclaim(userId, holding, currentPrice, milestone, sellPercent);
         await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "progressive_reclaim");
         break;
       }
@@ -553,11 +562,20 @@ async function checkHoldingPrice(
       await createMilestoneEvent(holding, config.reclaimMultiplier, multiplier, currentPrice, "reclaim_executed");
     }
     
-    const progressiveMilestones = [10, 100, 1000, 10000, 100000];
-    for (const milestone of progressiveMilestones) {
+    // Use per-position thresholds, fallback to user defaults
+    const progressiveMilestones = (holding.takeProfitThresholds as number[]) 
+      || (config.progressiveTakeProfitThresholds as number[]) 
+      || [10, 100, 1000, 10000];
+    const progressivePercents = (holding.takeProfitPercentages as number[])
+      || (config.progressiveTakeProfitPercents as number[])
+      || [10, 10, 10, 10];
+    
+    for (let i = 0; i < progressiveMilestones.length; i++) {
+      const milestone = progressiveMilestones[i];
+      const sellPercent = progressivePercents[i] || 10;
       if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
-        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x`);
-        await executeProgressiveReclaim(userId, holding, currentPrice, milestone);
+        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x (sell ${sellPercent}%)`);
+        await executeProgressiveReclaim(userId, holding, currentPrice, milestone, sellPercent);
         await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "progressive_reclaim");
         break;
       }
@@ -676,7 +694,8 @@ async function executeProgressiveReclaim(
   userId: number,
   holding: typeof holdings.$inferSelect,
   currentPrice: number,
-  milestone: number
+  milestone: number,
+  sellPercent: number = 10
 ): Promise<void> {
   try {
     if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
@@ -689,14 +708,14 @@ async function executeProgressiveReclaim(
       return;
     }
     
-    const tokensToSell = holding.currentAmount * 0.1;
+    const tokensToSell = holding.currentAmount * (sellPercent / 100);
     
     if (!isFinite(tokensToSell) || tokensToSell <= 0) {
       console.log(`Invalid tokens to sell for ${holding.tokenSymbol}: ${tokensToSell}`);
       return;
     }
 
-    console.log(`Executing progressive reclaim for ${holding.tokenSymbol} at ${milestone}x: selling ${tokensToSell.toLocaleString()} tokens (10%)`);
+    console.log(`Executing progressive reclaim for ${holding.tokenSymbol} at ${milestone}x: selling ${tokensToSell.toLocaleString()} tokens (${sellPercent}%)`);
 
     let result;
     

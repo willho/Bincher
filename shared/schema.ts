@@ -191,8 +191,8 @@ export const holdings = pgTable("holdings", {
   lastTopUpTimestamp: integer("last_top_up_timestamp"), // When position was last topped up
   
   // Position config (Phase 8) - per-position risk management
-  takeProfitThresholds: jsonb("take_profit_thresholds").$type<number[]>(), // Custom milestones [2, 4, 10, 25]
-  takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>(), // Sell % at each [25, 25, 25, 25]
+  takeProfitThresholds: jsonb("take_profit_thresholds").$type<number[]>(), // Custom milestones [4, 10, 25, 100]
+  takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>(), // Percent to sell at each threshold [25, 25, 25, 25]
   stopLossPercent: real("stop_loss_percent"), // Sell if price drops by this %
   stopLossFloorUsd: real("stop_loss_floor_usd"), // Sell if value drops below this $
   autoMirrorSells: boolean("auto_mirror_sells").default(false), // Mirror signal wallet sells
@@ -245,6 +245,8 @@ export const tradeConfig = pgTable("trade_config", {
   highVolumeBuyCount: integer("high_volume_buy_count").default(10),
   priceRiseTriggerPercent: real("price_rise_trigger_percent").default(15),
   reclaimMultiplier: real("reclaim_multiplier").default(4),
+  progressiveTakeProfitThresholds: jsonb("progressive_tp_thresholds").$type<number[]>().default([10, 100, 1000, 10000]), // Multipliers to trigger progressive sells
+  progressiveTakeProfitPercents: jsonb("progressive_tp_percents").$type<number[]>().default([10, 10, 10, 10]), // Percent to sell at each threshold
   milestonesToAlert: jsonb("milestones_to_alert").$type<number[]>().default([2, 4, 10]),
   dumpAlertEnabled: boolean("dump_alert_enabled").default(true),
   dumpAlertThreshold: real("dump_alert_threshold").default(50),
@@ -689,6 +691,8 @@ export const tradeConfigSchema = z.object({
   highVolumeBuyCount: z.number().default(10),
   priceRiseTriggerPercent: z.number().default(15),
   reclaimMultiplier: z.number().default(4),
+  progressiveTakeProfitThresholds: z.array(z.number()).default([10, 100, 1000, 10000]),
+  progressiveTakeProfitPercents: z.array(z.number()).default([10, 10, 10, 10]),
   milestonesToAlert: z.array(z.number()).default([2, 4, 10]),
   dumpAlertEnabled: z.boolean().default(true),
   dumpAlertThreshold: z.number().default(50),

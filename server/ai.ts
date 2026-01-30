@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
@@ -1000,6 +1000,37 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_position_risk",
+      description: "Update take-profit or stop-loss settings for a specific position. Use when user wants to set, change, or configure take-profit thresholds, sell percentages, or stop-loss for their holdings.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenSymbol: {
+            type: "string",
+            description: "The token symbol of the position to update (e.g., 'BONK', 'PEPE')"
+          },
+          takeProfitThresholds: {
+            type: "array",
+            items: { type: "number" },
+            description: "Multipliers at which to take profit (e.g., [4, 10, 25, 100] means sell at 4x, 10x, 25x, 100x)"
+          },
+          takeProfitPercentages: {
+            type: "array",
+            items: { type: "number" },
+            description: "Percentage to sell at each threshold (e.g., [25, 25, 25, 25] means sell 25% at each)"
+          },
+          stopLossPercent: {
+            type: "number",
+            description: "Stop-loss percentage - sell if price drops by this much from entry (e.g., 50 means sell if down 50%)"
+          }
+        },
+        required: ["tokenSymbol"]
+      }
+    }
   }
 ];
 
@@ -1532,6 +1563,58 @@ async function executeListMonitoredWallets(userId: number): Promise<{ success: b
   };
 }
 
+async function executeUpdatePositionRisk(userId: number, args: any): Promise<{ success: boolean; message: string }> {
+  const { tokenSymbol, takeProfitThresholds, takeProfitPercentages, stopLossPercent } = args;
+  
+  if (!tokenSymbol) {
+    return { success: false, message: "Token symbol required" };
+  }
+  
+  // Find user's position for this token
+  const positions = await db.select()
+    .from(holdings)
+    .where(and(
+      eq(holdings.userId, userId),
+      eq(holdings.tokenSymbol, tokenSymbol.toUpperCase())
+    ));
+  
+  if (positions.length === 0) {
+    return { success: false, message: `No position found for ${tokenSymbol}` };
+  }
+  
+  const updates: any = {};
+  const changes: string[] = [];
+  
+  if (takeProfitThresholds && Array.isArray(takeProfitThresholds)) {
+    updates.takeProfitThresholds = takeProfitThresholds;
+    changes.push(`take-profit at ${takeProfitThresholds.join('x, ')}x`);
+  }
+  
+  if (takeProfitPercentages && Array.isArray(takeProfitPercentages)) {
+    updates.takeProfitPercentages = takeProfitPercentages;
+    changes.push(`sell ${takeProfitPercentages.join('%, ')}% at each`);
+  }
+  
+  if (stopLossPercent !== undefined) {
+    updates.stopLossPercent = stopLossPercent;
+    changes.push(`stop-loss at ${stopLossPercent}% drop`);
+  }
+  
+  if (changes.length === 0) {
+    return { success: false, message: "No settings to update" };
+  }
+  
+  // Update all positions for this token
+  for (const pos of positions) {
+    await db.update(holdings).set(updates).where(eq(holdings.id, pos.id));
+  }
+  
+  return {
+    success: true,
+    message: `Updated ${positions.length} position(s) for ${tokenSymbol}: ${changes.join(', ')}`
+  };
+}
+
 // Check if message is a trade confirmation
 function isTradeConfirmation(message: string): boolean {
   const confirmPhrases = ['yes', 'do it', 'confirm', 'go ahead', 'yep', 'yeah', 'ok', 'execute', 'send it', 'lets go', "let's go", 'approved', 'buy', 'sell'];
@@ -1961,6 +2044,9 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             toolResults.push(result.message);
           } else if (toolName === "list_monitored_wallets") {
             const result = await executeListMonitoredWallets(userId);
+            toolResults.push(result.message);
+          } else if (toolName === "update_position_risk") {
+            const result = await executeUpdatePositionRisk(userId, args);
             toolResults.push(result.message);
           }
         } catch (parseError) {
