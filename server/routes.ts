@@ -44,7 +44,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets } from "@shared/schema";
 import { eq, and, isNotNull, desc } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -3419,6 +3419,258 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting swing opportunities:", error);
       res.status(500).json({ error: "Failed to get swing opportunities" });
+    }
+  });
+
+  // === TRADE RULES ROUTES ===
+  
+  // Get all trade rules for user
+  app.get("/api/trade-rules", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const rules = await db.select().from(tradeRules).where(eq(tradeRules.userId, req.userId!));
+      res.json({ rules });
+    } catch (error) {
+      console.error("Error getting trade rules:", error);
+      res.status(500).json({ error: "Failed to get trade rules" });
+    }
+  });
+  
+  // Get trade rules by scope
+  app.get("/api/trade-rules/:scope", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const scope = req.params.scope;
+      const scopeId = req.query.scopeId ? parseInt(req.query.scopeId as string) : undefined;
+      
+      let query = db.select().from(tradeRules).where(
+        and(
+          eq(tradeRules.userId, req.userId!),
+          eq(tradeRules.scope, scope)
+        )
+      );
+      
+      if (scopeId !== undefined) {
+        query = db.select().from(tradeRules).where(
+          and(
+            eq(tradeRules.userId, req.userId!),
+            eq(tradeRules.scope, scope),
+            eq(tradeRules.scopeId, scopeId)
+          )
+        );
+      }
+      
+      const rules = await query;
+      res.json({ rules });
+    } catch (error) {
+      console.error("Error getting trade rules by scope:", error);
+      res.status(500).json({ error: "Failed to get trade rules" });
+    }
+  });
+  
+  // Create a new trade rule
+  app.post("/api/trade-rules", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const [rule] = await db.insert(tradeRules).values({
+        userId: req.userId!,
+        scope: req.body.scope || "hotWallet",
+        scopeId: req.body.scopeId,
+        tokenMint: req.body.tokenMint,
+        name: req.body.name,
+        enabled: req.body.enabled ?? true,
+        action: req.body.action,
+        direction: req.body.direction,
+        percentChange: req.body.percentChange,
+        timeframeMinutes: req.body.timeframeMinutes,
+        amountType: req.body.amountType || "percent",
+        amountValue: req.body.amountValue,
+        maxAmountUsd: req.body.maxAmountUsd,
+        maxTriggerCount: req.body.maxTriggerCount,
+        cooldownMinutes: req.body.cooldownMinutes || 15,
+        requireAutonomy: req.body.requireAutonomy ?? true,
+        minPositionValueUsd: req.body.minPositionValueUsd,
+        maxPositionValueUsd: req.body.maxPositionValueUsd,
+        createdAt: now,
+        updatedAt: now,
+      }).returning();
+      res.json({ rule });
+    } catch (error) {
+      console.error("Error creating trade rule:", error);
+      res.status(500).json({ error: "Failed to create trade rule" });
+    }
+  });
+  
+  // Update a trade rule
+  app.patch("/api/trade-rules/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const ruleId = parseInt(req.params.id);
+      const now = Math.floor(Date.now() / 1000);
+      
+      const [existing] = await db.select().from(tradeRules).where(
+        and(eq(tradeRules.id, ruleId), eq(tradeRules.userId, req.userId!))
+      );
+      
+      if (!existing) {
+        return res.status(404).json({ error: "Trade rule not found" });
+      }
+      
+      const [rule] = await db.update(tradeRules)
+        .set({ ...req.body, updatedAt: now })
+        .where(and(eq(tradeRules.id, ruleId), eq(tradeRules.userId, req.userId!)))
+        .returning();
+      
+      res.json({ rule });
+    } catch (error) {
+      console.error("Error updating trade rule:", error);
+      res.status(500).json({ error: "Failed to update trade rule" });
+    }
+  });
+  
+  // Delete a trade rule
+  app.delete("/api/trade-rules/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const ruleId = parseInt(req.params.id);
+      
+      const [existing] = await db.select().from(tradeRules).where(
+        and(eq(tradeRules.id, ruleId), eq(tradeRules.userId, req.userId!))
+      );
+      
+      if (!existing) {
+        return res.status(404).json({ error: "Trade rule not found" });
+      }
+      
+      await db.delete(tradeRules).where(
+        and(eq(tradeRules.id, ruleId), eq(tradeRules.userId, req.userId!))
+      );
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting trade rule:", error);
+      res.status(500).json({ error: "Failed to delete trade rule" });
+    }
+  });
+  
+  // === TRADE RULE PRESETS ROUTES ===
+  
+  // Get all presets for user
+  app.get("/api/trade-rule-presets", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const presets = await db.select().from(tradeRulePresets).where(eq(tradeRulePresets.userId, req.userId!));
+      res.json({ presets });
+    } catch (error) {
+      console.error("Error getting trade rule presets:", error);
+      res.status(500).json({ error: "Failed to get presets" });
+    }
+  });
+  
+  // Create a preset
+  app.post("/api/trade-rule-presets", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const [preset] = await db.insert(tradeRulePresets).values({
+        userId: req.userId!,
+        name: req.body.name,
+        description: req.body.description,
+        isDefault: req.body.isDefault ?? false,
+        rules: req.body.rules,
+        createdAt: now,
+        updatedAt: now,
+      }).returning();
+      res.json({ preset });
+    } catch (error) {
+      console.error("Error creating trade rule preset:", error);
+      res.status(500).json({ error: "Failed to create preset" });
+    }
+  });
+  
+  // Apply a preset to a scope
+  app.post("/api/trade-rule-presets/:id/apply", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const presetId = parseInt(req.params.id);
+      const { scope, scopeId, tokenMint } = req.body;
+      
+      const [preset] = await db.select().from(tradeRulePresets).where(
+        and(eq(tradeRulePresets.id, presetId), eq(tradeRulePresets.userId, req.userId!))
+      );
+      
+      if (!preset) {
+        return res.status(404).json({ error: "Preset not found" });
+      }
+      
+      const now = Math.floor(Date.now() / 1000);
+      const rules = preset.rules as any[];
+      
+      const createdRules = await Promise.all(rules.map(async (rule) => {
+        const [newRule] = await db.insert(tradeRules).values({
+          userId: req.userId!,
+          scope: scope || "hotWallet",
+          scopeId,
+          tokenMint,
+          name: rule.name,
+          enabled: true,
+          action: rule.action,
+          direction: rule.direction,
+          percentChange: rule.percentChange,
+          timeframeMinutes: rule.timeframeMinutes,
+          amountType: rule.amountType,
+          amountValue: rule.amountValue,
+          maxAmountUsd: rule.maxAmountUsd,
+          cooldownMinutes: rule.cooldownMinutes,
+          createdAt: now,
+          updatedAt: now,
+        }).returning();
+        return newRule;
+      }));
+      
+      res.json({ rules: createdRules });
+    } catch (error) {
+      console.error("Error applying preset:", error);
+      res.status(500).json({ error: "Failed to apply preset" });
+    }
+  });
+  
+  // Delete a preset
+  app.delete("/api/trade-rule-presets/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const presetId = parseInt(req.params.id);
+      
+      await db.delete(tradeRulePresets).where(
+        and(eq(tradeRulePresets.id, presetId), eq(tradeRulePresets.userId, req.userId!))
+      );
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting preset:", error);
+      res.status(500).json({ error: "Failed to delete preset" });
+    }
+  });
+  
+  // Update holding status and autonomy
+  app.patch("/api/holdings/:id/status", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const holdingId = parseInt(req.params.id);
+      const { positionStatus, autonomyEnabled } = req.body;
+      
+      const [holding] = await db.select().from(holdings).where(
+        and(eq(holdings.id, holdingId), eq(holdings.userId, req.userId!))
+      );
+      
+      if (!holding) {
+        return res.status(404).json({ error: "Holding not found" });
+      }
+      
+      const updateData: any = {};
+      if (positionStatus !== undefined) updateData.positionStatus = positionStatus;
+      if (autonomyEnabled !== undefined) updateData.autonomyEnabled = autonomyEnabled;
+      
+      const [updated] = await db.update(holdings)
+        .set(updateData)
+        .where(and(eq(holdings.id, holdingId), eq(holdings.userId, req.userId!)))
+        .returning();
+      
+      res.json({ holding: updated });
+    } catch (error) {
+      console.error("Error updating holding status:", error);
+      res.status(500).json({ error: "Failed to update holding" });
     }
   });
 
