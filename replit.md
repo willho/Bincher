@@ -10,6 +10,7 @@ Penny Pincher is an automated Solana trading platform that uses AI for analysis 
 - I prefer detailed explanations.
 - Do not make changes to the folder `Z`.
 - Do not make changes to the file `Y`.
+- When a task list is paused, record it in the "Paused Tasks / Backlog" section below.
 
 ## System Architecture
 
@@ -61,3 +62,16 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - **PostgreSQL**: Primary database for persistent storage.
 - **DexScreener**: Fetching token metadata (price, market cap, liquidity, FDV, volume).
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
+
+## Paused Tasks / Backlog
+
+### Critical Wiring (Pending)
+- Wire `logTokenEvent()` calls into webhook handler when swaps are detected
+- Wire `logTokenEvent()` calls into price-monitor for significant price movements
+- Wire `logTokenEvent()` calls into familiar-whales when whale activity is detected
+- Wire `generateAndCacheAlert()` calls at appropriate trigger points for user notifications
+
+### UI Improvements (Proposed)
+- Add real-time alerts for significant market movements
+- Focus on clarity and ease of navigation
+- (Add more as proposed)
