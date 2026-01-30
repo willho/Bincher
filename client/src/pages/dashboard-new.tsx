@@ -47,7 +47,12 @@ export default function DashboardPage() {
     queryKey: ["/api/copy-trade/holdings"],
   });
 
-  const solPrice = 180;
+  const { data: solPriceData } = useQuery<{ price: number }>({
+    queryKey: ["/api/sol-price"],
+    refetchInterval: 60000,
+  });
+
+  const solPrice = solPriceData?.price || 180;
   const solBalance = hotWallet?.balance || 0;
   const solValueUsd = solBalance * solPrice;
   

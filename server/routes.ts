@@ -488,6 +488,18 @@ export async function registerRoutes(
     }
   });
 
+  // Get SOL price in USD
+  app.get("/api/sol-price", async (req, res) => {
+    try {
+      const { getSolPriceUsd } = await import("./jupiter");
+      const price = await getSolPriceUsd();
+      res.json({ price });
+    } catch (error) {
+      console.error("Failed to get SOL price:", error);
+      res.status(500).json({ error: "Failed to get SOL price" });
+    }
+  });
+
   // Start monitoring
   app.post("/api/monitoring/start", async (req, res) => {
     try {
