@@ -828,14 +828,12 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                 {alertMethod === "telegram" && (
                   <div className="p-4 rounded-lg border bg-muted/30 space-y-3">
                     <p className="text-sm font-medium">Connect to Telegram</p>
-                    <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-                      <li>Open Telegram and search for <strong>@MissPincherBot</strong></li>
-                      <li>Send the command <code className="bg-muted px-1 rounded">/start</code></li>
-                      <li>You'll receive a verification code - enter it in Settings after login</li>
-                    </ol>
+                    <p className="text-sm text-muted-foreground">
+                      After signing in, go to Settings and click "Connect via Telegram" to link your account with @MissPincherBot.
+                    </p>
                     <div className="flex items-start gap-2 p-2 rounded bg-primary/10 text-xs">
                       <AlertCircle className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                      <p>You'll complete the connection after signing in. The bot will send you a unique link.</p>
+                      <p>The connection is a one-click process after you sign in.</p>
                     </div>
                   </div>
                 )}

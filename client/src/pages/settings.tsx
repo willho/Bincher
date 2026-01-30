@@ -165,12 +165,19 @@ export default function SettingsPage() {
                     <p className="text-sm text-muted-foreground">
                       Click the button below to open Telegram and connect your account automatically.
                     </p>
-                    <Button variant="outline" size="sm" asChild>
-                      <a href={`https://t.me/MissPincherBot?start=${telegramStatus?.linkToken || ""}`} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-4 w-4 mr-2" />
-                        Connect via Telegram
-                      </a>
-                    </Button>
+                    {telegramStatus?.linkToken ? (
+                      <Button variant="outline" size="sm" asChild data-testid="button-connect-telegram">
+                        <a href={`https://t.me/MissPincherBot?start=${telegramStatus.linkToken}`} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-4 w-4 mr-2" />
+                          Connect via Telegram
+                        </a>
+                      </Button>
+                    ) : (
+                      <Button variant="outline" size="sm" disabled data-testid="button-connect-telegram-loading">
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Loading link...
+                      </Button>
+                    )}
                     <p className="text-xs text-muted-foreground">
                       Or manually send <code className="bg-muted px-1 rounded">/start {telegramStatus?.linkToken || "..."}</code> to @MissPincherBot
                     </p>

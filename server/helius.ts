@@ -55,10 +55,34 @@ export function getWalletAddress(): string {
   return WALLET_ADDRESS;
 }
 
+// Token metadata cache to avoid duplicate API calls (5 minute TTL)
+const tokenMetadataCache = new Map<string, { data: TokenMetadata | undefined; timestamp: number }>();
+const METADATA_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const METADATA_CACHE_MAX_SIZE = 500; // Maximum entries to prevent unbounded growth
+
+// Periodic cache cleanup (runs every 10 minutes)
+function evictExpiredCacheEntries() {
+  const now = Date.now();
+  const keysToDelete: string[] = [];
+  tokenMetadataCache.forEach((entry, key) => {
+    if (now - entry.timestamp >= METADATA_CACHE_TTL) {
+      keysToDelete.push(key);
+    }
+  });
+  keysToDelete.forEach(key => tokenMetadataCache.delete(key));
+}
+setInterval(evictExpiredCacheEntries, 10 * 60 * 1000);
+
 export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMetadata | undefined> {
   // Skip SOL - it's native and doesn't have DexScreener data
   if (mintAddress === "So11111111111111111111111111111111111111112") {
     return undefined;
+  }
+  
+  // Check cache first
+  const cached = tokenMetadataCache.get(mintAddress);
+  if (cached && Date.now() - cached.timestamp < METADATA_CACHE_TTL) {
+    return cached.data;
   }
   
   const budgetCheck = await shouldAllowApiCall("dexscreener");
@@ -69,11 +93,17 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
   
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`);
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      cacheMetadata(mintAddress, undefined);
+      return undefined;
+    }
     
     const data = await response.json();
     await trackApiCall("dexscreener", "fetchTokenMetadata"); // Track after successful response
-    if (!data.pairs || data.pairs.length === 0) return undefined;
+    if (!data.pairs || data.pairs.length === 0) {
+      cacheMetadata(mintAddress, undefined);
+      return undefined;
+    }
     
     // Get the pair with highest liquidity
     const pair = data.pairs.reduce((best: any, current: any) => {
@@ -82,7 +112,7 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
       return currLiq > bestLiq ? current : best;
     });
     
-    return {
+    const metadata: TokenMetadata = {
       name: pair.baseToken?.name,
       symbol: pair.baseToken?.symbol,
       priceUsd: parseFloat(pair.priceUsd) || undefined,
@@ -94,10 +124,43 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
       dexId: pair.dexId,
       pairAddress: pair.pairAddress,
     };
+    
+    cacheMetadata(mintAddress, metadata);
+    return metadata;
   } catch (error) {
     console.error("Error fetching token metadata:", error);
+    // Cache the failure to avoid repeated failed calls
+    cacheMetadata(mintAddress, undefined);
     return undefined;
   }
+}
+
+// Helper to add to cache with size limit enforcement
+function cacheMetadata(mint: string, data: TokenMetadata | undefined) {
+  // Evict oldest entries if cache is at capacity
+  if (tokenMetadataCache.size >= METADATA_CACHE_MAX_SIZE) {
+    // Remove oldest 10% of entries
+    const entriesToRemove = Math.floor(METADATA_CACHE_MAX_SIZE * 0.1);
+    const entries: Array<[string, { data: TokenMetadata | undefined; timestamp: number }]> = [];
+    tokenMetadataCache.forEach((value, key) => entries.push([key, value]));
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (let i = 0; i < entriesToRemove && i < entries.length; i++) {
+      tokenMetadataCache.delete(entries[i][0]);
+    }
+  }
+  tokenMetadataCache.set(mint, { data, timestamp: Date.now() });
+}
+
+// Export for testing/debugging - get cache stats
+export function getMetadataCacheStats() {
+  const now = Date.now();
+  let valid = 0;
+  let expired = 0;
+  tokenMetadataCache.forEach((entry) => {
+    if (now - entry.timestamp < METADATA_CACHE_TTL) valid++;
+    else expired++;
+  });
+  return { total: tokenMetadataCache.size, valid, expired, maxSize: METADATA_CACHE_MAX_SIZE };
 }
 
 export interface TopHolderInfo {
