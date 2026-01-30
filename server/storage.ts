@@ -32,19 +32,7 @@ export class DatabaseStorage implements IStorage {
         totalSwapsDetected: 0,
       });
     }
-    
-    // Seed the Willho admin account if it doesn't exist
-    const existingAdmin = await db.select().from(users).where(eq(users.username, "Willho")).limit(1);
-    if (existingAdmin.length === 0) {
-      const now = Math.floor(Date.now() / 1000);
-      await db.insert(users).values({
-        username: "Willho",
-        passwordHash: "a43c31360370424e51cca939373656ca:ec1fa84565c64e73c88febe21ed711c81f9e3486e2d52feb67c1bf05fae2dcd61b0813e506e2529b2b23376c3ea62a0005e52513bf9f15048da22b5e95f6c04e",
-        isAdmin: true,
-        createdAt: now,
-      });
-      console.log("Created Willho admin account");
-    }
+    // No hardcoded admin account - first signup with admin codeword becomes admin
   }
 
   async getSwaps(userId: number): Promise<Swap[]> {

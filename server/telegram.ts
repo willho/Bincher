@@ -240,7 +240,7 @@ async function handleCommand(chatId: string, command: string, args: string, user
 
     case "/help":
       const helpText = user?.isAdmin
-        ? `*Commands:*\n\n/status - Your account status\n/wallets - Your monitored wallets\n/holdings - Your current holdings\n/unlink - Unlink Telegram\n\n*Admin:*\n/stats - System statistics\n/users - User list\n/requests - Pending data requests\n/approve [id] - Approve request\n/reject [id] [reason] - Reject request`
+        ? `*Commands:*\n\n/status - Your account status\n/wallets - Your monitored wallets\n/holdings - Your current holdings\n/unlink - Unlink Telegram\n\n*Admin:*\n/stats - System statistics\n/users - User list\n/requests - Pending data requests\n/approve [id] - Approve request\n/reject [id] [reason] - Reject request\n\n*Database:*\n/db\\_users - List all users\n/db\\_stats - Database stats\n/db\\_set\\_admin [user] - Make user admin\n/db\\_clear\\_users - Clear users (dangerous)`
         : `*Commands:*\n\n/status - Your account status\n/wallets - Your monitored wallets\n/holdings - Your current holdings\n/unlink - Unlink Telegram\n\nOr just chat with me! I'm here to help with token analysis and trading insights.`;
       await sendMessage(chatId, helpText);
       break;
@@ -413,6 +413,74 @@ async function handleCommand(chatId: string, command: string, args: string, user
         })
         .where(eq(pincherDataRequests.id, rejectId));
       await sendMessage(chatId, `Request #${rejectId} rejected: ${reason}`);
+      break;
+
+    // Database admin commands for production troubleshooting
+    case "/db_users":
+      if (!user?.isAdmin) {
+        await sendMessage(chatId, "Admin only.");
+        return;
+      }
+      const dbUsers = await db.select().from(users).limit(50);
+      if (dbUsers.length === 0) {
+        await sendMessage(chatId, "*Database Users:* None (empty database)");
+      } else {
+        const dbUserList = dbUsers
+          .map((u) => `• ${u.username} (ID: ${u.id})${u.isAdmin ? " [ADMIN]" : ""}`)
+          .join("\n");
+        await sendMessage(chatId, `*Database Users (${dbUsers.length}):*\n\n${dbUserList}`);
+      }
+      break;
+
+    case "/db_clear_users":
+      if (!user?.isAdmin) {
+        await sendMessage(chatId, "Admin only.");
+        return;
+      }
+      if (args !== "CONFIRM") {
+        await sendMessage(chatId, "⚠️ *WARNING:* This will delete ALL users!\n\nType `/db_clear_users CONFIRM` to proceed.");
+        return;
+      }
+      try {
+        await db.delete(users);
+        await sendMessage(chatId, "✅ All users deleted. Database is now empty. First signup with admin codeword will become admin.");
+      } catch (e: any) {
+        await sendMessage(chatId, `❌ Error: ${e.message}`);
+      }
+      break;
+
+    case "/db_stats":
+      if (!user?.isAdmin) {
+        await sendMessage(chatId, "Admin only.");
+        return;
+      }
+      const userCountDb = await db.select({ count: sql<number>`count(*)` }).from(users);
+      const walletCountDb = await db.select({ count: sql<number>`count(*)` }).from(monitoredWallets);
+      const holdingCountDb = await db.select({ count: sql<number>`count(*)` }).from(holdings);
+      const swapCountDb = await db.select({ count: sql<number>`count(*)` }).from(swaps);
+      await sendMessage(
+        chatId,
+        `*Database Stats:*\n\nUsers: ${userCountDb[0]?.count || 0}\nWallets: ${walletCountDb[0]?.count || 0}\nHoldings: ${holdingCountDb[0]?.count || 0}\nSwaps: ${swapCountDb[0]?.count || 0}`
+      );
+      break;
+
+    case "/db_set_admin":
+      if (!user?.isAdmin) {
+        await sendMessage(chatId, "Admin only.");
+        return;
+      }
+      const targetUsername = args.trim();
+      if (!targetUsername) {
+        await sendMessage(chatId, "Usage: /db_set_admin [username]");
+        return;
+      }
+      const targetUser = await db.select().from(users).where(eq(users.username, targetUsername)).limit(1);
+      if (targetUser.length === 0) {
+        await sendMessage(chatId, `❌ User "${targetUsername}" not found.`);
+        return;
+      }
+      await db.update(users).set({ isAdmin: true }).where(eq(users.username, targetUsername));
+      await sendMessage(chatId, `✅ ${targetUsername} is now an admin.`);
       break;
 
     default:

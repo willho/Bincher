@@ -698,6 +698,7 @@ export type InsertSwingTradeSettings = z.infer<typeof insertSwingTradeSettingsSc
 // Types for API use
 export const swapSchema = z.object({
   id: z.string(),
+  userId: z.number().optional(),
   signature: z.string(),
   timestamp: z.number(),
   type: z.string(),
