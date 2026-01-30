@@ -1564,12 +1564,24 @@ export async function registerRoutes(
     }
   });
 
+  const walletUpdateSchema = z.object({
+    label: z.string().optional(),
+    enabled: z.boolean().optional(),
+    copyTradeEnabled: z.boolean().optional(),
+  });
+  
   app.patch("/api/monitored-wallets/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const walletId = parseInt(req.params.id);
-      const { label, enabled } = req.body;
+      const parsed = walletUpdateSchema.safeParse(req.body);
       
-      const wallet = await storage.updateMonitoredWallet(req.userId!, walletId, { label, enabled });
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid update data", details: parsed.error.issues });
+      }
+      
+      const { label, enabled, copyTradeEnabled } = parsed.data;
+      
+      const wallet = await storage.updateMonitoredWallet(req.userId!, walletId, { label, enabled, copyTradeEnabled });
       if (!wallet) {
         return res.status(404).json({ error: "Wallet not found" });
       }

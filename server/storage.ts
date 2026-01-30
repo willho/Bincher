@@ -235,7 +235,7 @@ export class DatabaseStorage implements IStorage {
     return rows[0];
   }
 
-  async updateMonitoredWallet(userId: number, walletId: number, updates: { label?: string; enabled?: boolean }): Promise<MonitoredWallet | null> {
+  async updateMonitoredWallet(userId: number, walletId: number, updates: { label?: string; enabled?: boolean; copyTradeEnabled?: boolean }): Promise<MonitoredWallet | null> {
     const rows = await db.update(monitoredWallets)
       .set(updates)
       .where(and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, userId)))

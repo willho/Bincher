@@ -20,6 +20,7 @@ interface MonitoredWallet {
   walletAddress: string;
   label: string | null;
   enabled: boolean | null;
+  copyTradeEnabled: boolean | null;
   createdAt: number;
   isShared: boolean | null;
   shareStatus: string | null;
@@ -88,7 +89,7 @@ export function MonitoredWallets() {
   });
 
   const updateWallet = useMutation({
-    mutationFn: ({ id, ...data }: { id: number; label?: string; enabled?: boolean }) =>
+    mutationFn: ({ id, ...data }: { id: number; label?: string; enabled?: boolean; copyTradeEnabled?: boolean }) =>
       apiRequest("PATCH", `/api/monitored-wallets/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/monitored-wallets"] });
@@ -359,13 +360,35 @@ export function MonitoredWallets() {
                         </>
                       )}
                     </div>
-                    <Switch
-                      checked={wallet.enabled ?? true}
-                      onCheckedChange={(enabled) =>
-                        updateWallet.mutate({ id: wallet.id, enabled })
-                      }
-                      data-testid={`switch-wallet-enabled-${wallet.id}`}
-                    />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1">
+                          <Switch
+                            checked={wallet.enabled ?? true}
+                            onCheckedChange={(enabled) =>
+                              updateWallet.mutate({ id: wallet.id, enabled })
+                            }
+                            data-testid={`switch-wallet-enabled-${wallet.id}`}
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>Monitor wallet swaps</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1">
+                          <Switch
+                            checked={wallet.copyTradeEnabled ?? false}
+                            onCheckedChange={(copyTradeEnabled) =>
+                              updateWallet.mutate({ id: wallet.id, copyTradeEnabled })
+                            }
+                            data-testid={`switch-wallet-copy-${wallet.id}`}
+                            className={wallet.copyTradeEnabled ? "data-[state=checked]:bg-green-500" : ""}
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>Copy trades from this wallet</TooltipContent>
+                    </Tooltip>
                     <Button
                       size="icon"
                       variant="ghost"
