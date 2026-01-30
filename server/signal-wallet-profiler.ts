@@ -314,8 +314,42 @@ export function getProfileSummary(profile: SignalWalletProfileData): string {
   return parts.join(", ") || "no trading history";
 }
 
+export type RiskProfile = "conservative" | "balanced" | "aggressive" | "custom";
+
+function normalizeProfitPercentages(percentages: number[], targetLength: number): number[] {
+  let result = [...percentages];
+  
+  while (result.length < targetLength) {
+    result.push(result[result.length - 1] || 25);
+  }
+  while (result.length > targetLength) {
+    result.pop();
+  }
+  
+  const total = result.reduce((sum, p) => sum + p, 0);
+  if (total !== 100 && total > 0) {
+    const ratio = 100 / total;
+    result = result.map(p => Math.round(p * ratio));
+    const diff = 100 - result.reduce((sum, p) => sum + p, 0);
+    if (diff !== 0 && result.length > 0) {
+      result[0] += diff;
+    }
+  }
+  
+  return result;
+}
+
+export interface PositionConfigInput {
+  walletAddress: string;
+  tokenScore?: number;
+  hasWhaleActivity?: boolean;
+  riskProfile?: RiskProfile;
+  recentVolatility?: number;
+  marketTrend?: "bullish" | "bearish" | "neutral";
+}
+
 export async function suggestPositionConfig(
-  walletAddress: string,
+  input: PositionConfigInput | string,
   tokenScore?: number,
   hasWhaleActivity?: boolean
 ): Promise<{
@@ -323,15 +357,23 @@ export async function suggestPositionConfig(
   takeProfitPercentages: number[];
   stopLossPercent: number;
   reasoning: string;
+  confidenceLevel: "high" | "medium" | "low";
 }> {
-  const profile = await getSignalWalletProfile(walletAddress);
+  const params: PositionConfigInput = typeof input === "string"
+    ? { walletAddress: input, tokenScore, hasWhaleActivity }
+    : input;
+  
+  const profile = await getSignalWalletProfile(params.walletAddress);
   
   let takeProfitThresholds = [4, 10, 25, 100];
   let takeProfitPercentages = [25, 25, 25, 25];
   let stopLossPercent = 50;
   const reasons: string[] = [];
+  let confidenceLevel: "high" | "medium" | "low" = "medium";
   
   if (profile && profile.totalTrades >= 5) {
+    confidenceLevel = profile.totalTrades >= 20 ? "high" : "medium";
+    
     if (profile.tradingStyle === "insider") {
       const typicalExit = profile.avgExitMultiplier ?? 10;
       const safeExit = Math.max(2, Math.floor(typicalExit * 0.8));
@@ -353,29 +395,71 @@ export async function suggestPositionConfig(
       takeProfitThresholds = takeProfitThresholds.map(t => Math.max(2, Math.floor(t * 0.7)));
       stopLossPercent = Math.max(20, stopLossPercent - 15);
       reasons.push("Recent performance weak - being more cautious");
+      confidenceLevel = "low";
     }
+  } else {
+    confidenceLevel = "low";
   }
   
-  if (tokenScore !== undefined) {
-    if (tokenScore >= 85) {
+  const riskProfile = params.riskProfile || "balanced";
+  if (riskProfile === "conservative") {
+    takeProfitThresholds = takeProfitThresholds.map(t => Math.max(2, Math.floor(t * 0.7)));
+    takeProfitPercentages = takeProfitPercentages.map((p, i) => i === 0 ? p + 15 : p - 5);
+    stopLossPercent = Math.max(15, stopLossPercent - 20);
+    reasons.push("Conservative profile - tighter exits and stops");
+  } else if (riskProfile === "aggressive") {
+    takeProfitThresholds = takeProfitThresholds.map(t => Math.floor(t * 1.4));
+    takeProfitPercentages = takeProfitPercentages.map((p, i) => i === takeProfitPercentages.length - 1 ? p + 15 : p - 5);
+    stopLossPercent = Math.min(80, stopLossPercent + 20);
+    reasons.push("Aggressive profile - wider targets and stops");
+  }
+  
+  if (params.tokenScore !== undefined) {
+    if (params.tokenScore >= 85) {
       takeProfitThresholds = takeProfitThresholds.map(t => Math.floor(t * 1.3));
       reasons.push("High token score - room for bigger gains");
-    } else if (tokenScore < 50) {
+    } else if (params.tokenScore < 50) {
       takeProfitThresholds = takeProfitThresholds.map(t => Math.max(2, Math.floor(t * 0.7)));
       stopLossPercent = Math.max(20, stopLossPercent - 10);
       reasons.push("Low token score - quick exit strategy");
     }
   }
   
-  if (hasWhaleActivity) {
+  if (params.hasWhaleActivity) {
     takeProfitThresholds = takeProfitThresholds.map(t => Math.floor(t * 1.2));
     reasons.push("Whale backing detected - holding longer");
   }
+  
+  if (params.recentVolatility !== undefined) {
+    if (params.recentVolatility > 50) {
+      takeProfitThresholds = takeProfitThresholds.map(t => Math.max(2, Math.floor(t * 0.8)));
+      takeProfitPercentages = takeProfitPercentages.map((p, i) => i === 0 ? p + 10 : p - 3);
+      stopLossPercent = Math.max(20, stopLossPercent - 10);
+      reasons.push("High volatility - tighter exits");
+    } else if (params.recentVolatility < 15) {
+      takeProfitThresholds = takeProfitThresholds.map(t => Math.floor(t * 1.15));
+      reasons.push("Low volatility - patience for moves");
+    }
+  }
+  
+  if (params.marketTrend) {
+    if (params.marketTrend === "bearish") {
+      takeProfitThresholds = takeProfitThresholds.map(t => Math.max(2, Math.floor(t * 0.75)));
+      stopLossPercent = Math.max(20, stopLossPercent - 15);
+      reasons.push("Bearish market - defensive stance");
+    } else if (params.marketTrend === "bullish") {
+      takeProfitThresholds = takeProfitThresholds.map(t => Math.floor(t * 1.2));
+      reasons.push("Bullish market - letting winners run");
+    }
+  }
+  
+  takeProfitPercentages = normalizeProfitPercentages(takeProfitPercentages, takeProfitThresholds.length);
   
   return {
     takeProfitThresholds,
     takeProfitPercentages,
     stopLossPercent,
     reasoning: reasons.join(". ") || "Using default config",
+    confidenceLevel,
   };
 }

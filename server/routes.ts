@@ -1190,10 +1190,17 @@ export async function registerRoutes(
   app.get("/api/position-config-suggestion/:address", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const { suggestPositionConfig } = await import("./signal-wallet-profiler");
-      const tokenScore = req.query.tokenScore ? parseInt(req.query.tokenScore as string) : undefined;
-      const hasWhaleActivity = req.query.hasWhaleActivity === "true";
       
-      const suggestion = await suggestPositionConfig(req.params.address, tokenScore, hasWhaleActivity);
+      const input = {
+        walletAddress: req.params.address as string,
+        tokenScore: req.query.tokenScore ? parseInt(req.query.tokenScore as string) : undefined,
+        hasWhaleActivity: req.query.hasWhaleActivity === "true",
+        riskProfile: (req.query.riskProfile as "conservative" | "balanced" | "aggressive" | "custom") || undefined,
+        recentVolatility: req.query.volatility ? parseFloat(req.query.volatility as string) : undefined,
+        marketTrend: (req.query.marketTrend as "bullish" | "bearish" | "neutral") || undefined,
+      };
+      
+      const suggestion = await suggestPositionConfig(input);
       res.json(suggestion);
     } catch (error) {
       console.error("Error getting position config suggestion:", error);
