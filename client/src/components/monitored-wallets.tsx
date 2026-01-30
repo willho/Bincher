@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { Link, useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X, Share2, Users, Clock, CheckCircle, XCircle, Brain, Activity, TrendingUp } from "lucide-react";
+import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X, Share2, Users, Clock, CheckCircle, XCircle, Brain, Activity, TrendingUp, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Swap } from "@shared/schema";
 
@@ -38,6 +39,7 @@ export function MonitoredWallets() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
 
   const { data: wallets, isLoading } = useQuery<MonitoredWallet[]>({
     queryKey: ["/api/monitored-wallets"],
@@ -276,7 +278,11 @@ export function MonitoredWallets() {
                 <div
                   key={wallet.id}
                   data-testid={`wallet-item-${wallet.id}`}
-                  className="flex flex-col gap-2 p-3 bg-muted/50 rounded-lg"
+                  className="flex flex-col gap-2 p-3 bg-muted/50 rounded-lg hover-elevate cursor-pointer group"
+                  onClick={(e) => {
+                    if ((e.target as HTMLElement).closest('button, input, [role="switch"]')) return;
+                    setLocation(`/signal/${wallet.id}`);
+                  }}
                 >
                   <div className="flex items-center gap-2">
                     <div className="flex-1 min-w-0">
@@ -369,6 +375,7 @@ export function MonitoredWallets() {
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
                   </div>
 
                   {stats && (

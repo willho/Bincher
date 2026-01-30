@@ -44,8 +44,8 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets } from "@shared/schema";
-import { eq, and, isNotNull, desc } from "drizzle-orm";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles } from "@shared/schema";
+import { eq, and, isNotNull, desc, gte, sql } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions } from "./ai";
@@ -1500,6 +1500,52 @@ export async function registerRoutes(
       }
       
       const wallet = await storage.addMonitoredWallet(req.userId!, walletAddress, label);
+      
+      // Backfill recent swap history asynchronously (don't block the response)
+      const userId = req.userId!;
+      (async () => {
+        try {
+          const { backfillWalletSwaps } = await import("./helius");
+          const result = await backfillWalletSwaps(walletAddress, 100);
+          
+          if (result.swaps.length > 0) {
+            let stored = 0;
+            for (const swap of result.swaps) {
+              try {
+                const existing = await db.select({ id: swaps.id }).from(swaps)
+                  .where(eq(swaps.signature, swap.signature))
+                  .limit(1);
+                
+                if (existing.length === 0) {
+                  await db.insert(swaps).values({
+                    userId,
+                    signature: swap.signature,
+                    timestamp: swap.timestamp,
+                    type: swap.type,
+                    source: swap.source,
+                    fromToken: swap.fromToken,
+                    fromTokenSymbol: swap.fromTokenSymbol,
+                    fromAmount: swap.fromAmount,
+                    toToken: swap.toToken,
+                    toTokenSymbol: swap.toTokenSymbol,
+                    toAmount: swap.toAmount,
+                    fee: swap.fee || null,
+                    slot: swap.slot,
+                    notificationSent: true,
+                  });
+                  stored++;
+                }
+              } catch (e) {
+                // Ignore duplicate key errors
+              }
+            }
+            console.log(`Backfill on add: Stored ${stored} swaps for ${walletAddress}`);
+          }
+        } catch (e) {
+          console.error("Backfill on add error:", e);
+        }
+      })();
+      
       res.json(wallet);
     } catch (error) {
       console.error("Error adding monitored wallet:", error);
@@ -1645,6 +1691,228 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error updating wallet copy config:", error);
       res.status(500).json({ error: "Failed to update wallet copy config" });
+    }
+  });
+
+  // Get signal wallet activity (trades, stats, hit rate)
+  app.get("/api/signal-wallets/:id/activity", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      const timeframe = req.query.timeframe as string || "24h";
+      
+      // Get wallet and verify ownership
+      const [wallet] = await db.select().from(monitoredWallets).where(
+        and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, req.userId!))
+      ).limit(1);
+      
+      if (!wallet) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      
+      // Calculate timeframe cutoff
+      const now = Math.floor(Date.now() / 1000);
+      let cutoff = 0;
+      switch (timeframe) {
+        case "24h": cutoff = now - 86400; break;
+        case "7d": cutoff = now - 7 * 86400; break;
+        case "30d": cutoff = now - 30 * 86400; break;
+        case "all": cutoff = 0; break;
+        default: cutoff = now - 86400;
+      }
+      
+      // Query swaps for this wallet address
+      const walletSwaps = await db.select().from(swaps)
+        .where(
+          and(
+            eq(swaps.source, wallet.walletAddress),
+            gte(swaps.timestamp, cutoff)
+          )
+        )
+        .orderBy(sql`${swaps.timestamp} DESC`)
+        .limit(500);
+      
+      // Get signal wallet profile for aggregated stats
+      const [profile] = await db.select().from(signalWalletProfiles)
+        .where(eq(signalWalletProfiles.walletAddress, wallet.walletAddress))
+        .limit(1);
+      
+      // Calculate stats from swaps
+      const SOL_MINT = "So11111111111111111111111111111111111111112";
+      const buys = walletSwaps.filter(s => s.fromToken === SOL_MINT);
+      const sells = walletSwaps.filter(s => s.toToken === SOL_MINT);
+      
+      // Token tracking for hit rate
+      const tokenBuys: Record<string, { amount: number; solSpent: number; timestamp: number }> = {};
+      const tokenSells: Record<string, { solReceived: number }> = {};
+      
+      for (const swap of buys) {
+        const token = swap.toToken;
+        if (!tokenBuys[token]) {
+          tokenBuys[token] = { amount: 0, solSpent: 0, timestamp: swap.timestamp };
+        }
+        tokenBuys[token].amount += swap.toAmount;
+        tokenBuys[token].solSpent += swap.fromAmount;
+      }
+      
+      for (const swap of sells) {
+        const token = swap.fromToken;
+        if (!tokenSells[token]) {
+          tokenSells[token] = { solReceived: 0 };
+        }
+        tokenSells[token].solReceived += swap.toAmount;
+      }
+      
+      // Calculate P&L for closed positions
+      let totalSolSpent = 0;
+      let totalSolReceived = 0;
+      let profitableTrades = 0;
+      let closedTrades = 0;
+      
+      for (const token of Object.keys(tokenBuys)) {
+        const buy = tokenBuys[token];
+        const sell = tokenSells[token];
+        
+        totalSolSpent += buy.solSpent;
+        
+        if (sell) {
+          totalSolReceived += sell.solReceived;
+          closedTrades++;
+          if (sell.solReceived > buy.solSpent) {
+            profitableTrades++;
+          }
+        }
+      }
+      
+      const hitRate = closedTrades > 0 ? (profitableTrades / closedTrades) * 100 : 0;
+      const realizedPnl = totalSolReceived - totalSolSpent;
+      
+      // Get most traded tokens
+      const tokenCounts: Record<string, { symbol: string; count: number }> = {};
+      for (const swap of walletSwaps) {
+        const token = swap.fromToken === SOL_MINT ? swap.toToken : swap.fromToken;
+        const symbol = swap.fromToken === SOL_MINT ? swap.toTokenSymbol : swap.fromTokenSymbol;
+        if (!tokenCounts[token]) {
+          tokenCounts[token] = { symbol, count: 0 };
+        }
+        tokenCounts[token].count++;
+      }
+      const mostTraded = Object.entries(tokenCounts)
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, 5)
+        .map(([mint, data]) => ({ mint, symbol: data.symbol, tradeCount: data.count }));
+      
+      res.json({
+        wallet: {
+          id: wallet.id,
+          address: wallet.walletAddress,
+          label: wallet.label,
+          copyTradeEnabled: wallet.copyTradeEnabled,
+          enabled: wallet.enabled,
+        },
+        timeframe,
+        trades: walletSwaps.map(s => ({
+          id: s.id,
+          signature: s.signature,
+          timestamp: s.timestamp,
+          type: s.type,
+          fromToken: s.fromToken,
+          fromTokenSymbol: s.fromTokenSymbol,
+          fromAmount: s.fromAmount,
+          toToken: s.toToken,
+          toTokenSymbol: s.toTokenSymbol,
+          toAmount: s.toAmount,
+          isBuy: s.fromToken === SOL_MINT,
+        })),
+        stats: {
+          totalTrades: walletSwaps.length,
+          buys: buys.length,
+          sells: sells.length,
+          closedPositions: closedTrades,
+          profitableTrades,
+          hitRate: Math.round(hitRate * 10) / 10,
+          totalSolSpent: Math.round(totalSolSpent * 1000) / 1000,
+          totalSolReceived: Math.round(totalSolReceived * 1000) / 1000,
+          realizedPnl: Math.round(realizedPnl * 1000) / 1000,
+          mostTradedTokens: mostTraded,
+        },
+        profile: profile ? {
+          tradingStyle: profile.tradingStyle,
+          winRate: profile.winRate,
+          avgExitMultiplier: profile.avgExitMultiplier,
+          totalTrades: profile.totalTrades,
+          lastTradeAt: profile.lastTradeAt,
+        } : null,
+      });
+    } catch (error) {
+      console.error("Error getting signal wallet activity:", error);
+      res.status(500).json({ error: "Failed to get wallet activity" });
+    }
+  });
+
+  // Backfill signal wallet swap history from Helius
+  app.post("/api/signal-wallets/:id/backfill", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      // Get wallet and verify ownership
+      const [wallet] = await db.select().from(monitoredWallets).where(
+        and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, req.userId!))
+      ).limit(1);
+      
+      if (!wallet) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      
+      // Import and call backfill function
+      const { backfillWalletSwaps } = await import("./helius");
+      const result = await backfillWalletSwaps(wallet.walletAddress, 100);
+      
+      if (result.error) {
+        return res.status(500).json({ error: result.error });
+      }
+      
+      // Store swaps that don't already exist
+      let stored = 0;
+      for (const swap of result.swaps) {
+        try {
+          // Check if swap already exists
+          const existing = await db.select({ id: swaps.id }).from(swaps)
+            .where(eq(swaps.signature, swap.signature))
+            .limit(1);
+          
+          if (existing.length === 0) {
+            await db.insert(swaps).values({
+              userId: req.userId,
+              signature: swap.signature,
+              timestamp: swap.timestamp,
+              type: swap.type,
+              source: swap.source,
+              fromToken: swap.fromToken,
+              fromTokenSymbol: swap.fromTokenSymbol,
+              fromAmount: swap.fromAmount,
+              toToken: swap.toToken,
+              toTokenSymbol: swap.toTokenSymbol,
+              toAmount: swap.toAmount,
+              fee: swap.fee || null,
+              slot: swap.slot,
+              notificationSent: true, // Don't notify for backfilled swaps
+            });
+            stored++;
+          }
+        } catch (e) {
+          // Ignore duplicate key errors
+        }
+      }
+      
+      res.json({
+        success: true,
+        walletAddress: wallet.walletAddress,
+        swapsFound: result.swaps.length,
+        swapsStored: stored,
+      });
+    } catch (error) {
+      console.error("Error backfilling signal wallet:", error);
+      res.status(500).json({ error: "Failed to backfill wallet history" });
     }
   });
 

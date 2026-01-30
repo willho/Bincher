@@ -634,3 +634,137 @@ export async function updateWebhookUrl(webhookId: string, newUrl: string, wallet
     return false;
   }
 }
+
+// Backfill recent swap history for a wallet address using Helius enhanced transactions API
+export interface BackfillResult {
+  success: boolean;
+  swapsFound: number;
+  swapsStored: number;
+  error?: string;
+}
+
+export async function backfillWalletSwaps(
+  walletAddress: string,
+  maxTransactions: number = 100
+): Promise<{ swaps: InsertSwap[]; error?: string }> {
+  if (!HELIUS_API_KEY) {
+    return { swaps: [], error: "Helius API key not configured" };
+  }
+  
+  const budgetCheck = await shouldAllowApiCall("helius");
+  if (!budgetCheck.allowed) {
+    return { swaps: [], error: `API budget exceeded: ${budgetCheck.reason}` };
+  }
+  
+  try {
+    const apiBase = await getHeliusApiEndpoint();
+    const url = `${apiBase}/v0/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&limit=${maxTransactions}`;
+    
+    const response = await fetch(url);
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { swaps: [], error: `Helius API error: ${errorText}` };
+    }
+    
+    const transactions = await response.json();
+    await trackApiCall("helius", "backfillWalletSwaps");
+    
+    if (!Array.isArray(transactions)) {
+      return { swaps: [], error: "Unexpected response format" };
+    }
+    
+    const swaps: InsertSwap[] = [];
+    
+    for (const tx of transactions) {
+      // Only process swap transactions
+      if (tx.type !== "SWAP") continue;
+      
+      // Parse the swap from Helius enhanced transaction format
+      const swap = parseSwapFromHeliusTransaction(tx, walletAddress);
+      if (swap) {
+        swaps.push(swap);
+      }
+    }
+    
+    console.log(`Backfill: Found ${swaps.length} swaps for ${walletAddress}`);
+    return { swaps };
+  } catch (error: any) {
+    console.error("Backfill error:", error);
+    return { swaps: [], error: error.message };
+  }
+}
+
+// Parse a swap from Helius enhanced transaction format
+function parseSwapFromHeliusTransaction(tx: any, walletAddress: string): InsertSwap | null {
+  try {
+    // Helius enhanced transactions have tokenTransfers array
+    const tokenTransfers = tx.tokenTransfers || [];
+    const nativeTransfers = tx.nativeTransfers || [];
+    
+    // Find the token in and token out for this wallet
+    let fromToken = "";
+    let fromAmount = 0;
+    let fromSymbol = "";
+    let toToken = "";
+    let toAmount = 0;
+    let toSymbol = "";
+    
+    // Check native SOL transfers (in/out for this wallet)
+    for (const transfer of nativeTransfers) {
+      if (transfer.fromUserAccount === walletAddress) {
+        // SOL going out
+        fromToken = SOL_MINT;
+        fromAmount = transfer.amount / 1e9; // lamports to SOL
+        fromSymbol = "SOL";
+      }
+      if (transfer.toUserAccount === walletAddress) {
+        // SOL coming in
+        toToken = SOL_MINT;
+        toAmount = transfer.amount / 1e9;
+        toSymbol = "SOL";
+      }
+    }
+    
+    // Check token transfers
+    for (const transfer of tokenTransfers) {
+      if (transfer.fromUserAccount === walletAddress) {
+        // Token going out
+        fromToken = transfer.mint;
+        fromAmount = transfer.tokenAmount;
+        fromSymbol = transfer.tokenStandard === "Fungible" ? (transfer.symbol || "???") : "???";
+      }
+      if (transfer.toUserAccount === walletAddress) {
+        // Token coming in
+        toToken = transfer.mint;
+        toAmount = transfer.tokenAmount;
+        toSymbol = transfer.tokenStandard === "Fungible" ? (transfer.symbol || "???") : "???";
+      }
+    }
+    
+    // Need both from and to to be a valid swap
+    if (!fromToken || !toToken || fromAmount <= 0 || toAmount <= 0) {
+      return null;
+    }
+    
+    // Determine if buy or sell
+    const isBuy = isBaseCurrency(fromToken);
+    
+    return {
+      signature: tx.signature,
+      timestamp: tx.timestamp,
+      type: isBuy ? "buy" : "sell",
+      source: walletAddress,
+      fromToken,
+      fromTokenSymbol: fromSymbol,
+      fromAmount,
+      toToken,
+      toTokenSymbol: toSymbol,
+      toAmount,
+      fee: tx.fee ? tx.fee / 1e9 : undefined,
+      slot: tx.slot || 0,
+    };
+  } catch (error) {
+    console.error("Error parsing swap from Helius tx:", error);
+    return null;
+  }
+}
