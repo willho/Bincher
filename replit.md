@@ -76,6 +76,22 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 ### Copy Trading Considerations
 - **dedupSkipIfPending default**: Currently defaults to `true`, which blocks multiple buys of the same token if a pending buy exists. This may prevent copying a signal trader who averages into positions (buys same token multiple times). Consider changing default to `false` to better mirror signal behavior. Needs more thought before implementation.
 
+### Data Retention (When data exceeds 10k rows)
+- **AI Chat Summarization**: Keep 7 days detailed, weekly AI summarization of older messages with overlap for context, delete raw after summarization
+- **System Logs**: Keep 7 days detailed → aggregate to daily counts by type → delete raw after 30 days
+- **Token Events**: Bucket hourly → daily → weekly (like OHLC)
+- **Cached Alerts**: Expire after 7 days
+- **API Usage**: Bucket to daily totals per endpoint, delete raw after 7 days
+- **Holder Snapshots**: Keep only latest per token, delete previous snapshots
+- **AI Predictions**: Keep 30 days for learning, then aggregate accuracy stats only
+- Implementation: Add scheduled daily cleanup job, piggyback on price aggregation pattern
+
+### AI Learning System (Pending Wiring)
+- **aiPredictions table**: Stores Miss Pincher's predictions for learning from outcomes. Table exists but not wired up.
+- Wire prediction creation when AI analyzes tokens
+- Wire outcome resolution when positions are closed
+- Use data to improve future predictions via adaptive learning
+
 ### UI Improvements (Proposed)
 - Add real-time alerts for significant market movements
 - Focus on clarity and ease of navigation
