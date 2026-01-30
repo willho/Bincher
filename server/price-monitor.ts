@@ -505,6 +505,31 @@ async function checkHoldingPriceWithBatch(
       }
     }
     
+    // Stop-loss execution: auto-sell entire position if loss exceeds threshold
+    const stopLossPercent = holding.stopLossPercent ?? config.stopLossPercent ?? null;
+    const stopLossFloorUsd = holding.stopLossFloorUsd ?? config.stopLossFloorUsd ?? null;
+    
+    if (stopLossPercent !== null && !holding.stopLossTriggered && holding.currentAmount > 0) {
+      // Use avgEntryPrice if available (for positions with top-ups), else fallback to buyPrice
+      const entryPrice = holding.avgEntryPrice ?? holding.buyPrice;
+      if (!entryPrice || entryPrice <= 0 || !isFinite(entryPrice)) {
+        // Skip if we can't calculate loss
+      } else {
+        const lossPercent = ((entryPrice - currentPrice) / entryPrice) * 100;
+        const shouldTriggerStopLoss = lossPercent >= stopLossPercent;
+        
+        // Floor bypass: don't execute stop-loss if position value is tiny (< floor USD)
+        // currentPrice is in USD per token from Jupiter
+        const positionValueUsd = holding.currentAmount * currentPrice;
+        const floorBypass = stopLossFloorUsd !== null && positionValueUsd < stopLossFloorUsd;
+        
+        if (shouldTriggerStopLoss && !floorBypass) {
+          console.log(`Stop-loss triggered for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss >= ${stopLossPercent}% threshold`);
+          await executeStopLoss(userId, holding, currentPrice, lossPercent);
+        }
+      }
+    }
+    
   } catch (error) {
     console.error(`Error checking price for ${holding.tokenSymbol}:`, error);
   }
@@ -778,6 +803,139 @@ async function executeProgressiveReclaim(
 
   } catch (error) {
     console.error(`Error executing progressive reclaim for ${holding.tokenSymbol}:`, error);
+  }
+}
+
+async function executeStopLoss(
+  userId: number,
+  holding: typeof holdings.$inferSelect,
+  currentPrice: number,
+  lossPercent: number
+): Promise<void> {
+  try {
+    if (!currentPrice || currentPrice <= 0 || !isFinite(currentPrice)) {
+      console.log(`Invalid price for stop-loss ${holding.tokenSymbol}: ${currentPrice}`);
+      return;
+    }
+    
+    if (!holding.currentAmount || holding.currentAmount <= 0) {
+      console.log(`No tokens for stop-loss in ${holding.tokenSymbol}`);
+      return;
+    }
+    
+    // Sell entire position
+    const tokensToSell = holding.currentAmount;
+
+    console.log(`Executing stop-loss for ${holding.tokenSymbol}: selling ${tokensToSell.toLocaleString()} tokens (100% - ${lossPercent.toFixed(1)}% loss)`);
+
+    let result;
+    
+    // Use token wallet if available, otherwise fall back to main wallet
+    if (holding.tokenWalletEncryptedKey) {
+      const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
+      if (!tokenWalletKeypair) {
+        console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
+        result = await sellToken(userId, holding.tokenMint, tokensToSell);
+      } else {
+        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        
+        // Send any remaining SOL back to main wallet
+        if (result.success) {
+          const mainWallet = await getOrCreateHotWallet(userId);
+          if (mainWallet) {
+            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+            const profitResult = await sendProfitsToMainWallet(
+              tokenWalletKeypair,
+              mainWallet.publicKey,
+              gasReserve
+            );
+            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL back to main wallet after stop-loss`);
+            }
+          }
+        }
+      }
+    } else {
+      result = await sellToken(userId, holding.tokenMint, tokensToSell);
+    }
+    
+    if (!result.success) {
+      console.error(`Stop-loss failed for ${holding.tokenSymbol}:`, result.error);
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Mark position as stop-loss triggered and zero out
+    await db.update(holdings).set({
+      currentAmount: 0,
+      stopLossTriggered: true,
+      stopLossTimestamp: now,
+      stopLossSignature: result.signature,
+    }).where(eq(holdings.id, holding.id));
+
+    console.log(`Stop-loss executed for ${holding.tokenSymbol}:`);
+    console.log(`  Loss: ${lossPercent.toFixed(1)}%`);
+    console.log(`  Signature: ${result.signature}`);
+    console.log(`  Tokens sold: ${tokensToSell.toLocaleString()}`);
+    console.log(`  SOL recovered: ~${result.inputAmount} SOL`);
+
+    await sendStopLossNotification(userId, holding, tokensToSell, result.inputAmount || 0, lossPercent, result.signature);
+
+  } catch (error) {
+    console.error(`Error executing stop-loss for ${holding.tokenSymbol}:`, error);
+  }
+}
+
+async function sendStopLossNotification(
+  userId: number,
+  holding: typeof holdings.$inferSelect,
+  tokensSold: number,
+  solReceived: number,
+  lossPercent: number,
+  signature: string
+): Promise<void> {
+  const settings = await storage.getNotificationSettings(userId);
+  if (!settings?.enabled || !settings.emails?.length) {
+    return;
+  }
+
+  const subject = `Stop-loss triggered: ${holding.tokenSymbol}`;
+  
+  const html = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #1a1a2e; color: #fff; padding: 20px; border-radius: 12px;">
+      <h2 style="color: #ff4444; margin-bottom: 20px;">Stop-Loss Executed: ${holding.tokenSymbol}</h2>
+      
+      <div style="background: #16213e; padding: 16px; border-radius: 8px; margin-bottom: 16px;">
+        <table style="width: 100%; color: #e0e0e0;">
+          <tr>
+            <td style="padding: 4px 0;">Loss:</td>
+            <td style="text-align: right; color: #ff4444;">${lossPercent.toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Tokens Sold:</td>
+            <td style="text-align: right;">${formatNumber(tokensSold)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">SOL Recovered:</td>
+            <td style="text-align: right; color: #00ff88;">${solReceived.toFixed(4)} SOL</td>
+          </tr>
+          <tr>
+            <td style="padding: 4px 0;">Original Investment:</td>
+            <td style="text-align: right;">${holding.solSpent.toFixed(4)} SOL</td>
+          </tr>
+        </table>
+      </div>
+      
+      <a href="https://solscan.io/tx/${signature}" style="display: block; text-align: center; color: #64b5f6; margin-top: 16px;">View Transaction</a>
+    </div>
+  `;
+
+  try {
+    await sendEmail(settings.emails, subject, html);
+    console.log(`Stop-loss notification sent for ${holding.tokenSymbol}`);
+  } catch (error) {
+    console.error(`Failed to send stop-loss notification:`, error);
   }
 }
 

@@ -195,6 +195,9 @@ export const holdings = pgTable("holdings", {
   takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>(), // Percent to sell at each threshold [25, 25, 25, 25]
   stopLossPercent: real("stop_loss_percent"), // Sell if price drops by this %
   stopLossFloorUsd: real("stop_loss_floor_usd"), // Sell if value drops below this $
+  stopLossTriggered: boolean("stop_loss_triggered").default(false), // True if stop-loss was executed
+  stopLossTimestamp: integer("stop_loss_timestamp"), // Unix timestamp when stop-loss was triggered
+  stopLossSignature: text("stop_loss_signature"), // Transaction signature of stop-loss sell
   autoMirrorSells: boolean("auto_mirror_sells").default(false), // Mirror signal wallet sells
   positionSource: text("position_source").default("copy"), // "copy" | "manual" | "autonomous" | "swing"
   signalWalletId: integer("signal_wallet_id"), // Reference to monitored wallet that signaled
@@ -251,6 +254,10 @@ export const tradeConfig = pgTable("trade_config", {
   dumpAlertEnabled: boolean("dump_alert_enabled").default(true),
   dumpAlertThreshold: real("dump_alert_threshold").default(50),
   minBuyScore: integer("min_buy_score"),
+  
+  // Stop-loss defaults (Phase 8)
+  stopLossPercent: real("stop_loss_percent"), // Default stop-loss % for new positions
+  stopLossFloorUsd: real("stop_loss_floor_usd"), // Default floor value to bypass stop-loss
   
   // Trading budget limits (Phase 8)
   maxTradeUsd: real("max_trade_usd"), // Max per trade in USD
