@@ -1155,9 +1155,21 @@ export async function registerRoutes(
     try {
       const userId = req.userId!;
       const user = await storage.getUserById(userId);
+      
+      // If not linked, generate a link token
+      let linkToken: string | undefined;
+      if (!user?.telegramChatId) {
+        try {
+          linkToken = await createLinkToken(userId);
+        } catch (tokenError) {
+          console.error("Error creating link token:", tokenError);
+        }
+      }
+      
       res.json({
         linked: !!user?.telegramChatId,
         linkedAt: user?.telegramLinkedAt,
+        linkToken,
       });
     } catch (error) {
       console.error("Error getting Telegram status:", error);
