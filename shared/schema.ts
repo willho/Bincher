@@ -990,6 +990,85 @@ export const insertLinkTokenSchema = createInsertSchema(linkTokens).omit({ id: t
 export type LinkToken = typeof linkTokens.$inferSelect;
 export type InsertLinkToken = z.infer<typeof insertLinkTokenSchema>;
 
+// AI prediction tracking - Miss Pincher's self-accuracy monitoring
+export const aiPredictions = pgTable("ai_predictions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  snapshotId: integer("snapshot_id"),
+  
+  // Prediction data
+  predictedScore: integer("predicted_score").notNull(), // 0-100 score at time of prediction
+  predictedOutcome: text("predicted_outcome").notNull(), // "bullish" | "bearish" | "neutral"
+  confidenceLevel: real("confidence_level").default(0.5), // 0-1 how confident was the prediction
+  reasoning: text("reasoning"), // Why this prediction was made
+  redFlags: jsonb("red_flags").$type<string[]>(),
+  greenFlags: jsonb("green_flags").$type<string[]>(),
+  
+  // Outcome data (filled in after resolution)
+  actualOutcome: text("actual_outcome"), // "win" | "loss" | "breakeven"
+  priceAtPrediction: real("price_at_prediction"),
+  priceAtResolution: real("price_at_resolution"),
+  outcomeMultiplier: real("outcome_multiplier"), // actual price change multiplier
+  holdTimeMinutes: integer("hold_time_minutes"),
+  wasAccurate: boolean("was_accurate"), // true if prediction matched outcome
+  
+  // Timing
+  predictedAt: integer("predicted_at").notNull(),
+  resolvedAt: integer("resolved_at"),
+  
+  // Context for learning
+  priceContextAt: jsonb("price_context_at").$type<{
+    marketCap?: number;
+    liquidity?: number;
+    volume24h?: number;
+    heatScore?: number;
+    whaleActivity?: boolean;
+  }>(),
+});
+
+export const insertAiPredictionSchema = createInsertSchema(aiPredictions).omit({ id: true });
+export type AiPrediction = typeof aiPredictions.$inferSelect;
+export type InsertAiPrediction = z.infer<typeof insertAiPredictionSchema>;
+
+// AI accuracy stats - aggregated accuracy metrics
+export const aiAccuracyStats = pgTable("ai_accuracy_stats", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  
+  // Overall stats
+  totalPredictions: integer("total_predictions").default(0),
+  resolvedPredictions: integer("resolved_predictions").default(0),
+  accuratePredictions: integer("accurate_predictions").default(0),
+  overallHitRate: real("overall_hit_rate"), // 0-1
+  
+  // By outcome type
+  bullishPredictions: integer("bullish_predictions").default(0),
+  bullishAccurate: integer("bullish_accurate").default(0),
+  bearishPredictions: integer("bearish_predictions").default(0),
+  bearishAccurate: integer("bearish_accurate").default(0),
+  
+  // Performance metrics
+  avgMultiplierOnWins: real("avg_multiplier_on_wins"),
+  avgMultiplierOnLosses: real("avg_multiplier_on_losses"),
+  avgConfidence: real("avg_confidence"),
+  
+  // Time-based tracking
+  last7dHitRate: real("last_7d_hit_rate"),
+  last30dHitRate: real("last_30d_hit_rate"),
+  
+  // Confidence calibration
+  highConfidenceHitRate: real("high_confidence_hit_rate"), // predictions with confidence > 0.7
+  lowConfidenceHitRate: real("low_confidence_hit_rate"), // predictions with confidence < 0.4
+  
+  lastUpdated: integer("last_updated").notNull(),
+});
+
+export const insertAiAccuracyStatsSchema = createInsertSchema(aiAccuracyStats).omit({ id: true });
+export type AiAccuracyStats = typeof aiAccuracyStats.$inferSelect;
+export type InsertAiAccuracyStats = z.infer<typeof insertAiAccuracyStatsSchema>;
+
 // Pattern triggers - Pincher learns patterns and correlates to outcomes
 export const patternTriggers = pgTable("pattern_triggers", {
   id: serial("id").primaryKey(),

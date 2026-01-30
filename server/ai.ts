@@ -835,6 +835,27 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
         aiAnalysis: JSON.stringify(parsed),
         aiScoredAt: now,
       }).where(eq(tokenSnapshots.id, snapshotId));
+      
+      // Record prediction for accuracy tracking
+      try {
+        const { recordPredictionFromScore } = await import("./ai-accuracy");
+        await recordPredictionFromScore(
+          snapshot.userId ?? null,
+          snapshot.tokenMint,
+          snapshot.tokenSymbol,
+          snapshotId,
+          parsed.score,
+          parsed.reasoning,
+          parsed.redFlags || [],
+          parsed.greenFlags || [],
+          snapshot.priceUsd ?? undefined,
+          snapshot.marketCap ?? undefined,
+          snapshot.liquidity ?? undefined,
+          snapshot.volume24h ?? undefined
+        );
+      } catch (predictionError) {
+        console.error("Failed to record prediction for accuracy tracking:", predictionError);
+      }
     } catch (dbError) {
       console.error("Failed to update snapshot with AI score:", dbError);
       return null;
@@ -868,6 +889,17 @@ export async function updateSnapshotOutcome(
     holdTimeMinutes,
     outcomeUpdatedAt: now,
   }).where(eq(tokenSnapshots.id, snapshotId));
+  
+  // Resolve prediction tied to this specific snapshot
+  if (snapshot && snapshot.priceUsd) {
+    try {
+      const { resolvePredictionBySnapshotId } = await import("./ai-accuracy");
+      const currentPrice = snapshot.priceUsd * finalMultiplier;
+      await resolvePredictionBySnapshotId(snapshotId, currentPrice, holdTimeMinutes);
+    } catch (resolutionError) {
+      console.error("Failed to resolve prediction:", resolutionError);
+    }
+  }
   
   const walletToUpdate = sourceWalletAddress || (snapshot?.sourceWallets?.[0] as string | undefined);
   
@@ -1394,6 +1426,18 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
             description: "Amount of SOL to request (default 1, max 2)"
           }
         },
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_my_accuracy",
+      description: "Get Miss Pincher's prediction accuracy stats. Shows hit rate, performance by prediction type, and confidence calibration. Use when user asks about accuracy, performance, or how good predictions are.",
+      parameters: {
+        type: "object",
+        properties: {},
         required: []
       }
     }
@@ -2691,6 +2735,9 @@ POSITIONS & MANUAL TRADING:
 DEVNET (testing only):
 - request_devnet_faucet: Request SOL from devnet faucet (only works on devnet)
 
+SELF-REFLECTION:
+- get_my_accuracy: Check my prediction accuracy stats (hit rate, calibration)
+
 TOKEN ANALYSIS:
 - refresh_token_score: Refresh/rescore a specific token
 - refresh_all_scores: Refresh all token scores
@@ -2847,6 +2894,12 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
           else if (toolName === "request_devnet_faucet") {
             const result = await executeDevnetFaucet(userId, args);
             toolResults.push(result.message);
+          }
+          // Accuracy stats
+          else if (toolName === "get_my_accuracy") {
+            const { getAccuracySummaryForChat } = await import("./ai-accuracy");
+            const summary = await getAccuracySummaryForChat(userId);
+            toolResults.push(summary);
           }
         } catch (parseError) {
           console.error("Failed to parse tool arguments:", parseError);
