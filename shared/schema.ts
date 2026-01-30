@@ -759,6 +759,9 @@ export const holdingSchema = z.object({
   positionSource: z.string().default("copy"),
   signalWalletId: z.number().optional(),
   entryReason: z.string().optional(),
+  // Position status and autonomy (Phase 9)
+  positionStatus: z.enum(["active", "pending", "inactive"]).default("active"),
+  autonomyEnabled: z.boolean().default(false),
 });
 
 export type Holding = z.infer<typeof holdingSchema>;

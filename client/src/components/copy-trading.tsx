@@ -12,21 +12,27 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { 
   ArrowUpRight,
   Bot,
+  ChevronDown,
   Clock,
   Copy,
   DollarSign,
   ExternalLink, 
+  Eye,
+  EyeOff,
   Key,
   Loader2,
   Pause,
   Play,
   Plus,
   RefreshCw,
+  Settings,
   Trash2,
   TrendingUp,
   Wallet,
   XCircle,
+  Zap,
 } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import type { TradeConfig, Holding, PendingBuy } from "@shared/schema";
 
@@ -50,6 +56,9 @@ export function CopyTrading() {
   const [exportedKey, setExportedKey] = useState<string | null>(null);
   const [exportingHoldingId, setExportingHoldingId] = useState<number | null>(null);
   const [hideDeadDust, setHideDeadDust] = useState(true);
+  const [activeOpen, setActiveOpen] = useState(true);
+  const [pendingOpen, setPendingOpen] = useState(true);
+  const [inactiveOpen, setInactiveOpen] = useState(false);
 
   const copyToClipboard = async (text: string, label: string = "Address") => {
     try {
@@ -217,6 +226,20 @@ export function CopyTrading() {
     },
     onError: (error: any) => {
       toast({ description: error.message || "Failed to cancel", variant: "destructive" });
+    },
+  });
+
+  const updateHoldingStatus = useMutation({
+    mutationFn: (data: { holdingId: number; positionStatus?: string; autonomyEnabled?: boolean }) => 
+      apiRequest("PATCH", `/api/holdings/${data.holdingId}/status`, {
+        positionStatus: data.positionStatus,
+        autonomyEnabled: data.autonomyEnabled,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/holdings"] });
+    },
+    onError: (error: any) => {
+      toast({ description: error.message || "Failed to update", variant: "destructive" });
     },
   });
 
@@ -760,7 +783,7 @@ export function CopyTrading() {
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <TrendingUp className="h-5 w-5" />
-                  Holdings
+                  Positions
                 </CardTitle>
                 <div className="flex items-center gap-2">
                   <Label htmlFor="hide-dead-dust" className="text-xs text-muted-foreground cursor-pointer">
@@ -775,7 +798,7 @@ export function CopyTrading() {
                 </div>
               </div>
               <CardDescription>
-                Tokens bought through copy trading
+                Tokens bought through copy trading - organized by status
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -786,76 +809,84 @@ export function CopyTrading() {
                   ))}
                 </div>
               ) : (() => {
-                const visibleHoldings = holdings?.filter((h) => !hideDeadDust || (!h.isDead && !h.isDust)) ?? [];
-                const hiddenCount = (holdings?.length ?? 0) - visibleHoldings.length;
+                const allHoldings = holdings ?? [];
+                const visibleHoldings = allHoldings.filter((h) => !hideDeadDust || (!h.isDead && !h.isDust));
+                const hiddenCount = allHoldings.length - visibleHoldings.length;
                 
-                if (visibleHoldings.length > 0) {
+                const activeHoldings = visibleHoldings.filter((h) => 
+                  h.positionStatus === "active" || (!h.positionStatus && h.currentAmount > 0)
+                );
+                const pendingHoldings = visibleHoldings.filter((h) => h.positionStatus === "pending");
+                const inactiveHoldings = visibleHoldings.filter((h) => 
+                  h.positionStatus === "inactive" || (!h.positionStatus && h.currentAmount <= 0)
+                );
+
+                const renderHolding = (holding: Holding) => {
+                  const multiplier = holding.lastPrice && holding.buyPrice 
+                    ? (holding.lastPrice / holding.buyPrice)
+                    : 1;
+                  const isProfit = multiplier > 1;
+                  const reclaimedMilestones = holding.reclaimedMilestones || [];
+                  const isAutonomyEnabled = holding.autonomyEnabled ?? false;
+                  
                   return (
-                    <div className="space-y-2">
-                      {hiddenCount > 0 && (
-                        <p className="text-xs text-muted-foreground text-center pb-2">
-                          {hiddenCount} dead/dust token{hiddenCount > 1 ? 's' : ''} hidden
-                        </p>
-                      )}
-                      {visibleHoldings.map((holding) => {
-                    const multiplier = holding.lastPrice && holding.buyPrice 
-                      ? (holding.lastPrice / holding.buyPrice)
-                      : 1;
-                    const isProfit = multiplier > 1;
-                    
-                    const reclaimedMilestones = holding.reclaimedMilestones || [];
-                    
-                    return (
-                      <div
-                        key={holding.id}
-                        className="p-4 rounded-lg border bg-muted/30 space-y-3"
-                        data-testid={`holding-${holding.id}`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-full ${isProfit ? "bg-green-500/10" : "bg-red-500/10"}`}>
-                              <DollarSign className={`h-4 w-4 ${isProfit ? "text-green-500" : "text-red-500"}`} />
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <p className="font-medium">{holding.tokenSymbol}</p>
-                                {holding.isDead && (
-                                  <Badge variant="destructive" className="text-xs">Dead</Badge>
-                                )}
-                                {holding.isDust && !holding.isDead && (
-                                  <Badge variant="secondary" className="text-xs">Dust</Badge>
-                                )}
-                                {reclaimedMilestones.length > 0 && reclaimedMilestones.map((m) => (
-                                  <Badge key={m} variant={m === 4 ? "secondary" : "outline"} className="text-xs">
-                                    {m}x
-                                  </Badge>
-                                ))}
-                              </div>
-                              <p className="text-xs text-muted-foreground">
-                                Bought: {holding.solSpent.toFixed(4)} SOL @ {formatPrice(holding.buyPrice)}
-                              </p>
-                              {holding.sourceWalletAddress && (
-                                <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-                                  <Wallet className="h-3 w-3" />
-                                  <span>
-                                    Copied from: {holding.sourceWalletLabel || `${holding.sourceWalletAddress.slice(0, 6)}...${holding.sourceWalletAddress.slice(-4)}`}
-                                  </span>
-                                </div>
+                    <div
+                      key={holding.id}
+                      className="p-4 rounded-lg border bg-muted/30 space-y-3"
+                      data-testid={`holding-${holding.id}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className={`p-2 rounded-full ${isProfit ? "bg-green-500/10" : "bg-red-500/10"}`}>
+                            <DollarSign className={`h-4 w-4 ${isProfit ? "text-green-500" : "text-red-500"}`} />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-medium">{holding.tokenSymbol}</p>
+                              {holding.isDead && (
+                                <Badge variant="destructive" className="text-xs">Dead</Badge>
+                              )}
+                              {holding.isDust && !holding.isDead && (
+                                <Badge variant="secondary" className="text-xs">Dust</Badge>
+                              )}
+                              {reclaimedMilestones.length > 0 && reclaimedMilestones.map((m) => (
+                                <Badge key={m} variant={m === 4 ? "secondary" : "outline"} className="text-xs">
+                                  {m}x
+                                </Badge>
+                              ))}
+                              {isAutonomyEnabled && (
+                                <Badge variant="outline" className="text-xs text-primary border-primary/30">
+                                  <Zap className="h-3 w-3 mr-1" />
+                                  Auto
+                                </Badge>
                               )}
                             </div>
-                          </div>
-                          <div className="text-right">
-                            <p className={`font-semibold ${isProfit ? "text-green-500" : "text-red-500"}`}>
-                              {multiplier.toFixed(2)}x
-                            </p>
                             <p className="text-xs text-muted-foreground">
-                              {formatPrice(holding.lastPrice)}
+                              Bought: {holding.solSpent.toFixed(4)} SOL @ {formatPrice(holding.buyPrice)}
                             </p>
+                            {holding.sourceWalletAddress && (
+                              <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+                                <Wallet className="h-3 w-3" />
+                                <span>
+                                  Copied from: {holding.sourceWalletLabel || `${holding.sourceWalletAddress.slice(0, 6)}...${holding.sourceWalletAddress.slice(-4)}`}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
-                        
+                        <div className="text-right">
+                          <p className={`font-semibold ${isProfit ? "text-green-500" : "text-red-500"}`}>
+                            {multiplier.toFixed(2)}x
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatPrice(holding.lastPrice)}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-2 pt-2 border-t flex-wrap">
                         {holding.currentAmount > 0 && (
-                          <div className="flex items-center gap-2 pt-2 border-t">
+                          <>
                             <Button
                               size="sm"
                               variant="outline"
@@ -890,49 +921,125 @@ export function CopyTrading() {
                                 </>
                               )}
                             </Button>
-                            <div className="flex items-center gap-1 ml-auto">
-                              <Button
-                                size="icon"
-                                variant="ghost"
-                                onClick={() => openExportDialog(holding.id)}
-                                title="Export token wallet key"
-                                data-testid={`button-export-token-key-${holding.id}`}
-                              >
-                                <Key className="h-4 w-4" />
-                              </Button>
-                              <a
-                                href={`https://dexscreener.com/solana/${holding.tokenMint}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                <Button size="icon" variant="ghost">
-                                  <ExternalLink className="h-4 w-4" />
-                                </Button>
-                              </a>
-                            </div>
-                          </div>
+                          </>
                         )}
+                        <div className="flex items-center gap-1 ml-auto">
+                          <Button
+                            size="icon"
+                            variant={isAutonomyEnabled ? "default" : "ghost"}
+                            onClick={() => updateHoldingStatus.mutate({ 
+                              holdingId: holding.id, 
+                              autonomyEnabled: !isAutonomyEnabled 
+                            })}
+                            title={isAutonomyEnabled ? "Disable auto-trading" : "Enable auto-trading"}
+                            data-testid={`button-autonomy-${holding.id}`}
+                          >
+                            <Zap className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={() => openExportDialog(holding.id)}
+                            title="Export token wallet key"
+                            data-testid={`button-export-token-key-${holding.id}`}
+                          >
+                            <Key className="h-4 w-4" />
+                          </Button>
+                          <a
+                            href={`https://dexscreener.com/solana/${holding.tokenMint}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Button size="icon" variant="ghost">
+                              <ExternalLink className="h-4 w-4" />
+                            </Button>
+                          </a>
+                        </div>
                       </div>
-                    );
-                  })}
+                    </div>
+                  );
+                };
+                
+                if (visibleHoldings.length === 0 && allHoldings.length === 0) {
+                  return (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <TrendingUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                      <p>No positions yet</p>
                     </div>
                   );
                 }
                 
-                if (holdings && holdings.length > 0 && hideDeadDust) {
+                if (visibleHoldings.length === 0 && hideDeadDust) {
                   return (
                     <div className="text-center py-8 text-muted-foreground">
                       <TrendingUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                      <p>All {holdings.length} holdings are dead or dust</p>
+                      <p>All {allHoldings.length} positions are dead or dust</p>
                       <p className="text-xs mt-1">Toggle "Hide dead/dust" to view</p>
                     </div>
                   );
                 }
                 
                 return (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <TrendingUp className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p>No holdings yet</p>
+                  <div className="space-y-4">
+                    {hiddenCount > 0 && (
+                      <p className="text-xs text-muted-foreground text-center">
+                        {hiddenCount} dead/dust position{hiddenCount > 1 ? 's' : ''} hidden
+                      </p>
+                    )}
+                    
+                    {activeHoldings.length > 0 && (
+                      <Collapsible open={activeOpen} onOpenChange={setActiveOpen}>
+                        <CollapsibleTrigger className="flex items-center justify-between w-full p-3 rounded-lg bg-green-500/10 border border-green-500/20 hover-elevate">
+                          <div className="flex items-center gap-2">
+                            <TrendingUp className="h-4 w-4 text-green-500" />
+                            <span className="font-medium text-green-700 dark:text-green-300">Active Positions</span>
+                            <Badge variant="outline" className="text-green-500 border-green-500/30">
+                              {activeHoldings.length}
+                            </Badge>
+                          </div>
+                          <ChevronDown className={`h-4 w-4 text-green-500 transition-transform ${activeOpen ? "rotate-180" : ""}`} />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="pt-2 space-y-2">
+                          {activeHoldings.map(renderHolding)}
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
+                    
+                    {pendingHoldings.length > 0 && (
+                      <Collapsible open={pendingOpen} onOpenChange={setPendingOpen}>
+                        <CollapsibleTrigger className="flex items-center justify-between w-full p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 hover-elevate">
+                          <div className="flex items-center gap-2">
+                            <Clock className="h-4 w-4 text-amber-500" />
+                            <span className="font-medium text-amber-700 dark:text-amber-300">Pending Positions</span>
+                            <Badge variant="outline" className="text-amber-500 border-amber-500/30">
+                              {pendingHoldings.length}
+                            </Badge>
+                          </div>
+                          <ChevronDown className={`h-4 w-4 text-amber-500 transition-transform ${pendingOpen ? "rotate-180" : ""}`} />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="pt-2 space-y-2">
+                          {pendingHoldings.map(renderHolding)}
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
+                    
+                    {inactiveHoldings.length > 0 && (
+                      <Collapsible open={inactiveOpen} onOpenChange={setInactiveOpen}>
+                        <CollapsibleTrigger className="flex items-center justify-between w-full p-3 rounded-lg bg-muted/50 border hover-elevate">
+                          <div className="flex items-center gap-2">
+                            <EyeOff className="h-4 w-4 text-muted-foreground" />
+                            <span className="font-medium text-muted-foreground">Inactive / Watching</span>
+                            <Badge variant="secondary">
+                              {inactiveHoldings.length}
+                            </Badge>
+                          </div>
+                          <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${inactiveOpen ? "rotate-180" : ""}`} />
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="pt-2 space-y-2">
+                          {inactiveHoldings.map(renderHolding)}
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
                   </div>
                 );
               })()}
