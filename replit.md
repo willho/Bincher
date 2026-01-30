@@ -152,3 +152,26 @@ Miss Pincher can now control trading through natural conversation with explicit 
 - `pending` / `queued` - Pending buy orders
 - `enable copy` / `start copy` - Enable copy trading
 - `disable copy` / `stop copy` - Disable copy trading
+
+### PHASE 7: Devnet/Mainnet Testing ✅
+- [x] Network mode storage in admin_settings table with 30-second cache TTL
+- [x] GET /api/network-mode and POST /api/admin/network-mode (admin-only) endpoints
+- [x] Install wizard: Network selection (devnet/mainnet) BEFORE health checks
+- [x] Admin dashboard: Network toggle switch with mainnet warnings
+- [x] Helius integration: Dynamic RPC/API endpoints based on network mode
+- [x] Header: Devnet badge when test mode is active
+- [x] Admin panel: Faucet link button for devnet SOL
+
+**Network Mode Architecture**:
+- Stored in `admin_settings` table with key `network_mode`
+- Cached in memory with 30-second TTL (cleared on errors)
+- Devnet endpoints: `api-devnet.helius.xyz` (webhooks), `devnet.helius-rpc.com` (RPC)
+- Mainnet endpoints: `api.helius.xyz` (webhooks), `mainnet.helius-rpc.com` (RPC)
+- Faucet URL: `https://faucet.solana.com/` for requesting test SOL
+
+**Install Wizard Flow**:
+1. Account creation (username, email, password, Helius API key)
+2. Network selection (devnet recommended for new users)
+3. Network mode set via POST /api/admin/network-mode
+4. Health checks run against selected network
+5. Results displayed with retry option for failures
