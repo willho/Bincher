@@ -1272,6 +1272,32 @@ export async function registerRoutes(
     }
   });
 
+  // Execute pending trade with PIN verification (direct endpoint, bypasses AI)
+  app.post("/api/trade/execute-pending", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { pin } = req.body;
+      const { executePendingTradeWithPin } = await import("./ai");
+      
+      const result = await executePendingTradeWithPin(req.userId!, pin);
+      
+      if (result.pinRequired) {
+        return res.json({ 
+          success: false, 
+          pinRequired: true,
+          description: result.description 
+        });
+      }
+      
+      res.json({ 
+        success: result.success, 
+        message: result.message 
+      });
+    } catch (error) {
+      console.error("Error executing trade:", error);
+      res.status(500).json({ error: "Failed to execute trade" });
+    }
+  });
+
   // Get user's monitored wallet addresses
   app.get("/api/wallet", requireAuth, async (req: AuthenticatedRequest, res) => {
     const userId = req.userId!;

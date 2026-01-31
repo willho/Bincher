@@ -1,9 +1,59 @@
 import { db } from "./db";
 import { users, systemLogs, linkTokens, pincherDataRequests, monitoredWallets, holdings, swaps } from "@shared/schema";
 import { eq, desc, and, sql, lt, gt } from "drizzle-orm";
-import { chatWithAI } from "./ai";
-import { hashPassword } from "./auth";
+import { chatWithAI, executePendingTradeWithPin } from "./ai";
+import { hashPassword, verifyPassword } from "./auth";
+import { verifyPin, getSecuritySettings } from "./security";
 import crypto from "crypto";
+
+// Pending security verifications for Telegram - intercepted before AI
+interface PendingSecurityVerification {
+  type: "pin" | "password";
+  action: "trade" | "settings" | "withdrawal";
+  description: string;
+  onVerified: () => Promise<void>;
+  expiresAt: number;
+}
+const pendingSecurityVerifications = new Map<string, PendingSecurityVerification>();
+const SECURITY_VERIFICATION_TTL = 2 * 60 * 1000; // 2 minutes
+
+// Cleanup expired verifications every minute
+setInterval(() => {
+  const now = Date.now();
+  Array.from(pendingSecurityVerifications.entries()).forEach(([chatId, verification]) => {
+    if (now > verification.expiresAt) {
+      pendingSecurityVerifications.delete(chatId);
+    }
+  });
+}, 60000);
+
+// Helper to initiate security verification via Telegram
+export async function requestTelegramSecurityVerification(
+  chatId: string,
+  userId: number,
+  action: "trade" | "settings" | "withdrawal",
+  description: string,
+  onVerified: () => Promise<void>
+): Promise<void> {
+  const settings = await getSecuritySettings(userId);
+  
+  // Determine verification type: PIN if set, otherwise password
+  const verificationType = settings.hasPinSet ? "pin" : "password";
+  
+  pendingSecurityVerifications.set(chatId, {
+    type: verificationType,
+    action,
+    description,
+    onVerified,
+    expiresAt: Date.now() + SECURITY_VERIFICATION_TTL,
+  });
+  
+  if (verificationType === "pin") {
+    await sendMessage(chatId, `Security verification required for ${description}. Reply with your PIN to confirm.`);
+  } else {
+    await sendMessage(chatId, `Security verification required for ${description}. Reply with your account password to confirm (no PIN set).`);
+  }
+}
 
 const ADMIN_CODEWORD = "Admin1112";
 
@@ -681,6 +731,43 @@ export async function handleWebhookUpdate(update: any): Promise<void> {
     const text = message.text.trim();
     const telegramUsername = message.from?.username;
     const user = await getUserByChatId(chatId);
+
+    // Check for pending security verification - intercept before AI
+    const pendingVerification = pendingSecurityVerifications.get(chatId);
+    if (pendingVerification && user) {
+      if (Date.now() > pendingVerification.expiresAt) {
+        pendingSecurityVerifications.delete(chatId);
+        await sendMessage(chatId, "Verification timed out. Please try again.");
+        return;
+      }
+
+      // Verify PIN or password
+      let verified = false;
+      if (pendingVerification.type === "pin") {
+        verified = await verifyPin(user.id, text);
+      } else if (pendingVerification.type === "password") {
+        const [userData] = await db.select({ passwordHash: users.passwordHash })
+          .from(users).where(eq(users.id, user.id));
+        if (userData?.passwordHash) {
+          verified = verifyPassword(text, userData.passwordHash);
+        }
+      }
+
+      pendingSecurityVerifications.delete(chatId);
+
+      if (verified) {
+        await sendMessage(chatId, "Verified. Proceeding...");
+        try {
+          await pendingVerification.onVerified();
+        } catch (error) {
+          console.error("Error executing verified action:", error);
+          await sendMessage(chatId, "Action failed. Please try again.");
+        }
+      } else {
+        await sendMessage(chatId, `Incorrect ${pendingVerification.type}. Action cancelled.`);
+      }
+      return;
+    }
 
     if (text.startsWith("/")) {
       const [commandWithBot, ...argParts] = text.split(" ");

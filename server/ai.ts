@@ -1153,15 +1153,10 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "execute_pending_trade",
-      description: "Execute a trade that was previously proposed and user confirmed. Only call this after user says 'yes', 'do it', 'confirm', 'go ahead', or similar confirmation. If PIN is required, user will need to provide it.",
+      description: "Execute a trade that was previously proposed and user confirmed. Only call this after user says 'yes', 'do it', 'confirm', 'go ahead', or similar confirmation.",
       parameters: {
         type: "object",
-        properties: {
-          pin: {
-            type: "string",
-            description: "Optional: User's security PIN if required for this trade. 4-6 digit number."
-          }
-        },
+        properties: {},
         required: []
       }
     }
@@ -2012,6 +2007,49 @@ function executeCancelTrade(userId: number): { success: boolean; message: string
   }
   pendingTrades.delete(userId);
   return { success: true, message: `Cancelled pending ${pending.type} for ${pending.tokenSymbol}.` };
+}
+
+// Execute pending trade with PIN verification (direct API, bypasses AI)
+export async function executePendingTradeWithPin(
+  userId: number,
+  pin?: string
+): Promise<{ success: boolean; message: string; pinRequired?: boolean; description?: string }> {
+  const pending = pendingTrades.get(userId);
+  
+  if (!pending) {
+    return { success: false, message: "No pending trade to execute." };
+  }
+  
+  if (Date.now() > pending.expiresAt) {
+    pendingTrades.delete(userId);
+    return { success: false, message: "Trade proposal expired." };
+  }
+  
+  if (!pending.userConfirmed) {
+    return { success: false, message: "Trade not confirmed by user." };
+  }
+  
+  // Check PIN requirements
+  if (!pending.pinVerified) {
+    const amountUsd = pending.amountUsd || 0;
+    const securityCheck = await checkTradeAllowed(userId, amountUsd, pin);
+    
+    if (!securityCheck.allowed) {
+      if (securityCheck.pinRequired) {
+        return {
+          success: false,
+          message: "PIN required",
+          pinRequired: true,
+          description: `${pending.type} ${pending.tokenSymbol} for ${pending.amount} ${pending.type === 'buy' ? 'SOL' : 'tokens'}`
+        };
+      }
+      return { success: false, message: securityCheck.reason || "Trade not allowed" };
+    }
+    pending.pinVerified = true;
+  }
+  
+  // Execute trade using existing internal function
+  return executeConfirmedTrade(userId);
 }
 
 // Check wallet balance
@@ -3559,7 +3597,21 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             const result = await executeProposeSell(userId, args);
             toolResults.push(result.message);
           } else if (toolName === "execute_pending_trade") {
-            const result = await executeConfirmedTrade(userId, args.pin);
+            // Check if trade requires PIN verification (handled via UI modal or Telegram handler)
+            const pending = pendingTrades.get(userId);
+            if (pending && pending.userConfirmed && !pending.pinVerified) {
+              const amountUsd = pending.amountUsd || 0;
+              const securityCheck = await checkTradeAllowed(userId, amountUsd);
+              if (!securityCheck.allowed && securityCheck.pinRequired) {
+                // Signal that PIN verification is needed - don't execute through AI
+                toolResults.push(`SECURITY_VERIFICATION_REQUIRED: This trade requires PIN verification. Please use the security prompt that appeared to enter your PIN.`);
+                continue;
+              }
+              if (securityCheck.allowed) {
+                pending.pinVerified = true;
+              }
+            }
+            const result = await executeConfirmedTrade(userId);
             toolResults.push(result.message);
           } else if (toolName === "cancel_pending_trade") {
             const result = executeCancelTrade(userId);

@@ -77,16 +77,24 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 **Completed:**
 - PIN schema fields in users table (withdrawalPinHash, pinMode, pinThresholdUsd, etc.)
 - SecuritySettings UI component with full settings management
-- Security API routes (GET/POST /api/settings/security, set-pin, verify-pin)
+- Security API routes (GET/POST /api/settings/security, set-pin, verify-pin, execute-pending)
 - server/security.ts module with utility functions
-- PIN enforcement wired into AI trade execution flow (executeConfirmedTrade)
+- PIN verification modal for web UI (bypasses AI chat)
+- Security context for global PIN verification state management
+- Telegram security verification flow with pending state tracking
+- PIN/password interception before AI routing in Telegram handler
+- PIN enforcement in AI trade execution (blocks execution, signals verification required)
+
+**Security Flow Design:**
+- **Web UI**: PIN entered via modal dialog, sent directly to /api/trade/execute-pending
+- **Telegram**: Bot intercepts messages when in pending verification state, verifies PIN or password (if no PIN set) before executing action
+- **AI Chat**: PIN/password never goes through AI - security prompts handled by UI/bot directly
 
 **Pending Wiring:**
 - Wire PIN checks into copy trading processor (trade-processor.ts)
 - Wire withdrawal whitelist checks into transfer/withdraw endpoints
 - Implement daily spend limit tracking and enforcement
 - Add Telegram confirmation flow for large transfers
-- Wire PIN checks into manual trading API routes (if any exist)
 
 ### Copy Trading Considerations
 - **dedupSkipIfPending default**: Currently defaults to `true`, which blocks multiple buys of the same token if a pending buy exists. This may prevent copying a signal trader who averages into positions (buys same token multiple times). Consider changing default to `false` to better mirror signal behavior. Needs more thought before implementation.

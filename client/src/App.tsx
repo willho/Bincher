@@ -4,6 +4,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SecurityProvider } from "@/contexts/security-context";
 import {
   SidebarProvider,
   SidebarTrigger,
@@ -255,8 +256,10 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <Toaster />
-        <AuthenticatedApp />
+        <SecurityProvider>
+          <Toaster />
+          <AuthenticatedApp />
+        </SecurityProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );
