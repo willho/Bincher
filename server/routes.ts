@@ -3686,6 +3686,45 @@ export async function registerRoutes(
     }
   });
 
+  // Get trade history for a specific token
+  app.get("/api/token/:tokenMint/trades", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tokenMint = req.params.tokenMint as string;
+      
+      // Get all swaps involving this token (as either from or to token)
+      const tokenTrades = await db.select()
+        .from(swaps)
+        .where(
+          and(
+            eq(swaps.userId, req.userId!),
+            or(
+              eq(swaps.toToken, tokenMint),
+              eq(swaps.fromToken, tokenMint)
+            )
+          )
+        )
+        .orderBy(desc(swaps.timestamp))
+        .limit(50);
+      
+      // Format trades for display
+      const formattedTrades = tokenTrades.map(trade => ({
+        id: trade.id,
+        signature: trade.signature,
+        timestamp: trade.timestamp,
+        type: trade.toToken === tokenMint ? "buy" : "sell",
+        amount: trade.toToken === tokenMint ? trade.toAmount : trade.fromAmount,
+        tokenSymbol: trade.toToken === tokenMint ? trade.toTokenSymbol : trade.fromTokenSymbol,
+        solAmount: trade.toToken === tokenMint ? trade.fromAmount : trade.toAmount,
+        source: trade.source,
+      }));
+      
+      res.json(formattedTrades);
+    } catch (error) {
+      console.error("Error getting token trades:", error);
+      res.status(500).json({ error: "Failed to get token trades" });
+    }
+  });
+
   // Chat with AI
   app.post("/api/ai/chat", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {

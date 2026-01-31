@@ -24,6 +24,17 @@ interface SignalSource {
   totalSolSpent: number;
 }
 
+interface TokenTrade {
+  id: number;
+  signature: string;
+  timestamp: number;
+  type: "buy" | "sell";
+  amount: number;
+  tokenSymbol: string;
+  solAmount: number;
+  source: string;
+}
+
 export default function TokenPage() {
   const [, params] = useRoute("/trading/:token");
   const tokenMint = params?.token;
@@ -42,6 +53,11 @@ export default function TokenPage() {
 
   const { data: positions, isLoading: isLoadingPositions } = useQuery<Holding[]>({
     queryKey: [`/api/positions/${tokenMint}`],
+    enabled: !!tokenMint,
+  });
+
+  const { data: tradeHistory, isLoading: isLoadingTrades } = useQuery<TokenTrade[]>({
+    queryKey: [`/api/token/${tokenMint}/trades`],
     enabled: !!tokenMint,
   });
 
@@ -361,6 +377,65 @@ export default function TokenPage() {
         </Card>
       )}
 
+      {/* Trade History */}
+      <Card data-testid="card-trade-history">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Clock className="h-5 w-5" />
+            Trade History
+          </CardTitle>
+          <CardDescription>Your buy and sell activity for this token</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoadingTrades ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : tradeHistory && tradeHistory.length > 0 ? (
+            <div className="space-y-2">
+              {tradeHistory.map((trade) => (
+                <div 
+                  key={trade.id} 
+                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                  data-testid={`trade-${trade.id}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`h-8 w-8 rounded-full flex items-center justify-center ${trade.type === "buy" ? "bg-green-500/10" : "bg-red-500/10"}`}>
+                      <TrendingUp className={`h-4 w-4 ${trade.type === "buy" ? "text-green-500" : "text-red-500 rotate-180"}`} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className={`font-medium text-sm ${trade.type === "buy" ? "text-green-500" : "text-red-500"}`}>
+                          {trade.type === "buy" ? "Bought" : "Sold"}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          {trade.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {trade.tokenSymbol}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatTimeAgo(trade.timestamp)} • {trade.source}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm font-medium">{trade.solAmount.toFixed(4)} SOL</p>
+                    <p className="text-xs text-muted-foreground">{formatUsd(solToUsd(trade.solAmount))}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-6 text-muted-foreground">
+              <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No trades found</p>
+              <p className="text-xs mt-1">Trade history will appear here</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Position Risk Settings */}
       {positions && positions.length > 0 && (
         <Card>
@@ -425,6 +500,30 @@ export default function TokenPage() {
                           <SelectItem value="active">Active</SelectItem>
                           <SelectItem value="pending">Pending</SelectItem>
                           <SelectItem value="inactive">Inactive</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground">Rules:</Label>
+                      <Select 
+                        value="inherited"
+                        onValueChange={(value) => {
+                          // TODO: Wire up rule inheritance when schema is ready
+                          toast({ 
+                            title: value === "inherited" ? "Using wallet defaults" : "Using custom rules",
+                            description: value === "inherited" 
+                              ? "Take-profit and stop-loss settings inherited from wallet" 
+                              : "Edit rules below to customize this position"
+                          });
+                        }}
+                      >
+                        <SelectTrigger className="w-[120px] h-7 text-xs" data-testid={`select-rules-${position.id}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inherited">From Wallet</SelectItem>
+                          <SelectItem value="override">Override</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>

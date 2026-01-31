@@ -347,7 +347,7 @@ export default function HoldingsPage() {
                 return (
                   <div
                     key={holding.id}
-                    onClick={() => setLocation(`/holdings/${holding.tokenMint}`)}
+                    onClick={() => setLocation(`/trading/${holding.tokenMint}`)}
                     className="flex items-center justify-between p-4 rounded-lg border hover-elevate cursor-pointer"
                     data-testid={`row-holding-${holding.id}`}
                   >
