@@ -50,7 +50,7 @@ interface TokenHolding {
   priceChange24h?: number;
 }
 
-type HoldingsSortOption = "value" | "name" | "change";
+type HoldingsSortOption = "value" | "name" | "change" | "age";
 
 interface WalletActivity {
   wallet: {
@@ -187,6 +187,19 @@ export default function SignalWalletPage() {
     toast({ description: "Copied to clipboard" });
   };
 
+  // Build a map of token mint -> first buy timestamp from trades
+  const tokenFirstBuyMap = useMemo(() => {
+    const map = new Map<string, number>();
+    const trades = activity?.trades || [];
+    // Process trades in reverse (oldest first) to get the first buy
+    [...trades].reverse().forEach((trade) => {
+      if (trade.isBuy && !map.has(trade.toToken)) {
+        map.set(trade.toToken, trade.timestamp);
+      }
+    });
+    return map;
+  }, [activity?.trades]);
+
   // Sort holdings based on selected option
   const sortedHoldings = useMemo(() => {
     const holdings = holdingsData?.holdings || [];
@@ -198,11 +211,16 @@ export default function SignalWalletPage() {
           return (a.symbol || a.mint).localeCompare(b.symbol || b.mint);
         case "change":
           return (b.priceChange24h || 0) - (a.priceChange24h || 0);
+        case "age":
+          // Oldest first (smallest timestamp = oldest)
+          const aTime = tokenFirstBuyMap.get(a.mint) || Date.now();
+          const bTime = tokenFirstBuyMap.get(b.mint) || Date.now();
+          return aTime - bTime;
         default:
           return 0;
       }
     });
-  }, [holdingsData?.holdings, holdingsSort]);
+  }, [holdingsData?.holdings, holdingsSort, tokenFirstBuyMap]);
 
   if (isLoading) {
     return (
@@ -407,6 +425,7 @@ export default function SignalWalletPage() {
                   <SelectItem value="value" data-testid="select-sort-value">By Value</SelectItem>
                   <SelectItem value="name" data-testid="select-sort-name">By Name</SelectItem>
                   <SelectItem value="change" data-testid="select-sort-change">By 24h %</SelectItem>
+                  <SelectItem value="age" data-testid="select-sort-age">By Age</SelectItem>
                 </SelectContent>
               </Select>
               <Button 
