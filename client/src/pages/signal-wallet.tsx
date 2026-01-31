@@ -439,99 +439,75 @@ export default function SignalWalletPage() {
         </Button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card data-testid="card-hit-rate">
-          <CardHeader className="pb-2">
-            <CardDescription>Hit Rate</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <Target className="h-5 w-5 text-primary" />
-              <span className="text-2xl font-bold">{stats.hitRate}%</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {stats.profitableTrades}/{stats.closedPositions} profitable
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-pnl">
-          <CardHeader className="pb-2">
-            <CardDescription>Realized P&L</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              {stats.realizedPnl >= 0 ? (
-                <TrendingUp className="h-5 w-5 text-green-500" />
-              ) : (
-                <TrendingDown className="h-5 w-5 text-red-500" />
-              )}
-              <span className={`text-2xl font-bold ${stats.realizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                {stats.realizedPnl >= 0 ? "+" : ""}{stats.realizedPnl} SOL
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Spent {stats.totalSolSpent} SOL, received {stats.totalSolReceived} SOL
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-trades">
-          <CardHeader className="pb-2">
-            <CardDescription>Trades ({timeframe})</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <Activity className="h-5 w-5 text-primary" />
-              <span className="text-2xl font-bold">{stats.totalTrades}</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {stats.buys} buys, {stats.sells} sells
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-style">
-          <CardHeader className="pb-2">
-            <CardDescription>Trading Style</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <span className="text-2xl font-bold capitalize">
-                {profile?.tradingStyle || "Unknown"}
-              </span>
-            </div>
-            {profile?.avgExitMultiplier && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Avg {profile.avgExitMultiplier.toFixed(2)}x exit
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
       <div className="grid gap-4 md:grid-cols-3">
-        <Card data-testid="card-unrealized-pnl">
+        {/* Combined P&L Card */}
+        <Card data-testid="card-pnl-combined">
           <CardHeader className="pb-2">
-            <CardDescription>Unrealized P&L</CardDescription>
+            <CardDescription>Profit & Loss</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              {unrealizedPnl.pnl >= 0 ? (
-                <TrendingUp className="h-5 w-5 text-green-500" />
-              ) : (
-                <TrendingDown className="h-5 w-5 text-red-500" />
-              )}
-              <span className={`text-2xl font-bold ${unrealizedPnl.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                {unrealizedPnl.pnl >= 0 ? "+" : ""}{formatUsd(unrealizedPnl.pnl)}
-              </span>
+          <CardContent className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Realized</span>
+                <span className={`text-lg font-bold ${stats.realizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {stats.realizedPnl >= 0 ? "+" : ""}{stats.realizedPnl} SOL
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {stats.totalSolSpent} spent → {stats.totalSolReceived} received
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Holdings worth {formatUsd(unrealizedPnl.value)}
-            </p>
+            <div className="border-t pt-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Unrealized</span>
+                <span className={`text-lg font-bold ${unrealizedPnl.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                  {unrealizedPnl.pnl >= 0 ? "+" : ""}{formatUsd(unrealizedPnl.pnl)}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Holdings worth {formatUsd(unrealizedPnl.value)}
+              </p>
+            </div>
           </CardContent>
         </Card>
 
+        {/* Combined Performance Card */}
+        <Card data-testid="card-performance">
+          <CardHeader className="pb-2">
+            <CardDescription>Performance</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Target className="h-4 w-4 text-primary" />
+                <span className="text-sm">Hit Rate</span>
+              </div>
+              <span className="font-bold">{stats.hitRate}%</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4 text-primary" />
+                <span className="text-sm">Trades</span>
+              </div>
+              <span className="font-bold">{stats.totalTrades}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Timer className="h-4 w-4 text-primary" />
+                <span className="text-sm">Avg Hold</span>
+              </div>
+              <span className="font-bold">{avgHoldTime || "-"}</span>
+            </div>
+            <div className="border-t pt-2 flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">Style</span>
+              <Badge variant="secondary" className="capitalize">
+                {profile?.tradingStyle || "Unknown"}
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Best Token Card */}
         <Card data-testid="card-best-token">
           <CardHeader className="pb-2">
             <CardDescription>Best Token</CardDescription>
@@ -561,23 +537,9 @@ export default function SignalWalletPage() {
                 <span className="text-2xl font-bold">-</span>
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-avg-hold">
-          <CardHeader className="pb-2">
-            <CardDescription>Avg Hold Time</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-center gap-2">
-              <Timer className="h-5 w-5 text-primary" />
-              <span className="text-2xl font-bold">
-                {avgHoldTime || "-"}
-              </span>
+            <div className="mt-3 pt-2 border-t text-xs text-muted-foreground">
+              {stats.profitableTrades}/{stats.closedPositions} profitable · {stats.buys} buys, {stats.sells} sells
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Closed positions
-            </p>
           </CardContent>
         </Card>
       </div>
