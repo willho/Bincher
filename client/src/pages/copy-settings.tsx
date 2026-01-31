@@ -20,6 +20,7 @@ interface WalletRuleDefaults {
   userId: number;
   takeProfitThresholds: number[];
   takeProfitPercentages: number[];
+  takeProfitEnabled?: boolean[];
   stopLossPercent: number;
   stopLossFloorUsd: number | null;
   stopLossMode: string;
@@ -55,6 +56,7 @@ export default function CopySettingsPage() {
   const [ruleValues, setRuleValues] = useState<RuleValues>({
     takeProfitThresholds: [4, 10, 25, 100],
     takeProfitPercentages: [25, 25, 25, 25],
+    takeProfitEnabled: [true, true, true, true],
     stopLossPercent: 50,
     stopLossMode: "auto",
   });
@@ -72,9 +74,11 @@ export default function CopySettingsPage() {
 
   useEffect(() => {
     if (ruleDefaults) {
+      const thresholds = ruleDefaults.takeProfitThresholds || [4, 10, 25, 100];
       setRuleValues({
-        takeProfitThresholds: ruleDefaults.takeProfitThresholds || [4, 10, 25, 100],
+        takeProfitThresholds: thresholds,
         takeProfitPercentages: ruleDefaults.takeProfitPercentages || [25, 25, 25, 25],
+        takeProfitEnabled: ruleDefaults.takeProfitEnabled || thresholds.map(() => true),
         stopLossPercent: ruleDefaults.stopLossPercent ?? 50,
         stopLossMode: (ruleDefaults.stopLossMode as "auto" | "alert") || "auto",
       });
@@ -110,6 +114,7 @@ export default function CopySettingsPage() {
     updateRuleDefaultsMutation.mutate({
       takeProfitThresholds: ruleValues.takeProfitThresholds,
       takeProfitPercentages: ruleValues.takeProfitPercentages,
+      takeProfitEnabled: ruleValues.takeProfitEnabled,
       stopLossPercent: ruleValues.stopLossPercent,
       stopLossMode: ruleValues.stopLossMode,
     });
@@ -399,6 +404,7 @@ export default function CopySettingsPage() {
                 isSaving={updateRuleDefaultsMutation.isPending}
                 showSaveButton={true}
                 testIdPrefix={`wallet-${id}`}
+                showPresets={true}
               />
               <p className="text-xs text-center text-muted-foreground">
                 New positions will inherit these rules. Override on individual tokens as needed.

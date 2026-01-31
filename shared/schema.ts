@@ -89,6 +89,7 @@ export const walletRuleDefaults = pgTable("wallet_rule_defaults", {
   // Take profit configuration
   takeProfitThresholds: jsonb("take_profit_thresholds").$type<number[]>().default([4, 10, 25, 100]), // Multipliers to trigger sells
   takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>().default([25, 25, 25, 25]), // Percent to sell at each threshold
+  takeProfitEnabled: jsonb("take_profit_enabled").$type<boolean[]>().default([true, true, true, true]), // Whether each tier is enabled
   
   // Stop loss configuration
   stopLossPercent: real("stop_loss_percent").default(50), // Sell if down this %
@@ -235,6 +236,7 @@ export const holdings = pgTable("holdings", {
   // Position config (Phase 8) - per-position risk management
   takeProfitThresholds: jsonb("take_profit_thresholds").$type<number[]>(), // Custom milestones [4, 10, 25, 100]
   takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>(), // Percent to sell at each threshold [25, 25, 25, 25]
+  takeProfitEnabled: jsonb("take_profit_enabled").$type<boolean[]>(), // Whether each tier is enabled
   stopLossPercent: real("stop_loss_percent"), // Sell if price drops by this %
   stopLossFloorUsd: real("stop_loss_floor_usd"), // Sell if value drops below this $
   stopLossMode: text("stop_loss_mode").default("auto"), // "auto" (sell immediately) | "alert" (notify, wait for confirmation)
@@ -815,6 +817,7 @@ export const holdingSchema = z.object({
   // Position config (Phase 8)
   takeProfitThresholds: z.array(z.number()).optional(),
   takeProfitPercentages: z.array(z.number()).optional(),
+  takeProfitEnabled: z.array(z.boolean()).optional(),
   stopLossPercent: z.number().optional(),
   stopLossFloorUsd: z.number().optional(),
   stopLossMode: z.enum(["auto", "alert"]).default("auto"),

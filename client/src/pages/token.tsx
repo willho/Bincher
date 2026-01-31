@@ -111,9 +111,11 @@ export default function TokenPage() {
 
   const startEditing = (position: Holding) => {
     setEditingPosition(position.id);
+    const thresholds = (position.takeProfitThresholds as number[]) || [4, 10, 25, 100];
     setEditingRuleValues({
-      takeProfitThresholds: (position.takeProfitThresholds as number[]) || [4, 10, 25, 100],
+      takeProfitThresholds: thresholds,
       takeProfitPercentages: (position.takeProfitPercentages as number[]) || [25, 25, 25, 25],
+      takeProfitEnabled: (position.takeProfitEnabled as boolean[]) || thresholds.map(() => true),
       stopLossPercent: position.stopLossPercent ?? 50,
       stopLossMode: (position.stopLossMode as "auto" | "alert") || "auto",
     });
@@ -125,6 +127,7 @@ export default function TokenPage() {
       data: {
         takeProfitThresholds: editingRuleValues.takeProfitThresholds,
         takeProfitPercentages: editingRuleValues.takeProfitPercentages,
+        takeProfitEnabled: editingRuleValues.takeProfitEnabled,
         stopLossPercent: editingRuleValues.stopLossPercent,
         stopLossMode: editingRuleValues.stopLossMode,
       }
@@ -593,6 +596,7 @@ export default function TokenPage() {
                         values={{
                           takeProfitThresholds: (position.takeProfitThresholds as number[]) || [4, 10, 25, 100],
                           takeProfitPercentages: (position.takeProfitPercentages as number[]) || [25, 25, 25, 25],
+                          takeProfitEnabled: (position.takeProfitEnabled as boolean[]),
                           stopLossPercent: position.stopLossPercent ?? 50,
                           stopLossMode: (position.stopLossMode as "auto" | "alert") || "auto",
                         }}
