@@ -92,6 +92,23 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - Wire outcome resolution when positions are closed
 - Use data to improve future predictions via adaptive learning
 
+### Miss Pincher Relationship System (Pending)
+- **UserRelationship interface exists** in `pincher-personality.ts` but not wired up
+- Add `userRelationships` database table to persist affinity per user
+- Track: affinityScore (-100 to +100), relationshipType, crabMentions, tradesWonTogether, warningsFollowed/Ignored
+- Update affinity when events happen (successful trades increase, ignored warnings decrease)
+- Pass relationship context to AI so Miss Pincher's tone adapts (warmer to liked users, guarded with adversarial)
+
+### Miss Pincher Wallet Search by Label (Partial)
+- Tool definition `find_wallet_by_label` added but execution handler not implemented
+- When user refers to wallet by name (e.g., "JSP"), search existing monitored wallets by label
+- Prevents asking for wallet address when user already has it saved with a nickname
+
+### Historical SOL Price for USD Values (Enhancement)
+- Currently using current SOL price as fallback for old swaps missing `solPriceAtTrade`
+- Consider using Binance API to fetch historical SOL price at swap timestamp for more accuracy
+- Would require caching to avoid repeated API calls for same timestamps
+
 ### UI Improvements (Proposed)
 - Add real-time alerts for significant market movements
 - Focus on clarity and ease of navigation
