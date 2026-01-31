@@ -142,6 +142,73 @@ export async function getSolPriceUsd(): Promise<number> {
   }
 }
 
+// Historical SOL price cache (timestamp in seconds -> price)
+const historicalSolPriceCache = new Map<number, number>();
+const HISTORICAL_CACHE_MAX_SIZE = 1000;
+
+/**
+ * Get historical SOL price at a specific timestamp using Binance API
+ * Uses kline (candlestick) data for historical prices
+ * @param timestampSeconds Unix timestamp in seconds
+ * @returns SOL price in USD at that time, or null if unavailable
+ */
+export async function getHistoricalSolPrice(timestampSeconds: number): Promise<number | null> {
+  // Round to nearest hour for caching efficiency
+  const hourTimestamp = Math.floor(timestampSeconds / 3600) * 3600;
+  
+  // Check cache first
+  if (historicalSolPriceCache.has(hourTimestamp)) {
+    return historicalSolPriceCache.get(hourTimestamp) || null;
+  }
+  
+  // If timestamp is very recent (within last hour), use current price
+  const now = Math.floor(Date.now() / 1000);
+  if (now - timestampSeconds < 3600) {
+    const currentPrice = await getSolPriceUsd();
+    return currentPrice;
+  }
+  
+  try {
+    // Binance API: Get 1-hour kline data
+    // startTime and endTime are in milliseconds
+    const startTimeMs = hourTimestamp * 1000;
+    const endTimeMs = startTimeMs + 3600000; // 1 hour later
+    
+    const url = `https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1h&startTime=${startTimeMs}&endTime=${endTimeMs}&limit=1`;
+    
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.warn(`[Historical SOL] Binance API error: ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    if (Array.isArray(data) && data.length > 0) {
+      // Kline format: [openTime, open, high, low, close, volume, closeTime, ...]
+      // Use close price as the representative price for that hour
+      const closePrice = parseFloat(data[0][4]);
+      
+      if (closePrice > 0) {
+        // Add to cache
+        if (historicalSolPriceCache.size >= HISTORICAL_CACHE_MAX_SIZE) {
+          // Remove oldest entry (first key)
+          const firstKey = historicalSolPriceCache.keys().next().value;
+          if (firstKey) historicalSolPriceCache.delete(firstKey);
+        }
+        historicalSolPriceCache.set(hourTimestamp, closePrice);
+        
+        return closePrice;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('[Historical SOL] Error fetching from Binance:', error);
+    return null;
+  }
+}
+
 // Calculate split buy segments
 // Returns array of SOL amounts for each segment
 export function calculateSplitBuySegments(totalSolAmount: number, solPriceUsd: number): number[] {

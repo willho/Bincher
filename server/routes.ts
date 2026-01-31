@@ -48,7 +48,7 @@ import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signal
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
-import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions } from "./ai";
+import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions, logTokenEvent, generateAndCacheAlert } from "./ai";
 import { 
   isWalletInTop100, 
   getHolderTier, 
@@ -645,6 +645,29 @@ export async function registerRoutes(
         const savedSwap = await storage.addSwap(swap);
         console.log("Swap detected and saved:", savedSwap.id, "for user:", userId);
 
+        // Log token event for AI tracking
+        const isBuyEvent = isBaseCurrency(swap.fromToken);
+        const tokenMint = isBuyEvent ? swap.toToken : swap.fromToken;
+        const tokenSymbol = isBuyEvent ? swap.toTokenSymbol || "???" : swap.fromTokenSymbol || "???";
+        const eventType = isBuyEvent ? "signal_buy" : "signal_sell";
+        const eventTitle = isBuyEvent 
+          ? `Signal wallet bought ${tokenSymbol}` 
+          : `Signal wallet sold ${tokenSymbol}`;
+        
+        logTokenEvent(tokenMint, tokenSymbol, eventType, eventTitle, {
+          description: `From: ${swap.fromTokenSymbol} (${swap.fromAmount}) → To: ${swap.toTokenSymbol} (${swap.toAmount})`,
+          priority: "normal",
+          metadata: { 
+            signature: swap.signature,
+            walletAddress: swapWalletAddress,
+            userId,
+          },
+          valueUsd: swap.solPriceAtTrade && swap.fromAmount 
+            ? swap.fromAmount * swap.solPriceAtTrade 
+            : undefined,
+          relatedWallet: swapWalletAddress,
+        }).catch(err => console.error("[logTokenEvent] Error:", err));
+
         // Broadcast to WebSocket clients
         broadcastSwap(savedSwap);
 
@@ -667,6 +690,21 @@ export async function registerRoutes(
           const tier = getHolderTier(whaleCheck.rank);
           const action = isBuy ? "BUY" : "SELL";
           console.log(`Whale activity detected: Rank #${whaleCheck.rank} (${tier}) ${action} on ${swap.toTokenSymbol || swap.fromTokenSymbol}`);
+          
+          // Log whale activity token event
+          const whaleTokenSymbol = isBuy ? swap.toTokenSymbol || "???" : swap.fromTokenSymbol || "???";
+          logTokenEvent(tokenForWhaleCheck, whaleTokenSymbol, "whale_activity", `Whale (#${whaleCheck.rank}) ${action.toLowerCase()}`, {
+            description: `${tier} holder (rank #${whaleCheck.rank}) ${action.toLowerCase()} ${whaleTokenSymbol}`,
+            priority: whaleCheck.rank <= 10 ? "high" : "normal",
+            metadata: {
+              rank: whaleCheck.rank,
+              tier,
+              action: action.toLowerCase(),
+              holdPercent: whaleCheck.percent,
+              walletAddress: swapWalletAddress,
+            },
+            relatedWallet: swapWalletAddress,
+          }).catch(err => console.error("[logTokenEvent] Whale error:", err));
           
           // Trigger holder refresh for this token since we just saw whale activity
           triggerHolderRefresh(tokenForWhaleCheck);
@@ -729,8 +767,7 @@ export async function registerRoutes(
             });
           }
           
-          // Send Telegram whale alert
-          const whaleTokenSymbol = isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol;
+          // Send Telegram whale alert (reuse whaleTokenSymbol from above)
           sendTelegramWhaleAlert(userId, {
             tokenSymbol: whaleTokenSymbol,
             tokenMint: tokenForWhaleCheck,
@@ -1925,8 +1962,8 @@ export async function registerRoutes(
         return res.status(500).json({ error: result.error });
       }
       
-      // Get current SOL price for new swaps (historical would be more accurate but this is a fallback)
-      const { getSolPriceUsd } = await import("./jupiter");
+      // Get current SOL price for new swaps, and historical prices for existing swaps
+      const { getSolPriceUsd, getHistoricalSolPrice } = await import("./jupiter");
       const currentSolPrice = await getSolPriceUsd();
       
       // Store swaps that don't already exist, and update existing swaps with missing metadata
@@ -1942,6 +1979,7 @@ export async function registerRoutes(
             fromToken: swaps.fromToken,
             toToken: swaps.toToken,
             solPriceAtTrade: swaps.solPriceAtTrade,
+            timestamp: swaps.timestamp,
           }).from(swaps)
             .where(eq(swaps.signature, swap.signature))
             .limit(1);
@@ -1996,7 +2034,11 @@ export async function registerRoutes(
                 const meta = await fetchTokenMetadata(existingSwap.toToken);
                 if (meta?.symbol) updates.toTokenSymbol = meta.symbol;
               }
-              if (needsPriceUpdate) {
+              if (needsPriceUpdate && existingSwap.timestamp) {
+                // Try to get historical price from Binance, fall back to current
+                const historicalPrice = await getHistoricalSolPrice(existingSwap.timestamp);
+                updates.solPriceAtTrade = historicalPrice || currentSolPrice;
+              } else if (needsPriceUpdate) {
                 updates.solPriceAtTrade = currentSolPrice;
               }
               

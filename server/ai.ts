@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
@@ -2445,6 +2445,55 @@ async function executeListMonitoredWallets(userId: number): Promise<{ success: b
   };
 }
 
+async function executeFindWalletByLabel(userId: number, args: any): Promise<{ success: boolean; message: string; wallet?: any }> {
+  const { label } = args;
+  
+  if (!label) {
+    return { success: false, message: "Label/name to search for is required" };
+  }
+  
+  const wallets = await db.select()
+    .from(monitoredWallets)
+    .where(eq(monitoredWallets.userId, userId));
+  
+  // Case-insensitive partial match on label
+  const searchLower = label.toLowerCase();
+  const matches = wallets.filter(w => 
+    w.label && w.label.toLowerCase().includes(searchLower)
+  );
+  
+  if (matches.length === 0) {
+    return { 
+      success: false, 
+      message: `No wallet found with label matching "${label}". You have ${wallets.length} wallets monitored.` 
+    };
+  }
+  
+  if (matches.length === 1) {
+    const w = matches[0];
+    const copyStatus = w.copyTradeEnabled ? "copy trading ON" : "watch only";
+    return {
+      success: true,
+      message: `Found: "${w.label}" (${w.walletAddress.slice(0, 8)}...${w.walletAddress.slice(-4)}) - ${copyStatus}`,
+      wallet: {
+        id: w.id,
+        address: w.walletAddress,
+        label: w.label,
+        copyEnabled: w.copyTradeEnabled,
+      }
+    };
+  }
+  
+  // Multiple matches
+  const summaries = matches.map(w => 
+    `- "${w.label}" (${w.walletAddress.slice(0, 8)}...)`
+  );
+  return {
+    success: true,
+    message: `Multiple wallets match "${label}":\n${summaries.join('\n')}\nPlease be more specific.`
+  };
+}
+
 async function executeUpdatePositionRisk(userId: number, args: any): Promise<{ success: boolean; message: string }> {
   const { tokenSymbol, takeProfitThresholds, takeProfitPercentages, stopLossPercent } = args;
   
@@ -2552,6 +2601,125 @@ function getDefaultRelationship(): UserRelationship {
   };
 }
 
+// Get or create user relationship from database
+async function getOrCreateUserRelationship(userId: number): Promise<UserRelationship> {
+  try {
+    const [existing] = await db.select()
+      .from(userRelationships)
+      .where(eq(userRelationships.userId, userId))
+      .limit(1);
+    
+    if (existing) {
+      // Update lastInteraction timestamp
+      await db.update(userRelationships)
+        .set({ 
+          lastInteraction: Math.floor(Date.now() / 1000),
+          updatedAt: Math.floor(Date.now() / 1000),
+        })
+        .where(eq(userRelationships.id, existing.id));
+      
+      return {
+        affinityScore: existing.affinityScore ?? 0,
+        relationshipType: (existing.relationshipType as UserRelationship['relationshipType']) ?? 'new',
+        crabMentions: existing.crabMentions ?? 0,
+        crabInsults: existing.crabInsults ?? 0,
+        complimentsGiven: existing.complimentsGiven ?? 0,
+        tradesWonTogether: existing.tradesWonTogether ?? 0,
+        tradesLostTogether: existing.tradesLostTogether ?? 0,
+        warningsIgnored: existing.warningsIgnored ?? 0,
+        warningsFollowed: existing.warningsFollowed ?? 0,
+        lastInteraction: existing.lastInteraction ?? Math.floor(Date.now() / 1000),
+        notes: (existing.notes as string[]) ?? [],
+      };
+    }
+    
+    // Create new relationship for this user
+    const now = Math.floor(Date.now() / 1000);
+    const [created] = await db.insert(userRelationships).values({
+      userId,
+      affinityScore: 0,
+      relationshipType: 'new',
+      crabMentions: 0,
+      crabInsults: 0,
+      complimentsGiven: 0,
+      tradesWonTogether: 0,
+      tradesLostTogether: 0,
+      warningsIgnored: 0,
+      warningsFollowed: 0,
+      lastInteraction: now,
+      notes: [],
+      createdAt: now,
+      updatedAt: now,
+    }).returning();
+    
+    return getDefaultRelationship();
+  } catch (error) {
+    console.error('[Relationship] Error loading relationship:', error);
+    return getDefaultRelationship();
+  }
+}
+
+// Update user relationship metrics
+export async function updateUserRelationship(
+  userId: number, 
+  updates: Partial<{
+    affinityDelta: number;
+    crabMentionDelta: number;
+    crabInsultDelta: number;
+    complimentDelta: number;
+    tradeWonDelta: number;
+    tradeLostDelta: number;
+    warningIgnoredDelta: number;
+    warningFollowedDelta: number;
+    newRelationshipType: UserRelationship['relationshipType'];
+    addNote: string;
+  }>
+): Promise<void> {
+  try {
+    const [existing] = await db.select()
+      .from(userRelationships)
+      .where(eq(userRelationships.userId, userId))
+      .limit(1);
+    
+    if (!existing) {
+      // Create if doesn't exist
+      await getOrCreateUserRelationship(userId);
+      return updateUserRelationship(userId, updates);
+    }
+    
+    const now = Math.floor(Date.now() / 1000);
+    const setValues: Record<string, any> = { updatedAt: now, lastInteraction: now };
+    
+    if (updates.affinityDelta) {
+      const newAffinity = Math.max(-100, Math.min(100, (existing.affinityScore ?? 0) + updates.affinityDelta));
+      setValues.affinityScore = newAffinity;
+      
+      // Auto-adjust relationship type based on affinity
+      if (newAffinity >= 50) setValues.relationshipType = 'friendly';
+      else if (newAffinity >= 20) setValues.relationshipType = 'professional';
+      else if (newAffinity <= -30) setValues.relationshipType = 'adversarial';
+    }
+    if (updates.crabMentionDelta) setValues.crabMentions = (existing.crabMentions ?? 0) + updates.crabMentionDelta;
+    if (updates.crabInsultDelta) setValues.crabInsults = (existing.crabInsults ?? 0) + updates.crabInsultDelta;
+    if (updates.complimentDelta) setValues.complimentsGiven = (existing.complimentsGiven ?? 0) + updates.complimentDelta;
+    if (updates.tradeWonDelta) setValues.tradesWonTogether = (existing.tradesWonTogether ?? 0) + updates.tradeWonDelta;
+    if (updates.tradeLostDelta) setValues.tradesLostTogether = (existing.tradesLostTogether ?? 0) + updates.tradeLostDelta;
+    if (updates.warningIgnoredDelta) setValues.warningsIgnored = (existing.warningsIgnored ?? 0) + updates.warningIgnoredDelta;
+    if (updates.warningFollowedDelta) setValues.warningsFollowed = (existing.warningsFollowed ?? 0) + updates.warningFollowedDelta;
+    if (updates.newRelationshipType) setValues.relationshipType = updates.newRelationshipType;
+    if (updates.addNote) {
+      const notes = (existing.notes as string[]) ?? [];
+      notes.push(`[${new Date().toISOString().slice(0, 10)}] ${updates.addNote}`);
+      if (notes.length > 10) notes.shift(); // Keep only last 10 notes
+      setValues.notes = notes;
+    }
+    
+    await db.update(userRelationships).set(setValues).where(eq(userRelationships.id, existing.id));
+  } catch (error) {
+    console.error('[Relationship] Error updating relationship:', error);
+  }
+}
+
 // Build market mood from recent data
 async function buildMarketMood(): Promise<MarketMood> {
   const snapshots = await getAllSnapshots();
@@ -2603,8 +2771,8 @@ async function buildPincherContext(
   const budgetStatus = await getBudgetStatus("openai");
   const marketMood = await buildMarketMood();
   
-  // For now, use default relationship - TODO: persist relationship data
-  const relationship = getDefaultRelationship();
+  // Load relationship from database (creates if new user)
+  const relationship = await getOrCreateUserRelationship(userId);
   
   const percentUsed = budgetStatus.dailyPercent;
   let paceStatus: 'under' | 'on_track' | 'over' = 'on_track';

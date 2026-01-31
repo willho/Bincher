@@ -163,6 +163,42 @@ export async function resolvePredictionBySnapshotId(
   return resolvePrediction(prediction.id, currentPrice, holdTimeMinutes);
 }
 
+/**
+ * Resolve all unresolved predictions for a specific token when a position is closed
+ * Called when a user sells their holdings of a token
+ */
+export async function resolvePredictionsOnPositionClose(
+  tokenMint: string,
+  exitPrice: number,
+  holdTimeMinutes?: number,
+  outcomeMultiplier?: number
+): Promise<number> {
+  // Find all unresolved predictions for this token (global predictions since they're token-level)
+  const unresolvedPredictions = await db.select().from(aiPredictions)
+    .where(and(
+      eq(aiPredictions.tokenMint, tokenMint),
+      isNull(aiPredictions.resolvedAt)
+    ));
+
+  if (unresolvedPredictions.length === 0) {
+    return 0;
+  }
+
+  let resolvedCount = 0;
+  for (const prediction of unresolvedPredictions) {
+    const resolved = await resolvePrediction(prediction.id, exitPrice, holdTimeMinutes);
+    if (resolved) resolvedCount++;
+  }
+
+  if (resolvedCount > 0) {
+    console.log(`[AIAccuracy] Resolved ${resolvedCount} predictions on position close for token ${tokenMint}`);
+    // Update global accuracy stats
+    await updateAccuracyStats(null);
+  }
+
+  return resolvedCount;
+}
+
 export async function updateAccuracyStats(userId: number | null): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const sevenDaysAgo = now - 7 * 24 * 60 * 60;

@@ -28,6 +28,7 @@ import {
   updateCurrentSnapshot,
   runBucketRollups
 } from "./position-score";
+import { resolvePredictionsOnPositionClose } from "./ai-accuracy";
 import { discoverNewFactors, saveDiscoveredFactor } from "./adaptive-scoring";
 
 const PRICE_CHECK_INTERVAL_MS = 30000;
@@ -913,6 +914,13 @@ async function executeProgressiveReclaim(
     } catch (e) {
       console.error(`Failed to resolve position snapshots:`, e);
     }
+    
+    // Resolve AI predictions for learning
+    const entryTime = holding.buyTimestamp || 0;
+    const holdTimeMinutes = entryTime > 0 ? Math.floor((Date.now() / 1000 - entryTime) / 60) : undefined;
+    resolvePredictionsOnPositionClose(holding.tokenMint, currentPrice, holdTimeMinutes).catch(e =>
+      console.error(`Failed to resolve AI predictions:`, e)
+    );
 
     console.log(`Progressive reclaim successful for ${holding.tokenSymbol}:`);
     console.log(`  Milestone: ${milestone}x`);
@@ -1016,6 +1024,13 @@ async function executeStopLoss(
     } catch (e) {
       console.error(`Failed to resolve position snapshots:`, e);
     }
+    
+    // Resolve AI predictions for learning (loss outcome)
+    const entryTime = holding.buyTimestamp || 0;
+    const holdTimeMinutes = entryTime > 0 ? Math.floor((now - entryTime) / 60) : undefined;
+    resolvePredictionsOnPositionClose(holding.tokenMint, currentPrice, holdTimeMinutes).catch(e =>
+      console.error(`Failed to resolve AI predictions:`, e)
+    );
 
     console.log(`Stop-loss executed for ${holding.tokenSymbol}:`);
     console.log(`  Loss: ${lossPercent.toFixed(1)}%`);
@@ -1118,6 +1133,13 @@ export async function executeAutoMirrorSell(
     } catch (e) {
       console.error(`Failed to resolve position snapshots:`, e);
     }
+    
+    // Resolve AI predictions for learning
+    const entryTime = holding.buyTimestamp || 0;
+    const holdTimeMinutes = entryTime > 0 ? Math.floor((now - entryTime) / 60) : undefined;
+    resolvePredictionsOnPositionClose(holding.tokenMint, exitPrice, holdTimeMinutes).catch(e =>
+      console.error(`Failed to resolve AI predictions:`, e)
+    );
 
     console.log(`Auto-mirror sell successful for ${holding.tokenSymbol}:`);
     console.log(`  Reason: ${reason}`);

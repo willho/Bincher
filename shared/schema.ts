@@ -1532,3 +1532,26 @@ export const whaleTokenPositions = pgTable("whale_token_positions", {
 export const insertWhaleTokenPositionSchema = createInsertSchema(whaleTokenPositions).omit({ id: true });
 export type WhaleTokenPosition = typeof whaleTokenPositions.$inferSelect;
 export type InsertWhaleTokenPosition = z.infer<typeof insertWhaleTokenPositionSchema>;
+
+// User relationships - tracks Miss Pincher's relationship with each user
+export const userRelationships = pgTable("user_relationships", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  affinityScore: integer("affinity_score").default(0), // -100 to +100
+  relationshipType: text("relationship_type").default("new"), // new, adversarial, professional, friendly, playful_banter, try_hard
+  crabMentions: integer("crab_mentions").default(0),
+  crabInsults: integer("crab_insults").default(0),
+  complimentsGiven: integer("compliments_given").default(0),
+  tradesWonTogether: integer("trades_won_together").default(0),
+  tradesLostTogether: integer("trades_lost_together").default(0),
+  warningsIgnored: integer("warnings_ignored").default(0),
+  warningsFollowed: integer("warnings_followed").default(0),
+  lastInteraction: integer("last_interaction"),
+  notes: jsonb("notes").default([]), // array of string notes
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertUserRelationshipSchema = createInsertSchema(userRelationships).omit({ id: true });
+export type UserRelationshipRow = typeof userRelationships.$inferSelect;
+export type InsertUserRelationship = z.infer<typeof insertUserRelationshipSchema>;
