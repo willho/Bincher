@@ -2433,18 +2433,42 @@ async function executeGetWalletCopyConfig(
   const label = w.label || w.walletAddress.slice(0, 8) + '...';
   const buyUnit = w.copyBuyType === 'fixed_sol' ? 'SOL' : w.copyBuyType === 'fixed_usd' ? 'USD' : '%';
   
+  // Also fetch rule defaults for sell settings
+  const ruleDefaultsResult = await db.select()
+    .from(walletRuleDefaults)
+    .where(eq(walletRuleDefaults.walletId, w.id))
+    .limit(1);
+  
+  const rd = ruleDefaultsResult[0];
+  
+  let sellSettingsStr = '';
+  if (rd) {
+    const tpThresholds = rd.takeProfitThresholds || [4, 10, 25, 100];
+    const tpPercentages = rd.takeProfitPercentages || [25, 25, 25, 25];
+    const tpTiers = tpThresholds.map((t: number, i: number) => `${tpPercentages[i]}% at ${t}x`).join(', ');
+    sellSettingsStr = `
+SELL SETTINGS:
+- Take-profit tiers: ${tpTiers}
+- Stop-loss: ${rd.stopLossPercent ?? 50}% (mode: ${rd.stopLossMode || 'auto'})
+- Auto-mirror sells: ${rd.autoMirrorSells ? 'ON' : 'OFF'}`;
+  } else {
+    sellSettingsStr = `
+SELL SETTINGS: Using global defaults (no wallet-specific rules set)`;
+  }
+  
   return {
     success: true,
     message: `Copy config for ${label}:
+BUY SETTINGS:
 - Copy enabled: ${w.copyTradeEnabled ? 'YES' : 'NO'}
 - Buy type: ${w.copyBuyType || 'percentage'}
 - Buy amount: ${w.copyBuyAmount || 10}${buyUnit}
 - Timing: ${w.copyTiming || 'immediate'}${w.copyDelayMinutes ? ` (${w.copyDelayMinutes}m delay)` : ''}
 - Min trade: ${w.copyMinTradeUsd ? `$${w.copyMinTradeUsd}` : 'none'}
 - Score threshold: ${w.copyScoreThreshold ?? 'none'}
-- Auto-mirror: ${w.copyAutoMirror ? 'ON' : 'OFF'}
 - Skip if holding: ${w.dedupSkipIfHolding ? 'YES' : 'NO'}
-- Skip if ever held: ${w.dedupSkipIfEverHeld ? 'YES' : 'NO'}`
+- Skip if ever held: ${w.dedupSkipIfEverHeld ? 'YES' : 'NO'}
+${sellSettingsStr}`
   };
 }
 
