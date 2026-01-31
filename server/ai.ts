@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships, swaps } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships, swaps, walletRuleDefaults } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray, sql } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
@@ -1011,7 +1011,7 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "update_user_preferences",
-      description: "Update the user's event notification and summary preferences. Use when user wants to change what events they see, mute tokens, focus on wallets, or change what you focus on in summaries.",
+      description: "Update the user's notification preferences, alert settings, and summary focus. Use when user wants to change alerts, mute tokens, set thresholds, or configure notification channels.",
       parameters: {
         type: "object",
         properties: {
@@ -1042,6 +1042,24 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
           pinchEmailsEnabled: {
             type: "boolean",
             description: "Whether to receive special email alerts from Pincher"
+          },
+          dumpAlertEnabled: {
+            type: "boolean",
+            description: "Whether to receive alerts when tokens dump significantly"
+          },
+          dumpAlertThreshold: {
+            type: "number",
+            description: "Percentage drop to trigger dump alert (e.g., 50 means alert when token drops 50%)"
+          },
+          milestoneAlerts: {
+            type: "array",
+            items: { type: "number" },
+            description: "Price multipliers to receive alerts at (e.g., [2, 4, 10] means alert at 2x, 4x, 10x)"
+          },
+          preferredAlertChannel: {
+            type: "string",
+            enum: ["telegram", "email", "both"],
+            description: "Preferred channel for receiving alerts"
           }
         },
         required: []
@@ -1253,6 +1271,48 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "add_signal_wallet",
+      description: "Add a new signal wallet to monitor and optionally copy trades from. Use when user wants to add/track/watch a new wallet or says 'add wallet X'.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletAddress: {
+            type: "string",
+            description: "The Solana wallet address to monitor"
+          },
+          label: {
+            type: "string",
+            description: "Friendly name for the wallet (e.g., 'whale1', 'degen_trader')"
+          },
+          enableCopy: {
+            type: "boolean",
+            description: "Whether to immediately enable copy trading (default false, just monitors)"
+          }
+        },
+        required: ["walletAddress"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "remove_signal_wallet",
+      description: "Remove a signal wallet from monitoring. Use when user wants to stop monitoring/watching/tracking a wallet entirely, or says 'remove wallet X'.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletIdentifier: {
+            type: "string",
+            description: "The wallet address or label/name to remove"
+          }
+        },
+        required: ["walletIdentifier"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "enable_wallet_copy",
       description: "Enable copying trades from a specific monitored wallet. Use when user wants to start copying a wallet or enable copy trading for a wallet.",
       parameters: {
@@ -1375,13 +1435,17 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "configure_wallet_copy",
-      description: "Configure copy trading settings for a specific signal wallet. Use when user wants to customize how trades are copied from a particular wallet - buy amount, timing, filters, etc.",
+      description: "Configure copy trading settings for a specific signal wallet. COMPREHENSIVE tool that handles buy amount, take-profit tiers, stop-loss, and all copy settings. Use when user says things like 'set 5x take profit', 'stop loss at 30%', 'buy 0.5 SOL on copies', or any combination.",
       parameters: {
         type: "object",
         properties: {
-          walletAddress: {
+          walletIdentifier: {
             type: "string",
-            description: "The signal wallet address to configure"
+            description: "The wallet address or label/name to configure"
+          },
+          enabled: {
+            type: "boolean",
+            description: "Enable or disable copy trading for this wallet"
           },
           buyType: {
             type: "string",
@@ -1403,7 +1467,7 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
           },
           minTradeUsd: {
             type: "number",
-            description: "Only copy trades above this USD value"
+            description: "Only copy trades above this USD value (e.g., 100 means only copy buys over $100)"
           },
           scoreThreshold: {
             type: "number",
@@ -1420,9 +1484,28 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
           skipIfEverHeld: {
             type: "boolean",
             description: "Skip copy if you've ever held the token before"
+          },
+          takeProfitMultipliers: {
+            type: "array",
+            items: { type: "number" },
+            description: "Multipliers for take-profit tiers (e.g., [2, 5, 10] means sell at 2x, 5x, 10x)"
+          },
+          takeProfitPercentages: {
+            type: "array",
+            items: { type: "number" },
+            description: "Percent to sell at each take-profit tier (e.g., [30, 30, 40] sells 30% at first tier, 30% at second, 40% at third)"
+          },
+          stopLossPercent: {
+            type: "number",
+            description: "Stop-loss percentage - auto-sell if price drops by this much from entry (e.g., 30 means sell if down 30%)"
+          },
+          stopLossMode: {
+            type: "string",
+            enum: ["auto", "alert"],
+            description: "Stop-loss behavior: 'auto' executes immediately, 'alert' notifies and waits for confirmation"
           }
         },
-        required: ["walletAddress"]
+        required: ["walletIdentifier"]
       }
     }
   },
@@ -2061,7 +2144,8 @@ function executeCancelSettings(userId: number): { success: boolean; message: str
 async function executeConfigureWalletCopy(
   userId: number,
   args: {
-    walletAddress: string;
+    walletIdentifier: string;
+    enabled?: boolean;
     buyType?: string;
     buyAmount?: number;
     timing?: string;
@@ -2071,78 +2155,135 @@ async function executeConfigureWalletCopy(
     autoMirror?: boolean;
     skipIfHolding?: boolean;
     skipIfEverHeld?: boolean;
+    takeProfitMultipliers?: number[];
+    takeProfitPercentages?: number[];
+    stopLossPercent?: number;
+    stopLossMode?: string;
   }
 ): Promise<{ success: boolean; message: string }> {
-  // Find the wallet
-  const existing = await db.select()
+  // Find wallet by address or label
+  const wallets = await db.select()
     .from(monitoredWallets)
-    .where(and(
-      eq(monitoredWallets.userId, userId),
-      eq(monitoredWallets.walletAddress, args.walletAddress)
-    ))
-    .limit(1);
+    .where(eq(monitoredWallets.userId, userId));
   
-  if (existing.length === 0) {
-    return { success: false, message: `Wallet ${args.walletAddress.slice(0, 8)}... not found in your monitored wallets.` };
+  const searchLower = args.walletIdentifier.toLowerCase();
+  const wallet = wallets.find(w => 
+    w.walletAddress.toLowerCase() === searchLower ||
+    (w.label && w.label.toLowerCase().includes(searchLower))
+  );
+  
+  if (!wallet) {
+    return { success: false, message: `Couldn't find wallet matching "${args.walletIdentifier}" in your monitored wallets.` };
   }
   
-  const wallet = existing[0];
-  const updates: any = {};
+  const walletUpdates: any = {};
+  const ruleUpdates: any = {};
   const changes: string[] = [];
   
+  // Wallet-level settings (monitoredWallets table)
+  if (args.enabled !== undefined) {
+    walletUpdates.copyTradeEnabled = args.enabled;
+    changes.push(`copy trading: ${args.enabled ? 'ON' : 'OFF'}`);
+  }
   if (args.buyType !== undefined) {
-    updates.copyBuyType = args.buyType;
+    walletUpdates.copyBuyType = args.buyType;
     changes.push(`buy type: ${args.buyType}`);
   }
   if (args.buyAmount !== undefined) {
-    updates.copyBuyAmount = args.buyAmount;
+    walletUpdates.copyBuyAmount = args.buyAmount;
     const typeLabel = args.buyType || wallet.copyBuyType || 'percentage';
-    const unit = typeLabel === 'fixed_sol' ? 'SOL' : typeLabel === 'fixed_usd' ? 'USD' : '%';
+    const unit = typeLabel === 'fixed_sol' ? ' SOL' : typeLabel === 'fixed_usd' ? ' USD' : '%';
     changes.push(`buy amount: ${args.buyAmount}${unit}`);
   }
   if (args.timing !== undefined) {
-    updates.copyTiming = args.timing;
+    walletUpdates.copyTiming = args.timing;
     changes.push(`timing: ${args.timing}`);
   }
   if (args.delayMinutes !== undefined) {
-    updates.copyDelayMinutes = args.delayMinutes;
+    walletUpdates.copyDelayMinutes = args.delayMinutes;
     changes.push(`delay: ${args.delayMinutes}m`);
   }
   if (args.minTradeUsd !== undefined) {
-    updates.copyMinTradeUsd = args.minTradeUsd;
+    walletUpdates.copyMinTradeUsd = args.minTradeUsd;
     changes.push(`min trade: $${args.minTradeUsd}`);
   }
   if (args.scoreThreshold !== undefined) {
-    updates.copyScoreThreshold = args.scoreThreshold;
+    walletUpdates.copyScoreThreshold = args.scoreThreshold;
     changes.push(`score threshold: ${args.scoreThreshold}`);
   }
   if (args.autoMirror !== undefined) {
-    updates.copyAutoMirror = args.autoMirror;
+    walletUpdates.copyAutoMirror = args.autoMirror;
     changes.push(`auto-mirror: ${args.autoMirror ? 'ON' : 'OFF'}`);
   }
   if (args.skipIfHolding !== undefined) {
-    updates.dedupSkipIfHolding = args.skipIfHolding;
+    walletUpdates.dedupSkipIfHolding = args.skipIfHolding;
     changes.push(`skip if holding: ${args.skipIfHolding ? 'YES' : 'NO'}`);
   }
   if (args.skipIfEverHeld !== undefined) {
-    updates.dedupSkipIfEverHeld = args.skipIfEverHeld;
+    walletUpdates.dedupSkipIfEverHeld = args.skipIfEverHeld;
     changes.push(`skip if ever held: ${args.skipIfEverHeld ? 'YES' : 'NO'}`);
   }
   
-  if (Object.keys(updates).length === 0) {
+  // Rule settings (walletRuleDefaults table)
+  if (args.takeProfitMultipliers !== undefined) {
+    ruleUpdates.takeProfitThresholds = args.takeProfitMultipliers;
+    const enabled = args.takeProfitMultipliers.map(() => true);
+    ruleUpdates.takeProfitEnabled = enabled;
+    changes.push(`take-profit at: ${args.takeProfitMultipliers.map(m => m + 'x').join(', ')}`);
+  }
+  if (args.takeProfitPercentages !== undefined) {
+    ruleUpdates.takeProfitPercentages = args.takeProfitPercentages;
+    changes.push(`sell percentages: ${args.takeProfitPercentages.map(p => p + '%').join(', ')}`);
+  }
+  if (args.stopLossPercent !== undefined) {
+    ruleUpdates.stopLossPercent = args.stopLossPercent;
+    changes.push(`stop-loss: ${args.stopLossPercent}%`);
+  }
+  if (args.stopLossMode !== undefined) {
+    ruleUpdates.stopLossMode = args.stopLossMode;
+    changes.push(`stop-loss mode: ${args.stopLossMode}`);
+  }
+  
+  if (Object.keys(walletUpdates).length === 0 && Object.keys(ruleUpdates).length === 0) {
     return { success: false, message: "No settings specified to change." };
   }
   
-  await db.update(monitoredWallets)
-    .set(updates)
-    .where(eq(monitoredWallets.id, wallet.id));
+  // Update wallet settings
+  if (Object.keys(walletUpdates).length > 0) {
+    await db.update(monitoredWallets)
+      .set(walletUpdates)
+      .where(eq(monitoredWallets.id, wallet.id));
+  }
+  
+  // Update or insert rule defaults
+  if (Object.keys(ruleUpdates).length > 0) {
+    const now = Math.floor(Date.now() / 1000);
+    
+    const existingRules = await db.select()
+      .from(walletRuleDefaults)
+      .where(eq(walletRuleDefaults.walletId, wallet.id))
+      .limit(1);
+    
+    if (existingRules.length > 0) {
+      await db.update(walletRuleDefaults)
+        .set({ ...ruleUpdates, updatedAt: now })
+        .where(eq(walletRuleDefaults.walletId, wallet.id));
+    } else {
+      await db.insert(walletRuleDefaults).values({
+        walletId: wallet.id,
+        userId,
+        ...ruleUpdates,
+        createdAt: now,
+      });
+    }
+  }
   
   const label = wallet.label || wallet.walletAddress.slice(0, 8) + '...';
   console.log(`[Settings] User ${userId} configured wallet ${label}: ${changes.join(', ')}`);
   
   return {
     success: true,
-    message: `Updated ${label}: ${changes.join(', ')}`
+    message: `Updated ${label}: ${changes.join(', ')}. View full settings at /signal/${wallet.id}/copy-settings`
   };
 }
 
@@ -2385,6 +2526,79 @@ async function executeGetCopyTradingSettings(userId: number): Promise<{ success:
 - Dump alert: -${config.dumpAlertThreshold}%
 - Min buy score: ${config.minBuyScore ?? 'none (all tokens)'}`
   };
+}
+
+// Add signal wallet
+async function executeAddSignalWallet(
+  userId: number,
+  args: { walletAddress: string; label?: string; enableCopy?: boolean }
+): Promise<{ success: boolean; message: string }> {
+  // Validate wallet address format (basic Solana address check)
+  if (!args.walletAddress || args.walletAddress.length < 32 || args.walletAddress.length > 44) {
+    return { success: false, message: "Invalid wallet address format. Solana addresses are 32-44 characters." };
+  }
+  
+  // Check if already monitoring
+  const existing = await db.select()
+    .from(monitoredWallets)
+    .where(and(
+      eq(monitoredWallets.userId, userId),
+      eq(monitoredWallets.walletAddress, args.walletAddress)
+    ))
+    .limit(1);
+  
+  if (existing.length > 0) {
+    const label = existing[0].label || args.walletAddress.slice(0, 8) + '...';
+    return { success: false, message: `Already monitoring ${label}. Use configure to update settings.` };
+  }
+  
+  const now = Math.floor(Date.now() / 1000);
+  const label = args.label || args.walletAddress.slice(0, 8) + '...';
+  
+  await db.insert(monitoredWallets).values({
+    userId,
+    walletAddress: args.walletAddress,
+    label,
+    enabled: true,
+    copyTradeEnabled: args.enableCopy || false,
+    createdAt: now,
+  });
+  
+  const copyStatus = args.enableCopy ? ' with copy trading enabled' : '';
+  return { 
+    success: true, 
+    message: `Added ${label}${copyStatus}. I'll monitor their trades now.` 
+  };
+}
+
+// Remove signal wallet
+async function executeRemoveSignalWallet(
+  userId: number,
+  args: { walletIdentifier: string }
+): Promise<{ success: boolean; message: string }> {
+  // Find wallet by address or label
+  const wallets = await db.select()
+    .from(monitoredWallets)
+    .where(eq(monitoredWallets.userId, userId));
+  
+  const searchLower = args.walletIdentifier.toLowerCase();
+  const match = wallets.find(w => 
+    w.walletAddress.toLowerCase() === searchLower ||
+    (w.label && w.label.toLowerCase().includes(searchLower))
+  );
+  
+  if (!match) {
+    return { success: false, message: `Couldn't find wallet matching "${args.walletIdentifier}"` };
+  }
+  
+  // Delete the wallet (and cascading rules if any)
+  await db.delete(monitoredWallets).where(eq(monitoredWallets.id, match.id));
+  
+  // Also delete any wallet rule defaults
+  await db.delete(walletRuleDefaults).where(eq(walletRuleDefaults.walletId, match.id));
+  
+  const label = match.label || match.walletAddress.slice(0, 8) + '...';
+  return { success: true, message: `Removed ${label} from monitoring.` };
 }
 
 // Enable wallet copy trading
@@ -3151,10 +3365,12 @@ COPY TRADING CONFIGURATION (always propose first, then confirm):
 - confirm_settings: Apply proposed settings after user confirms
 - cancel_settings: Cancel pending settings proposal
 - get_copy_trading_settings: Show current copy trading configuration
+- add_signal_wallet: Add a new wallet to monitor (use when user says "add wallet X" or "track wallet Y")
+- remove_signal_wallet: Remove a wallet from monitoring entirely
+- list_monitored_wallets: Show all monitored wallets and their copy status
 - enable_wallet_copy: Enable copy trading for a monitored wallet
 - disable_wallet_copy: Disable copy trading for a wallet (keep monitoring)
-- list_monitored_wallets: Show all monitored wallets and their copy status
-- configure_wallet_copy: Configure per-wallet copy settings (buy amount, timing, filters)
+- configure_wallet_copy: COMPREHENSIVE config tool - handles buy amount, take-profit multipliers (e.g., [2,5,10] for 2x/5x/10x), stop-loss percent, timing, filters. Use this when user mentions any copy trading settings.
 - get_wallet_copy_config: Get copy config for a specific wallet
 
 POSITIONS & MANUAL TRADING:
@@ -3298,7 +3514,13 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             toolResults.push(result.message);
           }
           // Wallet Monitoring Tools
-          else if (toolName === "enable_wallet_copy") {
+          else if (toolName === "add_signal_wallet") {
+            const result = await executeAddSignalWallet(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "remove_signal_wallet") {
+            const result = await executeRemoveSignalWallet(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "enable_wallet_copy") {
             const result = await executeEnableWalletCopy(userId, args);
             toolResults.push(result.message);
           } else if (toolName === "disable_wallet_copy") {
