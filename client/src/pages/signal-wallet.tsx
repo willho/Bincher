@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 
@@ -36,6 +37,20 @@ interface MostTradedToken {
   symbol: string;
   tradeCount: number;
 }
+
+interface TokenHolding {
+  mint: string;
+  symbol?: string;
+  name?: string;
+  amount: number;
+  decimals: number;
+  priceUsd?: number;
+  valueUsd?: number;
+  marketCap?: number;
+  priceChange24h?: number;
+}
+
+type HoldingsSortOption = "value" | "name" | "change";
 
 interface WalletActivity {
   wallet: {
@@ -91,9 +106,23 @@ export default function SignalWalletPage() {
   const params = useParams<{ id: string }>();
   const walletId = params.id;
   const [timeframe, setTimeframe] = useState("24h");
+  const [holdingsSort, setHoldingsSort] = useState<HoldingsSortOption>("value");
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
   const wsRef = useRef<WebSocket | null>(null);
+
+  const { data: holdingsData, isLoading: holdingsLoading, refetch: refetchHoldings } = useQuery<{ holdings: TokenHolding[] }>({
+    queryKey: ["/api/signal-wallets", walletId, "holdings"],
+    queryFn: async () => {
+      const response = await fetch(`/api/signal-wallets/${walletId}/holdings`, {
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to load holdings");
+      return response.json();
+    },
+    enabled: !!walletId,
+    staleTime: 60000, // Cache for 1 minute
+  });
 
   const { data: activity, isLoading, refetch } = useQuery<WalletActivity>({
     queryKey: ["/api/signal-wallets", walletId, "activity", timeframe],
@@ -157,6 +186,23 @@ export default function SignalWalletPage() {
     navigator.clipboard.writeText(text);
     toast({ description: "Copied to clipboard" });
   };
+
+  // Sort holdings based on selected option
+  const sortedHoldings = useMemo(() => {
+    const holdings = holdingsData?.holdings || [];
+    return [...holdings].sort((a, b) => {
+      switch (holdingsSort) {
+        case "value":
+          return (b.valueUsd || 0) - (a.valueUsd || 0);
+        case "name":
+          return (a.symbol || a.mint).localeCompare(b.symbol || b.mint);
+        case "change":
+          return (b.priceChange24h || 0) - (a.priceChange24h || 0);
+        default:
+          return 0;
+      }
+    });
+  }, [holdingsData?.holdings, holdingsSort]);
 
   if (isLoading) {
     return (
@@ -335,6 +381,96 @@ export default function SignalWalletPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card data-testid="card-holdings">
+        <CardHeader>
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              <Coins className="h-5 w-5" />
+              <CardTitle>Current Holdings</CardTitle>
+            </div>
+            <div className="flex items-center gap-2">
+              <Select value={holdingsSort} onValueChange={(v) => setHoldingsSort(v as HoldingsSortOption)}>
+                <SelectTrigger className="w-32" data-testid="select-holdings-sort">
+                  <ArrowUpDown className="h-3 w-3 mr-1" />
+                  <SelectValue placeholder="Sort by" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="value" data-testid="select-sort-value">By Value</SelectItem>
+                  <SelectItem value="name" data-testid="select-sort-name">By Name</SelectItem>
+                  <SelectItem value="change" data-testid="select-sort-change">By 24h %</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button 
+                variant="ghost" 
+                size="icon"
+                onClick={() => refetchHoldings()}
+                disabled={holdingsLoading}
+                data-testid="button-refresh-holdings"
+              >
+                <RefreshCw className={`h-4 w-4 ${holdingsLoading ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {holdingsLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12" />
+              <Skeleton className="h-12" />
+              <Skeleton className="h-12" />
+            </div>
+          ) : sortedHoldings.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              No token holdings found for this wallet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b text-left text-sm text-muted-foreground">
+                    <th className="pb-3 font-medium">Token</th>
+                    <th className="pb-3 font-medium text-right">Amount</th>
+                    <th className="pb-3 font-medium text-right">Price</th>
+                    <th className="pb-3 font-medium text-right">Value</th>
+                    <th className="pb-3 font-medium text-right">24h</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedHoldings.map((holding) => (
+                    <tr 
+                      key={holding.mint} 
+                      className="border-b last:border-0 hover-elevate"
+                      data-testid={`row-holding-${holding.mint.slice(0, 8)}`}
+                    >
+                      <td className="py-3">
+                        <div className="font-medium">{holding.symbol || "Unknown"}</div>
+                        <div className="text-xs text-muted-foreground">{holding.name || truncateAddress(holding.mint)}</div>
+                      </td>
+                      <td className="py-3 text-right font-mono text-sm">
+                        {holding.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                      </td>
+                      <td className="py-3 text-right font-mono text-sm">
+                        {holding.priceUsd ? `$${holding.priceUsd.toFixed(6)}` : "-"}
+                      </td>
+                      <td className="py-3 text-right font-mono text-sm font-medium">
+                        {holding.valueUsd ? formatUsd(holding.valueUsd) : "-"}
+                      </td>
+                      <td className="py-3 text-right">
+                        {holding.priceChange24h !== undefined ? (
+                          <span className={holding.priceChange24h >= 0 ? "text-green-500" : "text-red-500"}>
+                            {holding.priceChange24h >= 0 ? "+" : ""}{holding.priceChange24h.toFixed(1)}%
+                          </span>
+                        ) : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card data-testid="card-trades-list">
         <CardHeader>

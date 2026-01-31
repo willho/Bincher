@@ -831,3 +831,102 @@ function parseSwapFromHeliusTransaction(tx: any, walletAddress: string): InsertS
     return null;
   }
 }
+
+// Token holding info for a wallet
+export interface WalletTokenHolding {
+  mint: string;
+  symbol?: string;
+  name?: string;
+  amount: number;  // Human-readable amount
+  decimals: number;
+  priceUsd?: number;
+  valueUsd?: number;
+  marketCap?: number;
+  priceChange24h?: number;
+}
+
+// Fetch all token holdings for a wallet address
+export async function fetchWalletTokenHoldings(walletAddress: string): Promise<WalletTokenHolding[]> {
+  if (!HELIUS_API_KEY) {
+    console.warn("No Helius API key - skipping wallet holdings fetch");
+    return [];
+  }
+
+  const budgetCheck = await shouldAllowApiCall("helius");
+  if (!budgetCheck.allowed) {
+    console.warn(`Helius API blocked: ${budgetCheck.reason}`);
+    return [];
+  }
+
+  try {
+    const rpcUrl = await getHeliusRpcEndpoint();
+    
+    // Use getTokenAccountsByOwner to get all SPL token accounts
+    const response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "wallet-tokens",
+        method: "getTokenAccountsByOwner",
+        params: [
+          walletAddress,
+          { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+          { encoding: "jsonParsed" }
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("Failed to fetch token accounts:", response.status);
+      return [];
+    }
+
+    const data = await response.json();
+    await trackApiCall("helius", "getTokenAccountsByOwner");
+
+    if (!data.result?.value) {
+      return [];
+    }
+
+    const holdings: WalletTokenHolding[] = [];
+
+    for (const account of data.result.value) {
+      const parsed = account.account?.data?.parsed?.info;
+      if (!parsed) continue;
+
+      const mint = parsed.mint;
+      const amount = parsed.tokenAmount?.uiAmount || 0;
+      const decimals = parsed.tokenAmount?.decimals || 0;
+
+      // Skip zero balance and base currencies (SOL/USDC)
+      if (amount <= 0 || isBaseCurrency(mint)) continue;
+
+      holdings.push({
+        mint,
+        amount,
+        decimals,
+      });
+    }
+
+    // Fetch metadata for each token (with rate limiting)
+    const enrichedHoldings: WalletTokenHolding[] = [];
+    for (const holding of holdings) {
+      const metadata = await fetchTokenMetadata(holding.mint);
+      enrichedHoldings.push({
+        ...holding,
+        symbol: metadata?.symbol,
+        name: metadata?.name,
+        priceUsd: metadata?.priceUsd,
+        valueUsd: metadata?.priceUsd ? holding.amount * metadata.priceUsd : undefined,
+        marketCap: metadata?.marketCap,
+        priceChange24h: metadata?.priceChange24h,
+      });
+    }
+
+    return enrichedHoldings;
+  } catch (error) {
+    console.error("Error fetching wallet token holdings:", error);
+    return [];
+  }
+}

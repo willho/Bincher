@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrency, isBaseCurrencySymbol } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrency, isBaseCurrencySymbol, fetchWalletTokenHoldings } from "./helius";
 import { sendSwapNotification, sendPasswordResetEmail } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import {
@@ -1937,6 +1937,30 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting signal wallet activity:", error);
       res.status(500).json({ error: "Failed to get wallet activity" });
+    }
+  });
+
+  // Get signal wallet current token holdings
+  app.get("/api/signal-wallets/:id/holdings", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      // Get wallet and verify ownership
+      const [wallet] = await db.select().from(monitoredWallets).where(
+        and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, req.userId!))
+      ).limit(1);
+      
+      if (!wallet) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      
+      // Fetch current token holdings from blockchain
+      const holdings = await fetchWalletTokenHoldings(wallet.walletAddress);
+      
+      res.json({ holdings });
+    } catch (error) {
+      console.error("Error getting signal wallet holdings:", error);
+      res.status(500).json({ error: "Failed to get wallet holdings" });
     }
   });
 
