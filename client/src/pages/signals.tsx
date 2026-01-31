@@ -16,7 +16,7 @@ import {
   Copy,
   Eye
 } from "lucide-react";
-import type { Holding } from "@shared/schema";
+import type { Holding, Swap } from "@shared/schema";
 
 interface SignalWallet {
   id: number;
@@ -41,6 +41,36 @@ export default function SignalsPage() {
   const { data: holdings } = useQuery<Holding[]>({
     queryKey: ["/api/copy-trade/holdings"],
   });
+
+  const { data: swaps } = useQuery<Swap[]>({
+    queryKey: ["/api/swaps"],
+  });
+
+  // Build token name lookup from swaps (toToken -> toTokenSymbol)
+  const tokenSymbolLookup = useMemo(() => {
+    const lookup = new Map<string, string>();
+    if (swaps) {
+      swaps.forEach(swap => {
+        if (swap.toToken && swap.toTokenSymbol) {
+          lookup.set(swap.toToken, swap.toTokenSymbol);
+        }
+        if (swap.fromToken && swap.fromTokenSymbol) {
+          lookup.set(swap.fromToken, swap.fromTokenSymbol);
+        }
+      });
+    }
+    return lookup;
+  }, [swaps]);
+
+  // Helper to get token symbol with fallback
+  const getTokenSymbol = (holding: Holding): string => {
+    if (holding.tokenSymbol) return holding.tokenSymbol;
+    if (holding.tokenMint && tokenSymbolLookup.has(holding.tokenMint)) {
+      return tokenSymbolLookup.get(holding.tokenMint)!;
+    }
+    // Last resort: truncated mint address
+    return holding.tokenMint ? `${holding.tokenMint.slice(0, 4)}...` : "???";
+  };
 
   const walletStats = useMemo(() => {
     const stats = new Map<number, { 
@@ -259,7 +289,7 @@ export default function SignalsPage() {
                               data-testid={`badge-position-${holding.id}`}
                             >
                               <Coins className="h-3 w-3 mr-1" />
-                              <span data-testid={`text-badge-symbol-${holding.id}`}>{holding.tokenSymbol}</span>
+                              <span data-testid={`text-badge-symbol-${holding.id}`}>{getTokenSymbol(holding)}</span>
                               <span className={`ml-1 ${pnl >= 0 ? "text-green-500" : "text-red-500"}`} data-testid={`text-badge-pnl-${holding.id}`}>
                                 {pnl >= 0 ? "+" : ""}{pnl.toFixed(0)}%
                               </span>
