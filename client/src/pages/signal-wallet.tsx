@@ -373,9 +373,17 @@ export default function SignalWalletPage() {
           <CardContent>
             <div className="flex flex-wrap gap-2">
               {stats.mostTradedTokens.map((token) => (
-                <Badge key={token.mint} variant="secondary" data-testid={`badge-token-${token.symbol}`}>
-                  {token.symbol} ({token.tradeCount})
-                </Badge>
+                <a 
+                  key={token.mint}
+                  href={`https://solscan.io/token/${token.mint}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-testid={`link-token-${token.symbol}`}
+                >
+                  <Badge variant="secondary" className="hover:bg-secondary/80 cursor-pointer">
+                    {token.symbol} ({token.tradeCount})
+                  </Badge>
+                </a>
               ))}
             </div>
           </CardContent>
@@ -444,8 +452,16 @@ export default function SignalWalletPage() {
                       data-testid={`row-holding-${holding.mint.slice(0, 8)}`}
                     >
                       <td className="py-3">
-                        <div className="font-medium">{holding.symbol || "Unknown"}</div>
-                        <div className="text-xs text-muted-foreground">{holding.name || truncateAddress(holding.mint)}</div>
+                        <a 
+                          href={`https://solscan.io/token/${holding.mint}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:underline"
+                          data-testid={`link-holding-${holding.mint.slice(0, 8)}`}
+                        >
+                          <div className="font-medium">{holding.symbol || "Unknown"}</div>
+                          <div className="text-xs text-muted-foreground">{holding.name || truncateAddress(holding.mint)}</div>
+                        </a>
                       </td>
                       <td className="py-3 text-right font-mono text-sm">
                         {holding.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })}

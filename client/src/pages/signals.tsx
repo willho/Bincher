@@ -442,9 +442,15 @@ export default function SignalsPage() {
                                 </a>
                               </div>
                               <div className="flex items-center gap-1 text-xs text-muted-foreground font-mono">
-                                <span data-testid={`text-address-${wallet.id}`}>
+                                <a
+                                  href={`https://solscan.io/account/${wallet.walletAddress}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="hover:underline hover:text-foreground"
+                                  data-testid={`link-address-${wallet.id}`}
+                                >
                                   {truncateAddress(wallet.walletAddress)}
-                                </span>
+                                </a>
                                 <Button
                                   size="icon"
                                   variant="ghost"
@@ -632,7 +638,15 @@ export default function SignalsPage() {
                 {signalWallet && (
                   <div className="border-t pt-4 text-sm">
                     <p className="text-muted-foreground mb-1">Signal Source</p>
-                    <p className="font-medium">{signalWallet.label || truncateAddress(signalWallet.walletAddress)}</p>
+                    <a
+                      href={`https://solscan.io/account/${signalWallet.walletAddress}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-medium hover:underline"
+                      data-testid="link-signal-source"
+                    >
+                      {signalWallet.label || truncateAddress(signalWallet.walletAddress)}
+                    </a>
                   </div>
                 )}
 
