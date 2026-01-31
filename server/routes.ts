@@ -4476,6 +4476,26 @@ export async function registerRoutes(
     }
   });
 
+  // Get portfolio snapshots for charts
+  app.get("/api/portfolio/snapshots", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tier = (req.query.tier as string) || "hourly";
+      const limit = parseInt(req.query.limit as string) || 168;
+      
+      if (tier !== "hourly" && tier !== "daily") {
+        return res.status(400).json({ error: "Invalid tier. Must be 'hourly' or 'daily'" });
+      }
+      
+      const { getPortfolioSnapshots } = await import("./price-aggregator");
+      const snapshots = await getPortfolioSnapshots(req.userId!, tier, limit);
+      
+      res.json({ snapshots });
+    } catch (error) {
+      console.error("Error fetching portfolio snapshots:", error);
+      res.status(500).json({ error: "Failed to fetch portfolio snapshots" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
   

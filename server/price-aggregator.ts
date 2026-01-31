@@ -1,6 +1,16 @@
 import { db } from "./db";
-import { priceAggregates, type PriceAggregate, type InsertPriceAggregate, type AggregateTier } from "@shared/schema";
-import { eq, and, lt, desc } from "drizzle-orm";
+import { 
+  priceAggregates, 
+  portfolioSnapshots, 
+  holdings,
+  users,
+  type PriceAggregate, 
+  type InsertPriceAggregate, 
+  type AggregateTier,
+  type InsertPortfolioSnapshot,
+  type PortfolioSnapshotTier
+} from "@shared/schema";
+import { eq, and, lt, desc, gt } from "drizzle-orm";
 import { fetchTopHolders, type TopHolderInfo } from "./helius";
 import { BatchPriceResult } from "./jupiter";
 
@@ -422,6 +432,16 @@ export async function runFullAggregationAndCull(): Promise<void> {
       console.error(`Aggregation failed for ${tokenMint}:`, error);
     }
   }
+  
+  // Record portfolio snapshots (hourly, with daily rollup)
+  try {
+    const snapshotCount = await recordPortfolioSnapshots();
+    if (snapshotCount > 0) {
+      console.log(`[PortfolioSnapshot] Recorded ${snapshotCount} hourly snapshots`);
+    }
+  } catch (error) {
+    console.error("Portfolio snapshot failed:", error);
+  }
 }
 
 // ==================== QUERY HELPERS ====================
@@ -438,6 +458,242 @@ export async function getAggregates(
       eq(priceAggregates.tier, tier)
     ))
     .orderBy(desc(priceAggregates.bucketStart))
+    .limit(limit);
+}
+
+// ==================== PORTFOLIO SNAPSHOTS ====================
+
+// Portfolio snapshot retention
+const PORTFOLIO_RETENTION = {
+  "hourly": 7 * 24 * 60 * 60 * 1000, // 7 days
+  "daily": 90 * 24 * 60 * 60 * 1000, // 90 days
+};
+
+function getPortfolioBucketStart(timestamp: number, tier: PortfolioSnapshotTier): number {
+  const date = new Date(timestamp);
+  if (tier === "hourly") {
+    date.setMinutes(0, 0, 0);
+  } else {
+    date.setHours(0, 0, 0, 0);
+  }
+  return Math.floor(date.getTime() / 1000);
+}
+
+export async function recordPortfolioSnapshots(): Promise<number> {
+  const now = Date.now();
+  let snapshotsRecorded = 0;
+  const currentHourlyBucket = getPortfolioBucketStart(now, "hourly");
+  
+  try {
+    // Get all users with active holdings
+    const allUsers = await db.select().from(users);
+    
+    for (const user of allUsers) {
+      // Check DB for existing snapshot in current bucket (replaces in-memory throttle)
+      const existingSnapshot = await db.select()
+        .from(portfolioSnapshots)
+        .where(and(
+          eq(portfolioSnapshots.userId, user.id),
+          eq(portfolioSnapshots.tier, "hourly"),
+          eq(portfolioSnapshots.bucketStart, currentHourlyBucket)
+        ))
+        .limit(1);
+      
+      if (existingSnapshot.length > 0) continue; // Already have snapshot for this hour
+      
+      // Get all active holdings for this user
+      const userHoldings = await db.select()
+        .from(holdings)
+        .where(and(
+          eq(holdings.userId, user.id),
+          gt(holdings.currentAmount, 0)
+        ));
+      
+      if (userHoldings.length === 0) continue;
+      
+      // Calculate portfolio metrics
+      let totalValueUsd = 0;
+      let totalCostBasisUsd = 0;
+      let profitableCount = 0;
+      let losingCount = 0;
+      
+      const positionValues: { tokenMint: string; tokenSymbol: string; valueUsd: number }[] = [];
+      
+      for (const holding of userHoldings) {
+        const currentPrice = holding.lastPrice ?? 0;
+        const valueUsd = holding.currentAmount * currentPrice;
+        const costBasisUsd = (holding.solSpent ?? 0) * (holding.avgEntryPrice ?? holding.buyPrice ?? 0);
+        
+        totalValueUsd += valueUsd;
+        totalCostBasisUsd += costBasisUsd;
+        
+        if (valueUsd > costBasisUsd) {
+          profitableCount++;
+        } else if (valueUsd < costBasisUsd) {
+          losingCount++;
+        }
+        
+        positionValues.push({
+          tokenMint: holding.tokenMint,
+          tokenSymbol: holding.tokenSymbol ?? "UNKNOWN",
+          valueUsd,
+        });
+      }
+      
+      // Calculate top positions (top 5 by value)
+      const sortedPositions = positionValues
+        .sort((a, b) => b.valueUsd - a.valueUsd)
+        .slice(0, 5);
+      
+      const topPositions = sortedPositions.map(p => ({
+        tokenMint: p.tokenMint,
+        tokenSymbol: p.tokenSymbol,
+        valueUsd: p.valueUsd,
+        percentOfPortfolio: totalValueUsd > 0 ? (p.valueUsd / totalValueUsd) * 100 : 0,
+      }));
+      
+      const unrealizedPnlUsd = totalValueUsd - totalCostBasisUsd;
+      const unrealizedPnlPercent = totalCostBasisUsd > 0 
+        ? ((totalValueUsd - totalCostBasisUsd) / totalCostBasisUsd) * 100 
+        : 0;
+      
+      // Insert hourly snapshot
+      const snapshot: InsertPortfolioSnapshot = {
+        userId: user.id,
+        tier: "hourly",
+        bucketStart: currentHourlyBucket,
+        totalValueUsd,
+        totalCostBasisUsd,
+        unrealizedPnlUsd,
+        unrealizedPnlPercent,
+        positionCount: userHoldings.length,
+        profitableCount,
+        losingCount,
+        topPositions,
+        solPriceUsd: null, // TODO: fetch SOL price
+        createdAt: Math.floor(now / 1000),
+      };
+      
+      await db.insert(portfolioSnapshots).values(snapshot);
+      snapshotsRecorded++;
+    }
+    
+    // Roll up completed days to daily snapshots and cull old data
+    await rollUpPortfolioSnapshots();
+    await cullOldPortfolioSnapshots();
+    
+  } catch (error) {
+    console.error("Error recording portfolio snapshots:", error);
+  }
+  
+  return snapshotsRecorded;
+}
+
+async function rollUpPortfolioSnapshots(): Promise<void> {
+  const now = Date.now();
+  const currentDayStart = getPortfolioBucketStart(now, "daily");
+  
+  // Only roll up completed days (yesterday and before)
+  // Look back up to 7 days to catch any missed rollups
+  const oldestDayToCheck = currentDayStart - (7 * 24 * 60 * 60);
+  
+  // Get all users
+  const allUsers = await db.select().from(users);
+  
+  for (const user of allUsers) {
+    // Get all hourly snapshots for completed days only (before today)
+    const hourlySnapshots = await db.select()
+      .from(portfolioSnapshots)
+      .where(and(
+        eq(portfolioSnapshots.userId, user.id),
+        eq(portfolioSnapshots.tier, "hourly"),
+        gt(portfolioSnapshots.bucketStart, oldestDayToCheck), // Only last 7 days
+        lt(portfolioSnapshots.bucketStart, currentDayStart) // Before today
+      ))
+      .orderBy(desc(portfolioSnapshots.bucketStart));
+    
+    if (hourlySnapshots.length === 0) continue;
+    
+    // Group hourly snapshots by their day bucket
+    const dayBuckets = new Map<number, typeof hourlySnapshots>();
+    
+    for (const snapshot of hourlySnapshots) {
+      const dayBucket = getPortfolioBucketStart(snapshot.bucketStart * 1000, "daily");
+      if (!dayBuckets.has(dayBucket)) {
+        dayBuckets.set(dayBucket, []);
+      }
+      dayBuckets.get(dayBucket)!.push(snapshot);
+    }
+    
+    // Create daily aggregates for each completed day
+    for (const [dayBucket, snapshots] of Array.from(dayBuckets.entries())) {
+      // Double-check: skip if day isn't complete (shouldn't happen with query above)
+      if (dayBucket >= currentDayStart) continue;
+      
+      // Check if daily snapshot already exists
+      const existing = await db.select()
+        .from(portfolioSnapshots)
+        .where(and(
+          eq(portfolioSnapshots.userId, user.id),
+          eq(portfolioSnapshots.tier, "daily"),
+          eq(portfolioSnapshots.bucketStart, dayBucket)
+        ))
+        .limit(1);
+      
+      if (existing.length > 0) continue;
+      
+      // Use the last hourly snapshot of the day (end-of-day value)
+      const sortedSnapshots = snapshots.sort((a, b) => b.bucketStart - a.bucketStart);
+      const lastSnapshot = sortedSnapshots[0];
+      
+      const dailySnapshot: InsertPortfolioSnapshot = {
+        userId: user.id,
+        tier: "daily",
+        bucketStart: dayBucket,
+        totalValueUsd: lastSnapshot.totalValueUsd,
+        totalCostBasisUsd: lastSnapshot.totalCostBasisUsd,
+        unrealizedPnlUsd: lastSnapshot.unrealizedPnlUsd,
+        unrealizedPnlPercent: lastSnapshot.unrealizedPnlPercent,
+        positionCount: lastSnapshot.positionCount,
+        profitableCount: lastSnapshot.profitableCount,
+        losingCount: lastSnapshot.losingCount,
+        topPositions: lastSnapshot.topPositions as any,
+        solPriceUsd: lastSnapshot.solPriceUsd,
+        createdAt: Math.floor(Date.now() / 1000),
+      };
+      
+      await db.insert(portfolioSnapshots).values(dailySnapshot);
+      console.log(`[PortfolioSnapshot] Created daily snapshot for user ${user.id}, day ${new Date(dayBucket * 1000).toISOString().split('T')[0]}`);
+    }
+  }
+}
+
+async function cullOldPortfolioSnapshots(): Promise<void> {
+  const now = Date.now();
+  
+  for (const [tier, maxAge] of Object.entries(PORTFOLIO_RETENTION)) {
+    const cutoff = Math.floor((now - maxAge) / 1000);
+    
+    await db.delete(portfolioSnapshots)
+      .where(and(
+        eq(portfolioSnapshots.tier, tier),
+        lt(portfolioSnapshots.bucketStart, cutoff)
+      ));
+  }
+}
+
+export async function getPortfolioSnapshots(
+  userId: number,
+  tier: PortfolioSnapshotTier,
+  limit = 168 // 7 days of hourly or 168 days of daily
+): Promise<typeof portfolioSnapshots.$inferSelect[]> {
+  return await db.select()
+    .from(portfolioSnapshots)
+    .where(and(
+      eq(portfolioSnapshots.userId, userId),
+      eq(portfolioSnapshots.tier, tier)
+    ))
+    .orderBy(desc(portfolioSnapshots.bucketStart))
     .limit(limit);
 }
 

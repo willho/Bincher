@@ -617,6 +617,40 @@ export const priceAggregates = pgTable("price_aggregates", {
   createdAt: integer("created_at").notNull(),
 });
 
+// Portfolio snapshots - tracks portfolio value over time for charts
+// Stored at multiple tiers (hourly, daily) piggybacking on price aggregation
+export const portfolioSnapshots = pgTable("portfolio_snapshots", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  tier: text("tier").notNull(), // "hourly" | "daily"
+  bucketStart: integer("bucket_start").notNull(), // Unix timestamp for bucket start
+  
+  // Portfolio value metrics
+  totalValueUsd: real("total_value_usd").notNull(), // Sum of all position values
+  totalCostBasisUsd: real("total_cost_basis_usd"), // Sum of all SOL spent converted to USD
+  unrealizedPnlUsd: real("unrealized_pnl_usd"), // totalValueUsd - totalCostBasisUsd
+  unrealizedPnlPercent: real("unrealized_pnl_percent"), // % change from cost basis
+  
+  // Position counts
+  positionCount: integer("position_count").notNull(), // Number of active positions
+  profitableCount: integer("profitable_count"), // Positions in profit
+  losingCount: integer("losing_count"), // Positions in loss
+  
+  // Top positions snapshot (for allocation chart)
+  topPositions: jsonb("top_positions").$type<{
+    tokenMint: string;
+    tokenSymbol: string;
+    valueUsd: number;
+    percentOfPortfolio: number;
+  }[]>(),
+  
+  // SOL price at snapshot (for historical conversions)
+  solPriceUsd: real("sol_price_usd"),
+  
+  // Metadata
+  createdAt: integer("created_at").notNull(),
+});
+
 // AI chat messages - for conversational insights
 export const aiChatMessages = pgTable("ai_chat_messages", {
   id: serial("id").primaryKey(),
@@ -691,6 +725,7 @@ export const insertPendingBuySchema = createInsertSchema(pendingBuys).omit({ id:
 export const insertTradeConfigSchema = createInsertSchema(tradeConfig).omit({ id: true });
 export const insertTokenSnapshotSchema = createInsertSchema(tokenSnapshots).omit({ id: true });
 export const insertPriceAggregateSchema = createInsertSchema(priceAggregates).omit({ id: true });
+export const insertPortfolioSnapshotSchema = createInsertSchema(portfolioSnapshots).omit({ id: true });
 export const insertAiChatMessageSchema = createInsertSchema(aiChatMessages).omit({ id: true });
 export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({ id: true });
 export const insertCommunityInsightSchema = createInsertSchema(communityInsights).omit({ id: true });
@@ -710,6 +745,11 @@ export type InsertTradeRulePreset = z.infer<typeof insertTradeRulePresetSchema>;
 export type PriceAggregate = typeof priceAggregates.$inferSelect;
 export type InsertPriceAggregate = z.infer<typeof insertPriceAggregateSchema>;
 export type AggregateTier = "15min" | "hourly" | "daily" | "weekly";
+
+// Portfolio snapshot types
+export type PortfolioSnapshot = typeof portfolioSnapshots.$inferSelect;
+export type InsertPortfolioSnapshot = z.infer<typeof insertPortfolioSnapshotSchema>;
+export type PortfolioSnapshotTier = "hourly" | "daily";
 
 // User types
 export type User = typeof users.$inferSelect;
