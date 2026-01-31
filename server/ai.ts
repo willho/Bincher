@@ -2644,17 +2644,21 @@ async function executeGetWalletPerformance(userId: number, args: any): Promise<{
   }
   
   const hitRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(0) : "N/A";
-  const netPnl = realizedPnl.toFixed(2);
-  const netPnlSign = realizedPnl >= 0 ? "+" : "";
+  const netPnl = Math.abs(realizedPnl).toFixed(2);
+  const netPnlSign = realizedPnl >= 0 ? "+" : "-";
+  const closedPositions = wins + losses;
+  const openPositions = Object.keys(tokenPositions).length - closedPositions;
   
   const summary = [
     `📊 ${walletLabel} Performance (${periodLabel}):`,
     ``,
-    `Trades: ${buyCount} buys, ${sellCount} sells`,
-    `Win/Loss: ${wins}W / ${losses}L (${hitRate}% hit rate)`,
-    `Realized P&L: ${netPnlSign}${netPnl} SOL`,
-    `Volume: ${totalBuySol.toFixed(2)} SOL bought, ${totalSellSol.toFixed(2)} SOL sold`,
-  ];
+    `SOL Trades: ${buyCount} buys, ${sellCount} sells`,
+    `Closed Positions: ${closedPositions} (${wins}W / ${losses}L)`,
+    closedPositions > 0 ? `Hit Rate: ${hitRate}%` : null,
+    `Est. Realized P&L: ${netPnlSign}${netPnl} SOL`,
+    `Volume: ${totalBuySol.toFixed(2)} SOL in, ${totalSellSol.toFixed(2)} SOL out`,
+    openPositions > 0 ? `Open Positions: ~${openPositions} tokens` : null,
+  ].filter(Boolean);
   
   return {
     success: true,
@@ -3305,6 +3309,9 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             toolResults.push(result.message);
           } else if (toolName === "find_wallet_by_label") {
             const result = await executeFindWalletByLabel(userId, args);
+            toolResults.push(result.message);
+          } else if (toolName === "get_wallet_performance") {
+            const result = await executeGetWalletPerformance(userId, args);
             toolResults.push(result.message);
           } else if (toolName === "update_position_risk") {
             const result = await executeUpdatePositionRisk(userId, args);
