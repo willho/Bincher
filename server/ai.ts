@@ -1558,13 +1558,13 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "get_wallet_copy_config",
-      description: "Get copy trading configuration for a specific signal wallet. Use when user asks about a wallet's copy settings.",
+      description: "Get copy trading configuration for a specific signal wallet. Use when user asks about a wallet's copy settings. Accepts wallet label/name or address.",
       parameters: {
         type: "object",
         properties: {
           walletAddress: {
             type: "string",
-            description: "The signal wallet address to check"
+            description: "The signal wallet label/name (e.g., 'JSP', 'Grok') or full Solana address"
           }
         },
         required: ["walletAddress"]
@@ -2405,16 +2405,28 @@ async function executeGetWalletCopyConfig(
   userId: number,
   args: { walletAddress: string }
 ): Promise<{ success: boolean; message: string }> {
-  const existing = await db.select()
+  // First try to find by label (case-insensitive)
+  let existing = await db.select()
     .from(monitoredWallets)
     .where(and(
       eq(monitoredWallets.userId, userId),
-      eq(monitoredWallets.walletAddress, args.walletAddress)
+      sql`LOWER(${monitoredWallets.label}) = LOWER(${args.walletAddress})`
     ))
     .limit(1);
   
+  // If not found by label, try by wallet address
   if (existing.length === 0) {
-    return { success: false, message: `Wallet ${args.walletAddress.slice(0, 8)}... not found.` };
+    existing = await db.select()
+      .from(monitoredWallets)
+      .where(and(
+        eq(monitoredWallets.userId, userId),
+        eq(monitoredWallets.walletAddress, args.walletAddress)
+      ))
+      .limit(1);
+  }
+  
+  if (existing.length === 0) {
+    return { success: false, message: `Wallet "${args.walletAddress}" not found. Check the name or address.` };
   }
   
   const w = existing[0];

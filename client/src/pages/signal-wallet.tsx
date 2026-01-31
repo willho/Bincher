@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer } from "lucide-react";
+import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer, Settings } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 import { SignalWalletActivityChart } from "@/components/portfolio-charts";
@@ -433,6 +433,14 @@ export default function SignalWalletPage() {
           >
             <Copy className="h-4 w-4 mr-2" />
             {wallet.copyTradeEnabled ? "Copy Trading Active" : "Configure Copy Trading"}
+          </Button>
+          <Button 
+            variant="ghost" 
+            size="icon"
+            onClick={() => navigate(`/signal/${wallet.id}/copy-settings`)}
+            data-testid="button-settings"
+          >
+            <Settings className="h-4 w-4" />
           </Button>
           <Button 
             variant="outline" 

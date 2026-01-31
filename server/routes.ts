@@ -1782,6 +1782,24 @@ export async function registerRoutes(
     copyTradeEnabled: z.boolean().optional(),
   });
   
+  // Get single monitored wallet by ID
+  app.get("/api/monitored-wallets/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      if (isNaN(walletId)) {
+        return res.status(400).json({ error: "Invalid wallet ID" });
+      }
+      const wallet = await storage.getMonitoredWallet(req.userId!, walletId);
+      if (!wallet) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+      res.json(wallet);
+    } catch (error) {
+      console.error("Error fetching monitored wallet:", error);
+      res.status(500).json({ error: "Failed to fetch monitored wallet" });
+    }
+  });
+
   app.patch("/api/monitored-wallets/:id", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const walletId = parseInt(req.params.id);
