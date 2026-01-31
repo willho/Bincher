@@ -48,7 +48,7 @@ import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signal
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
-import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions, logTokenEvent, generateAndCacheAlert } from "./ai";
+import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions, logTokenEvent, generateAndCacheAlert, reviewTradingRules } from "./ai";
 import { 
   isWalletInTop100, 
   getHolderTier, 
@@ -3927,6 +3927,21 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting welcome message:", error);
       res.status(500).json({ error: "Failed to get welcome message" });
+    }
+  });
+
+  // Review trading rules before applying
+  app.post("/api/ai/review-rules", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { rules } = req.body;
+      if (!rules) {
+        return res.status(400).json({ error: "Rules are required" });
+      }
+      const review = await reviewTradingRules(req.userId!, rules);
+      res.json(review);
+    } catch (error) {
+      console.error("Error reviewing rules:", error);
+      res.status(500).json({ error: "Failed to review rules" });
     }
   });
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, Copy, DollarSign, Percent, Clock, Shield, Filter, Zap } from "lucide-react";
 import { RuleBuilder, RuleValues } from "@/components/rule-builder";
+import { RuleConfirmDialog } from "@/components/rule-confirm-dialog";
 
 interface WalletRuleDefaults {
   id: number;
@@ -60,6 +61,8 @@ export default function CopySettingsPage() {
     stopLossPercent: 50,
     stopLossMode: "auto",
   });
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const previousRuleValues = useRef<RuleValues | null>(null);
   
   const { data: wallet, isLoading } = useQuery<MonitoredWallet>({
     queryKey: ["/api/monitored-wallets", id],
@@ -75,13 +78,15 @@ export default function CopySettingsPage() {
   useEffect(() => {
     if (ruleDefaults) {
       const thresholds = ruleDefaults.takeProfitThresholds || [4, 10, 25, 100];
-      setRuleValues({
+      const loadedValues: RuleValues = {
         takeProfitThresholds: thresholds,
         takeProfitPercentages: ruleDefaults.takeProfitPercentages || [25, 25, 25, 25],
         takeProfitEnabled: ruleDefaults.takeProfitEnabled || thresholds.map(() => true),
         stopLossPercent: ruleDefaults.stopLossPercent ?? 50,
         stopLossMode: (ruleDefaults.stopLossMode as "auto" | "alert") || "auto",
-      });
+      };
+      setRuleValues(loadedValues);
+      previousRuleValues.current = loadedValues;
     }
   }, [ruleDefaults]);
 
@@ -110,7 +115,11 @@ export default function CopySettingsPage() {
     updateMutation.mutate({ [field]: value });
   };
 
-  const saveRuleDefaults = () => {
+  const handleSaveClick = () => {
+    setShowConfirmDialog(true);
+  };
+
+  const confirmSaveRules = () => {
     updateRuleDefaultsMutation.mutate({
       takeProfitThresholds: ruleValues.takeProfitThresholds,
       takeProfitPercentages: ruleValues.takeProfitPercentages,
@@ -118,6 +127,7 @@ export default function CopySettingsPage() {
       stopLossPercent: ruleValues.stopLossPercent,
       stopLossMode: ruleValues.stopLossMode,
     });
+    setShowConfirmDialog(false);
   };
 
   if (isLoading) {
@@ -400,7 +410,7 @@ export default function CopySettingsPage() {
               <RuleBuilder
                 values={ruleValues}
                 onChange={setRuleValues}
-                onSave={saveRuleDefaults}
+                onSave={handleSaveClick}
                 isSaving={updateRuleDefaultsMutation.isPending}
                 showSaveButton={true}
                 testIdPrefix={`wallet-${id}`}
@@ -413,6 +423,16 @@ export default function CopySettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <RuleConfirmDialog
+        open={showConfirmDialog}
+        onOpenChange={setShowConfirmDialog}
+        ruleValues={ruleValues}
+        previousValues={previousRuleValues.current}
+        onConfirm={confirmSaveRules}
+        isPending={updateRuleDefaultsMutation.isPending}
+        walletName={wallet?.label || truncateAddress(wallet?.walletAddress || "")}
+      />
     </div>
   );
 }

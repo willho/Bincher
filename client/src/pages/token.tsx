@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff } from "lucide-react";
 import { Link } from "wouter";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,6 +14,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 import { RuleBuilder, RuleValues, RuleSummary } from "@/components/rule-builder";
+import { RuleConfirmDialog } from "@/components/rule-confirm-dialog";
 import type { TokenSnapshot, Holding } from "@shared/schema";
 
 interface SignalSource {
@@ -68,6 +69,9 @@ export default function TokenPage() {
     stopLossPercent: 50,
     stopLossMode: "auto",
   });
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [pendingPositionId, setPendingPositionId] = useState<number | null>(null);
+  const previousRuleValues = useRef<RuleValues | null>(null);
 
   const updateRiskMutation = useMutation({
     mutationFn: async ({ positionId, data }: { positionId: number; data: any }) => {
@@ -112,18 +116,26 @@ export default function TokenPage() {
   const startEditing = (position: Holding) => {
     setEditingPosition(position.id);
     const thresholds = (position.takeProfitThresholds as number[]) || [4, 10, 25, 100];
-    setEditingRuleValues({
+    const loadedValues: RuleValues = {
       takeProfitThresholds: thresholds,
       takeProfitPercentages: (position.takeProfitPercentages as number[]) || [25, 25, 25, 25],
       takeProfitEnabled: (position.takeProfitEnabled as boolean[]) || thresholds.map(() => true),
       stopLossPercent: position.stopLossPercent ?? 50,
       stopLossMode: (position.stopLossMode as "auto" | "alert") || "auto",
-    });
+    };
+    setEditingRuleValues(loadedValues);
+    previousRuleValues.current = loadedValues;
   };
 
-  const saveRiskSettings = (positionId: number) => {
+  const handleSaveClick = (positionId: number) => {
+    setPendingPositionId(positionId);
+    setShowConfirmDialog(true);
+  };
+
+  const confirmSaveRules = () => {
+    if (pendingPositionId === null) return;
     updateRiskMutation.mutate({
-      positionId,
+      positionId: pendingPositionId,
       data: {
         takeProfitThresholds: editingRuleValues.takeProfitThresholds,
         takeProfitPercentages: editingRuleValues.takeProfitPercentages,
@@ -132,6 +144,8 @@ export default function TokenPage() {
         stopLossMode: editingRuleValues.stopLossMode,
       }
     });
+    setShowConfirmDialog(false);
+    setPendingPositionId(null);
   };
 
   function formatTimeAgo(timestamp: number): string {
@@ -574,7 +588,7 @@ export default function TokenPage() {
                       <div className="flex gap-2">
                         <Button 
                           size="sm" 
-                          onClick={() => saveRiskSettings(position.id)}
+                          onClick={() => handleSaveClick(position.id)}
                           disabled={updateRiskMutation.isPending}
                           data-testid={`button-save-risk-${position.id}`}
                         >
@@ -619,6 +633,21 @@ export default function TokenPage() {
           </CardContent>
         </Card>
       )}
+
+      <RuleConfirmDialog
+        open={showConfirmDialog}
+        onOpenChange={(open) => {
+          setShowConfirmDialog(open);
+          if (!open) {
+            setPendingPositionId(null);
+          }
+        }}
+        ruleValues={editingRuleValues}
+        previousValues={previousRuleValues.current}
+        onConfirm={confirmSaveRules}
+        isPending={updateRiskMutation.isPending}
+        tokenSymbol={snapshot?.tokenSymbol || tokenMint?.slice(0, 6)}
+      />
     </div>
   );
 }

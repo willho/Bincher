@@ -3541,6 +3541,115 @@ export function getPincherWelcomeMessage(relationship?: UserRelationship): strin
   return getPincherWelcome(getDefaultRelationship());
 }
 
+// Review trading rules and provide AI feedback
+interface RulesReviewResult {
+  review: string;
+  sentiment: "bullish" | "cautious" | "neutral";
+}
+
+export async function reviewTradingRules(
+  userId: number,
+  rules: {
+    takeProfitThresholds: number[];
+    takeProfitPercentages: number[];
+    takeProfitEnabled?: boolean[];
+    stopLossPercent: number;
+    stopLossMode: "auto" | "alert";
+  }
+): Promise<RulesReviewResult> {
+  const enabledThresholds = rules.takeProfitThresholds.filter(
+    (_, i) => !rules.takeProfitEnabled || rules.takeProfitEnabled[i]
+  );
+  const enabledPercentages = rules.takeProfitPercentages.filter(
+    (_, i) => !rules.takeProfitEnabled || rules.takeProfitEnabled[i]
+  );
+  const totalSellPercent = enabledPercentages.reduce((a, b) => a + b, 0);
+  const avgMultiplier = enabledThresholds.reduce((a, b) => a + b, 0) / enabledThresholds.length || 0;
+
+  // Check budget
+  const budgetCheck = await shouldAllowApiCall('openai');
+  if (!budgetCheck.allowed) {
+    // Provide a rule-based response when budget is exceeded
+    return generateRuleBasedReview(rules, enabledThresholds, enabledPercentages, totalSellPercent, avgMultiplier);
+  }
+
+  try {
+    const openai = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY });
+
+    const prompt = `You are Miss Pincher, a sassy but helpful Solana trading assistant. Review these trading rules briefly (2-3 sentences max):
+
+Take-profit tiers: ${enabledThresholds.map((t, i) => `${t}x → sell ${enabledPercentages[i]}%`).join(", ")}
+Total selling: ${totalSellPercent}% across all tiers
+Stop-loss: ${rules.stopLossPercent === 0 ? "Disabled" : `${rules.stopLossPercent}% (${rules.stopLossMode})`}
+
+Give a quick take on this strategy. Be conversational and direct. End with one of: bullish, cautious, or neutral outlook.`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 150,
+      temperature: 0.7,
+    });
+
+    await trackApiCall('openai', 'review-rules', 1);
+    recordAISuccess();
+
+    const content = response.choices[0]?.message?.content || "";
+    
+    // Determine sentiment from response
+    let sentiment: "bullish" | "cautious" | "neutral" = "neutral";
+    const lowerContent = content.toLowerCase();
+    if (lowerContent.includes("bullish") || lowerContent.includes("aggressive") || lowerContent.includes("ambitious")) {
+      sentiment = "bullish";
+    } else if (lowerContent.includes("cautious") || lowerContent.includes("conservative") || lowerContent.includes("risky") || lowerContent.includes("careful")) {
+      sentiment = "cautious";
+    }
+
+    return { review: content, sentiment };
+  } catch (error) {
+    console.error("Error reviewing rules:", error);
+    recordAIFailure(error instanceof Error ? error.message : "Unknown error");
+    return generateRuleBasedReview(rules, enabledThresholds, enabledPercentages, totalSellPercent, avgMultiplier);
+  }
+}
+
+function generateRuleBasedReview(
+  rules: { stopLossPercent: number; stopLossMode: "auto" | "alert" },
+  thresholds: number[],
+  percentages: number[],
+  totalSellPercent: number,
+  avgMultiplier: number
+): RulesReviewResult {
+  const parts: string[] = [];
+  let sentiment: "bullish" | "cautious" | "neutral" = "neutral";
+
+  if (avgMultiplier >= 20) {
+    parts.push("Those are some ambitious targets - you're clearly hunting for runners.");
+    sentiment = "bullish";
+  } else if (avgMultiplier <= 5) {
+    parts.push("Quick profit-taking approach. Smart if you don't trust the market.");
+    sentiment = "cautious";
+  } else {
+    parts.push("Solid middle-ground targets. Not too greedy, not too hasty.");
+  }
+
+  if (totalSellPercent >= 80) {
+    parts.push("Locking in most of your gains across tiers - that's disciplined.");
+  } else if (totalSellPercent <= 40) {
+    parts.push("Leaving a lot on the table for moonshots.");
+    if (sentiment === "neutral") sentiment = "bullish";
+  }
+
+  if (rules.stopLossPercent === 0) {
+    parts.push("No stop-loss? Bold choice. Hope you're watching closely.");
+    sentiment = "cautious";
+  } else if (rules.stopLossPercent < 30) {
+    parts.push("Tight stop-loss will protect you from dumps but might shake you out early.");
+  }
+
+  return { review: parts.join(" "), sentiment };
+}
+
 // Cached Alerts System - AI generates once, system delivers to all channels
 export interface CachedAlertResult {
   webMessage: string;
