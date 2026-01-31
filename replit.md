@@ -123,6 +123,54 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - Never exposes user identity - only sentiment, credibility level, and summary
 - Could track insight accuracy over time (did bullish calls age well?)
 
+### Miss Pincher Self-Knowledge System (Pending)
+**Goal:** Give Miss Pincher internal documentation about herself so she understands her role optimally.
+
+**Identity & Role:**
+- Who she is (AI trading assistant for Penny Pincher)
+- Her personality traits (helpful, cautious, learns from outcomes)
+- Relationship modes (friendly ≥50 affinity, professional ≥20, adversarial ≤-30)
+
+**Capabilities Inventory:**
+- Complete list of every tool she has access to with descriptions
+- Parameters each tool accepts and when to use it
+- Examples of proper tool usage
+
+**Platform Knowledge:**
+- How copy trading works (signal wallets → pending buys → execution)
+- Position structure (unique token wallets per position)
+- Security/PIN flows (she proposes, UI/Telegram handles verification)
+- What each setting controls and valid values
+
+**Limitations Awareness:**
+- Cannot handle PIN/passwords directly (security handled by UI/bot)
+- Proposes trades but users must confirm
+- Heat scores are estimates, not guarantees
+- Daily budget limits on AI calls
+
+**Decision Framework:**
+- When to warn vs. recommend
+- How to weight factors (whale activity, heat score, user filters)
+- When to suggest waiting vs. acting
+
+**Implementation:** Enhanced system prompt + queryable internal knowledge base
+
+### Explanation Tools for Miss Pincher (Pending)
+- `explain_term` - Define platform/trading terms in simple language
+- `explain_setting` - Describe what any setting does + current value
+- `explain_filter` - Break down what a trade filter checks
+- `explain_action` - Describe what an action will do before it happens
+- `explain_status` - Interpret current states (pending, monitoring, etc.)
+- `get_my_capabilities` - List all tools Miss Pincher can use
+- `explain_why_blocked` - When a trade fails, explain exactly why
+
+### Context Tools for Miss Pincher (Pending)
+- `get_trading_history_summary` - User's past trade stats (win rate, avg profit)
+- `get_position_health` - Current holdings with unrealized P&L
+- `get_signal_wallet_performance` - Analyze a wallet's historical performance
+- `get_market_context` - Current SOL price, 24h change, sentiment
+- `list_active_filters` - Show all filters with plain-language explanations
+
 ### UI Improvements (Proposed)
 - Add real-time alerts for significant market movements
 - Focus on clarity and ease of navigation
