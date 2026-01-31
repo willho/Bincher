@@ -1,6 +1,99 @@
 import { db } from "./db";
-import { holdings, pendingBuys, tradeConfig, tokenEvents } from "@shared/schema";
+import { holdings, pendingBuys, tradeConfig, tokenEvents, walletRuleDefaults } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
+
+// Resolved effective rules for a position (after inheritance resolution)
+export interface EffectiveRules {
+  takeProfitThresholds: number[];
+  takeProfitPercentages: number[];
+  takeProfitEnabled: boolean[];
+  stopLossPercent: number | null;
+  stopLossFloorUsd: number | null;
+  stopLossMode: "auto" | "alert";
+  ruleSource: "inherited" | "override";
+  resolvedFrom: "position" | "wallet" | "global";
+}
+
+// Resolve effective rules for a position with inheritance
+export async function resolveEffectiveRules(
+  holding: typeof holdings.$inferSelect,
+  config: Awaited<ReturnType<typeof getTradeConfig>>
+): Promise<EffectiveRules> {
+  const ruleSource = (holding.ruleSource as "inherited" | "override") || "inherited";
+  
+  // If position has override, use position values (honor override even if only some fields are set)
+  if (ruleSource === "override") {
+    // Get fallback values from wallet defaults or global config for any missing fields
+    let fallbackThresholds = (config.progressiveTakeProfitThresholds as number[]) || [10, 100, 1000, 10000];
+    let fallbackPercentages = (config.progressiveTakeProfitPercents as number[]) || [10, 10, 10, 10];
+    let fallbackStopLoss = config.stopLossPercent ?? null;
+    let fallbackFloorUsd = config.stopLossFloorUsd ?? null;
+    
+    // Check wallet defaults for fallback if available
+    if (holding.signalWalletId) {
+      const [walletDefaults] = await db.select()
+        .from(walletRuleDefaults)
+        .where(eq(walletRuleDefaults.walletId, holding.signalWalletId));
+      
+      if (walletDefaults) {
+        fallbackThresholds = (walletDefaults.takeProfitThresholds as number[]) || fallbackThresholds;
+        fallbackPercentages = (walletDefaults.takeProfitPercentages as number[]) || fallbackPercentages;
+        fallbackStopLoss = walletDefaults.stopLossPercent ?? fallbackStopLoss;
+        fallbackFloorUsd = walletDefaults.stopLossFloorUsd ?? fallbackFloorUsd;
+      }
+    }
+    
+    const thresholds = (holding.takeProfitThresholds as number[]) || fallbackThresholds;
+    const percentages = (holding.takeProfitPercentages as number[]) || fallbackPercentages;
+    const takeProfitEnabled = (holding.takeProfitEnabled as boolean[]) || thresholds.map(() => true);
+    
+    return {
+      takeProfitThresholds: thresholds,
+      takeProfitPercentages: percentages,
+      takeProfitEnabled,
+      stopLossPercent: holding.stopLossPercent ?? fallbackStopLoss,
+      stopLossFloorUsd: holding.stopLossFloorUsd ?? fallbackFloorUsd,
+      stopLossMode: (holding.stopLossMode as "auto" | "alert") || "auto",
+      ruleSource: "override",
+      resolvedFrom: "position",
+    };
+  }
+  
+  // If inherited, look up wallet defaults via signalWalletId
+  if (holding.signalWalletId) {
+    const [walletDefaults] = await db.select()
+      .from(walletRuleDefaults)
+      .where(eq(walletRuleDefaults.walletId, holding.signalWalletId));
+    
+    if (walletDefaults) {
+      const takeProfitEnabled = (walletDefaults.takeProfitEnabled as boolean[]) || 
+        (walletDefaults.takeProfitThresholds as number[])?.map(() => true) || [true, true, true, true];
+      
+      return {
+        takeProfitThresholds: (walletDefaults.takeProfitThresholds as number[]) || [4, 10, 25, 100],
+        takeProfitPercentages: (walletDefaults.takeProfitPercentages as number[]) || [25, 25, 25, 25],
+        takeProfitEnabled,
+        stopLossPercent: walletDefaults.stopLossPercent ?? null,
+        stopLossFloorUsd: walletDefaults.stopLossFloorUsd ?? null,
+        stopLossMode: (walletDefaults.stopLossMode as "auto" | "alert") || "auto",
+        ruleSource: "inherited",
+        resolvedFrom: "wallet",
+      };
+    }
+  }
+  
+  // Fallback to global user config
+  return {
+    takeProfitThresholds: (config.progressiveTakeProfitThresholds as number[]) || [10, 100, 1000, 10000],
+    takeProfitPercentages: (config.progressiveTakeProfitPercents as number[]) || [10, 10, 10, 10],
+    takeProfitEnabled: ((config.progressiveTakeProfitThresholds as number[]) || [10, 100, 1000, 10000]).map(() => true),
+    stopLossPercent: config.stopLossPercent ?? null,
+    stopLossFloorUsd: config.stopLossFloorUsd ?? null,
+    stopLossMode: "auto",
+    ruleSource: "inherited",
+    resolvedFrom: "global",
+  };
+}
 import { 
   getTradeConfig, 
   getAllHoldings, 
@@ -547,19 +640,21 @@ async function checkHoldingPriceWithBatch(
       await createMilestoneEvent(holding, config.reclaimMultiplier, multiplier, currentPrice, "reclaim_executed");
     }
     
-    // Use per-position thresholds, fallback to user defaults
-    const progressiveMilestones = (holding.takeProfitThresholds as number[]) 
-      || (config.progressiveTakeProfitThresholds as number[]) 
-      || [10, 100, 1000, 10000];
-    const progressivePercents = (holding.takeProfitPercentages as number[])
-      || (config.progressiveTakeProfitPercents as number[])
-      || [10, 10, 10, 10];
+    // Resolve effective rules with inheritance (position → wallet → global)
+    const effectiveRules = await resolveEffectiveRules(holding, config);
+    
+    // Filter to only enabled tiers
+    const enabledIndices = effectiveRules.takeProfitEnabled
+      .map((enabled, i) => enabled ? i : -1)
+      .filter(i => i >= 0);
+    const progressiveMilestones = enabledIndices.map(i => effectiveRules.takeProfitThresholds[i]);
+    const progressivePercents = enabledIndices.map(i => effectiveRules.takeProfitPercentages[i]);
     
     for (let i = 0; i < progressiveMilestones.length; i++) {
       const milestone = progressiveMilestones[i];
       const sellPercent = progressivePercents[i] || 10;
       if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
-        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x (sell ${sellPercent}%)`);
+        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x (sell ${sellPercent}%) [${effectiveRules.resolvedFrom}]`);
         await executeProgressiveReclaim(userId, holding, currentPrice, milestone, sellPercent);
         await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "progressive_reclaim");
         break;
@@ -578,10 +673,10 @@ async function checkHoldingPriceWithBatch(
       }
     }
     
-    // Stop-loss execution: auto-sell entire position if loss exceeds threshold
-    const stopLossPercent = holding.stopLossPercent ?? config.stopLossPercent ?? null;
-    const stopLossFloorUsd = holding.stopLossFloorUsd ?? config.stopLossFloorUsd ?? null;
-    const stopLossMode = (holding.stopLossMode as "auto" | "alert") ?? "auto";
+    // Stop-loss execution using resolved rules
+    const stopLossPercent = effectiveRules.stopLossPercent;
+    const stopLossFloorUsd = effectiveRules.stopLossFloorUsd;
+    const stopLossMode = effectiveRules.stopLossMode;
     const STOP_LOSS_ALERT_DEBOUNCE_SECONDS = 15 * 60; // 15 minutes between alerts
     
     if (stopLossPercent !== null && !holding.stopLossTriggered && holding.currentAmount > 0) {
@@ -681,19 +776,21 @@ async function checkHoldingPrice(
       await createMilestoneEvent(holding, config.reclaimMultiplier, multiplier, currentPrice, "reclaim_executed");
     }
     
-    // Use per-position thresholds, fallback to user defaults
-    const progressiveMilestones = (holding.takeProfitThresholds as number[]) 
-      || (config.progressiveTakeProfitThresholds as number[]) 
-      || [10, 100, 1000, 10000];
-    const progressivePercents = (holding.takeProfitPercentages as number[])
-      || (config.progressiveTakeProfitPercents as number[])
-      || [10, 10, 10, 10];
+    // Resolve effective rules with inheritance (position → wallet → global)
+    const effectiveRules = await resolveEffectiveRules(holding, config);
+    
+    // Filter to only enabled tiers
+    const enabledIndices = effectiveRules.takeProfitEnabled
+      .map((enabled, i) => enabled ? i : -1)
+      .filter(i => i >= 0);
+    const progressiveMilestones = enabledIndices.map(i => effectiveRules.takeProfitThresholds[i]);
+    const progressivePercents = enabledIndices.map(i => effectiveRules.takeProfitPercentages[i]);
     
     for (let i = 0; i < progressiveMilestones.length; i++) {
       const milestone = progressiveMilestones[i];
       const sellPercent = progressivePercents[i] || 10;
       if (multiplier >= milestone && !reclaimedMilestones.includes(milestone)) {
-        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x (sell ${sellPercent}%)`);
+        console.log(`Progressive reclaim trigger for ${holding.tokenSymbol}: ${multiplier.toFixed(2)}x >= ${milestone}x (sell ${sellPercent}%) [${effectiveRules.resolvedFrom}]`);
         await executeProgressiveReclaim(userId, holding, currentPrice, milestone, sellPercent);
         await createMilestoneEvent(holding, milestone, multiplier, currentPrice, "progressive_reclaim");
         break;
@@ -709,6 +806,49 @@ async function checkHoldingPrice(
         await db.update(holdings).set({
           dumpAlertSent: true,
         }).where(eq(holdings.id, holding.id));
+      }
+    }
+    
+    // Stop-loss execution using resolved rules
+    const stopLossPercent = effectiveRules.stopLossPercent;
+    const stopLossFloorUsd = effectiveRules.stopLossFloorUsd;
+    const stopLossMode = effectiveRules.stopLossMode;
+    const STOP_LOSS_ALERT_DEBOUNCE_SECONDS = 15 * 60; // 15 minutes between alerts
+    
+    if (stopLossPercent !== null && !holding.stopLossTriggered && holding.currentAmount > 0) {
+      // Use avgEntryPrice if available (for positions with top-ups), else fallback to buyPrice
+      const entryPrice = holding.avgEntryPrice ?? holding.buyPrice;
+      if (entryPrice && entryPrice > 0 && isFinite(entryPrice)) {
+        const lossPercent = ((entryPrice - currentPrice) / entryPrice) * 100;
+        const shouldTriggerStopLoss = lossPercent >= stopLossPercent;
+        
+        // Floor bypass: don't execute stop-loss if position value is tiny (< floor USD)
+        const positionValueUsd = holding.currentAmount * currentPrice;
+        const floorBypass = stopLossFloorUsd !== null && positionValueUsd < stopLossFloorUsd;
+        
+        if (shouldTriggerStopLoss && !floorBypass) {
+          if (stopLossMode === "auto") {
+            // Auto mode: execute stop-loss immediately
+            console.log(`Stop-loss AUTO triggered for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss >= ${stopLossPercent}% threshold [${effectiveRules.resolvedFrom}]`);
+            await executeStopLoss(userId, holding, currentPrice, lossPercent);
+          } else {
+            // Alert mode: send notification and wait for user confirmation
+            const now = Math.floor(Date.now() / 1000);
+            const lastAlerted = holding.stopLossLastAlertedAt ?? 0;
+            
+            if (now - lastAlerted >= STOP_LOSS_ALERT_DEBOUNCE_SECONDS) {
+              console.log(`Stop-loss ALERT for ${holding.tokenSymbol}: ${lossPercent.toFixed(1)}% loss >= ${stopLossPercent}% threshold [${effectiveRules.resolvedFrom}]`);
+              
+              // Update debounce timestamp
+              await db.update(holdings).set({
+                stopLossLastAlertedAt: now,
+              }).where(eq(holdings.id, holding.id));
+              
+              // Send stop-loss alert notification
+              await sendStopLossAlert(userId, holding, lossPercent, currentPrice);
+            }
+          }
+        }
       }
     }
     

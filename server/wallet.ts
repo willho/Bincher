@@ -218,6 +218,8 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
       progressiveTakeProfitThresholds: (result[0].progressiveTakeProfitThresholds as number[]) ?? [10, 100, 1000, 10000],
       progressiveTakeProfitPercents: (result[0].progressiveTakeProfitPercents as number[]) ?? [10, 10, 10, 10],
       milestonesToAlert: (result[0].milestonesToAlert as number[]) ?? [2, 4, 10],
+      stopLossPercent: result[0].stopLossPercent ?? undefined,
+      stopLossFloorUsd: result[0].stopLossFloorUsd ?? undefined,
     };
   }
   
@@ -234,6 +236,8 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
     progressiveTakeProfitThresholds: (rows[0].progressiveTakeProfitThresholds as number[]) ?? [10, 100, 1000, 10000],
     progressiveTakeProfitPercents: (rows[0].progressiveTakeProfitPercents as number[]) ?? [10, 10, 10, 10],
     milestonesToAlert: (rows[0].milestonesToAlert as number[]) ?? [2, 4, 10],
+    stopLossPercent: rows[0].stopLossPercent ?? undefined,
+    stopLossFloorUsd: rows[0].stopLossFloorUsd ?? undefined,
   };
 }
 

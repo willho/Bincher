@@ -875,6 +875,9 @@ export const tradeConfigSchema = z.object({
   dumpAlertEnabled: z.boolean().default(true),
   dumpAlertThreshold: z.number().default(50),
   minBuyScore: z.number().optional(),
+  // Stop-loss defaults (Phase 8)
+  stopLossPercent: z.number().optional(),
+  stopLossFloorUsd: z.number().optional(),
   // Trading budget limits (Phase 8)
   maxTradeUsd: z.number().optional(),
   maxDailySpendUsd: z.number().optional(),
