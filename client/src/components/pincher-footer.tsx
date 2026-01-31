@@ -15,7 +15,8 @@ interface ChatMessage {
 
 function getPageContext(pathname: string): string {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
-  if (pathname === "/watchlist") return "watchlist";
+  if (pathname === "/signals") return "signals";
+  if (pathname.startsWith("/signal/")) return "signals";
   if (pathname.startsWith("/trading/")) return `token:${pathname.split("/")[2]}`;
   if (pathname === "/trading") return "trading";
   if (pathname === "/settings") return "settings";
@@ -24,7 +25,7 @@ function getPageContext(pathname: string): string {
 
 function getPageLabel(context: string): string {
   if (context === "dashboard") return "Dashboard";
-  if (context === "watchlist") return "Watchlist";
+  if (context === "signals") return "Signals";
   if (context === "trading") return "Trading";
   if (context === "settings") return "Settings";
   if (context.startsWith("token:")) return "Token";
@@ -33,7 +34,7 @@ function getPageLabel(context: string): string {
 
 const PAGE_INTROS: Record<string, string> = {
   dashboard: "Welcome to your Dashboard. This is command central - your portfolio overview, recent alerts, swap history, and heat scores all live here. I'll keep you posted when things get interesting.",
-  watchlist: "This is your Watchlist. Add wallet addresses you want to monitor here. When these wallets make swaps, you'll get alerts. Think of it as your personal whale-watching station.",
+  signals: "Signal Wallets. Add wallet addresses to monitor and copy trades from. When these wallets make moves, you'll know about it. Your personal whale-watching station.",
   trading: "Trading floor. Your holdings show up here, and you can manage your copy trading settings. When you're ready to make moves, this is where it happens.",
   settings: "Settings. API keys, notification preferences, account stuff. The boring but necessary bits. Don't worry, I won't judge your configuration choices. Much.",
   token: "Token details. Deep dive on this specific coin - price action, holder analysis, and my take on whether it's worth your attention.",

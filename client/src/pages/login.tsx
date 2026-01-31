@@ -724,7 +724,7 @@ export default function Login({ onLoginSuccess }: LoginProps) {
                           </li>
                         )}
                         <li>Use <strong>Production Setup</strong> in Admin tab to sync webhooks</li>
-                        <li>Add wallets to monitor in the <strong>Watchlist</strong></li>
+                        <li>Add wallets to monitor in <strong>Signal Wallets</strong></li>
                       </ul>
                     </div>
                   </div>

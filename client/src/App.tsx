@@ -19,7 +19,6 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import DashboardPage from "@/pages/dashboard-new";
-import WatchlistPage from "@/pages/watchlist";
 import TradingPage from "@/pages/trading";
 import TokenPage from "@/pages/token";
 import SignalWalletPage from "@/pages/signal-wallet";
@@ -43,7 +42,6 @@ const tradingItems = [
   { title: "Holdings", href: "/holdings", icon: Coins, description: "Your Positions" },
   { title: "Signals", href: "/signals", icon: Radio, description: "Signal Wallets" },
   { title: "Trading", href: "/trading", icon: TrendingUp, description: "Hot Wallet" },
-  { title: "Watchlist", href: "/watchlist", icon: Eye, description: "Manage Wallets" },
 ];
 
 const systemItems = [
@@ -237,7 +235,6 @@ function AuthenticatedApp() {
               <Route path="/holdings" component={HoldingsPage} />
               <Route path="/holdings/:token" component={HoldingsPage} />
               <Route path="/signals" component={SignalsPage} />
-              <Route path="/watchlist" component={WatchlistPage} />
               <Route path="/signal/:id" component={SignalWalletPage} />
               <Route path="/trading" component={TradingPage} />
               <Route path="/trading/:token" component={TokenPage} />

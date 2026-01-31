@@ -222,7 +222,7 @@ export default function SignalWalletPage() {
   if (!activity) {
     return (
       <div className="space-y-6">
-        <Link href="/watchlist">
+        <Link href="/signals">
           <Button variant="ghost" size="sm" data-testid="button-back">
             <ArrowLeft className="h-4 w-4 mr-2" />
             Back to Signal Wallets
@@ -243,7 +243,7 @@ export default function SignalWalletPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div className="flex items-center gap-4">
-          <Link href="/watchlist">
+          <Link href="/signals">
             <Button variant="ghost" size="sm" data-testid="button-back">
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
@@ -509,6 +509,7 @@ export default function SignalWalletPage() {
                     <th className="pb-3 font-medium">Token</th>
                     <th className="pb-3 font-medium text-right">SOL Value</th>
                     <th className="pb-3 font-medium text-right">USD Value</th>
+                    <th className="pb-3 font-medium text-right">Performance</th>
                     <th className="pb-3 font-medium text-right">Tx</th>
                   </tr>
                 </thead>
@@ -576,6 +577,36 @@ export default function SignalWalletPage() {
                           ) : (
                             <div className="text-xs text-muted-foreground">-</div>
                           );
+                        })()}
+                      </td>
+                      <td className="py-3 text-right">
+                        {(() => {
+                          // For BUY trades, calculate performance based on current price
+                          if (trade.isBuy) {
+                            const tokenHolding = sortedHoldings.find(h => h.mint === trade.toToken);
+                            if (tokenHolding?.priceUsd && trade.solPriceAtTrade) {
+                              // Entry cost in USD
+                              const entryCostUsd = trade.fromAmount * trade.solPriceAtTrade;
+                              // Current value in USD
+                              const currentValueUsd = trade.toAmount * tokenHolding.priceUsd;
+                              if (entryCostUsd > 0) {
+                                const pnlPercent = ((currentValueUsd - entryCostUsd) / entryCostUsd) * 100;
+                                return (
+                                  <div className={`font-medium ${pnlPercent >= 0 ? "text-green-500" : "text-red-500"}`} data-testid={`text-perf-${trade.id}`}>
+                                    {pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%
+                                  </div>
+                                );
+                              }
+                            }
+                            return <div className="text-xs text-muted-foreground" data-testid={`text-perf-${trade.id}`}>-</div>;
+                          } else {
+                            // SELL trade - mark as realized
+                            return (
+                              <Badge variant="outline" className="text-xs" data-testid={`text-perf-${trade.id}`}>
+                                Sold
+                              </Badge>
+                            );
+                          }
                         })()}
                       </td>
                       <td className="py-3 text-right">

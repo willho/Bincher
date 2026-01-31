@@ -288,10 +288,10 @@ export default function DashboardPage() {
                 <ArrowRight className="h-3 w-3 ml-2" />
               </Button>
             </Link>
-            <Link href="/watchlist">
-              <Button variant="outline" size="sm" data-testid="link-quick-watchlist">
+            <Link href="/signals">
+              <Button variant="outline" size="sm" data-testid="link-quick-signals">
                 <Eye className="h-4 w-4 mr-2" />
-                Manage Wallets
+                Signal Wallets
                 <ArrowRight className="h-3 w-3 ml-2" />
               </Button>
             </Link>
