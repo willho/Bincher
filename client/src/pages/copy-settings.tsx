@@ -11,7 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Copy, DollarSign, Percent, Clock, Shield, Filter, Zap, TrendingDown, TrendingUp } from "lucide-react";
+import { ArrowLeft, Copy, DollarSign, Percent, Clock, Shield, Filter, Zap } from "lucide-react";
+import { RuleBuilder, RuleValues } from "@/components/rule-builder";
 
 interface WalletRuleDefaults {
   id: number;
@@ -51,11 +52,12 @@ export default function CopySettingsPage() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   
-  // Rule defaults state
-  const [tpThresholds, setTpThresholds] = useState("4, 10, 25, 100");
-  const [tpPercents, setTpPercents] = useState("25, 25, 25, 25");
-  const [stopLoss, setStopLoss] = useState("50");
-  const [stopLossMode, setStopLossMode] = useState("auto");
+  const [ruleValues, setRuleValues] = useState<RuleValues>({
+    takeProfitThresholds: [4, 10, 25, 100],
+    takeProfitPercentages: [25, 25, 25, 25],
+    stopLossPercent: 50,
+    stopLossMode: "auto",
+  });
   
   const { data: wallet, isLoading } = useQuery<MonitoredWallet>({
     queryKey: ["/api/monitored-wallets", id],
@@ -68,13 +70,14 @@ export default function CopySettingsPage() {
     enabled: !!id,
   });
 
-  // Sync state when ruleDefaults loads
   useEffect(() => {
     if (ruleDefaults) {
-      setTpThresholds(ruleDefaults.takeProfitThresholds?.join(", ") || "4, 10, 25, 100");
-      setTpPercents(ruleDefaults.takeProfitPercentages?.join(", ") || "25, 25, 25, 25");
-      setStopLoss(ruleDefaults.stopLossPercent?.toString() || "50");
-      setStopLossMode(ruleDefaults.stopLossMode || "auto");
+      setRuleValues({
+        takeProfitThresholds: ruleDefaults.takeProfitThresholds || [4, 10, 25, 100],
+        takeProfitPercentages: ruleDefaults.takeProfitPercentages || [25, 25, 25, 25],
+        stopLossPercent: ruleDefaults.stopLossPercent ?? 50,
+        stopLossMode: (ruleDefaults.stopLossMode as "auto" | "alert") || "auto",
+      });
     }
   }, [ruleDefaults]);
 
@@ -104,15 +107,11 @@ export default function CopySettingsPage() {
   };
 
   const saveRuleDefaults = () => {
-    const thresholds = tpThresholds.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
-    const percents = tpPercents.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
-    const sl = parseFloat(stopLoss);
-
     updateRuleDefaultsMutation.mutate({
-      takeProfitThresholds: thresholds.length > 0 ? thresholds : [4, 10, 25, 100],
-      takeProfitPercentages: percents.length > 0 ? percents : [25, 25, 25, 25],
-      stopLossPercent: !isNaN(sl) ? sl : 50,
-      stopLossMode,
+      takeProfitThresholds: ruleValues.takeProfitThresholds,
+      takeProfitPercentages: ruleValues.takeProfitPercentages,
+      stopLossPercent: ruleValues.stopLossPercent,
+      stopLossMode: ruleValues.stopLossMode,
     });
   };
 
@@ -393,77 +392,14 @@ export default function CopySettingsPage() {
             <Skeleton className="h-32 w-full" />
           ) : (
             <>
-              <div className="space-y-3 p-3 rounded-lg border">
-                <div className="flex items-center gap-2">
-                  <TrendingUp className="h-4 w-4 text-green-500" />
-                  <Label className="text-sm font-medium">Take Profit</Label>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Multipliers (x from entry)</Label>
-                    <Input
-                      value={tpThresholds}
-                      onChange={(e) => setTpThresholds(e.target.value)}
-                      placeholder="4, 10, 25, 100"
-                      className="mt-1"
-                      data-testid="input-tp-thresholds"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">e.g. 4x, 10x, 25x, 100x</p>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">% to sell at each level</Label>
-                    <Input
-                      value={tpPercents}
-                      onChange={(e) => setTpPercents(e.target.value)}
-                      placeholder="25, 25, 25, 25"
-                      className="mt-1"
-                      data-testid="input-tp-percents"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">Must match number of thresholds</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-3 p-3 rounded-lg border">
-                <div className="flex items-center gap-2">
-                  <TrendingDown className="h-4 w-4 text-red-500" />
-                  <Label className="text-sm font-medium">Stop Loss</Label>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Trigger at (% down)</Label>
-                    <Input
-                      value={stopLoss}
-                      onChange={(e) => setStopLoss(e.target.value)}
-                      placeholder="50"
-                      className="mt-1"
-                      data-testid="input-stop-loss"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">Sell if price drops by this %</p>
-                  </div>
-                  <div>
-                    <Label className="text-xs text-muted-foreground">Mode</Label>
-                    <Select value={stopLossMode} onValueChange={setStopLossMode}>
-                      <SelectTrigger className="mt-1" data-testid="select-stop-loss-mode">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="auto">Auto (sell immediately)</SelectItem>
-                        <SelectItem value="alert">Alert (notify first)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-
-              <Button 
-                onClick={saveRuleDefaults} 
-                disabled={updateRuleDefaultsMutation.isPending}
-                className="w-full"
-                data-testid="button-save-rules"
-              >
-                {updateRuleDefaultsMutation.isPending ? "Saving..." : "Save Rule Defaults"}
-              </Button>
+              <RuleBuilder
+                values={ruleValues}
+                onChange={setRuleValues}
+                onSave={saveRuleDefaults}
+                isSaving={updateRuleDefaultsMutation.isPending}
+                showSaveButton={true}
+                testIdPrefix={`wallet-${id}`}
+              />
               <p className="text-xs text-center text-muted-foreground">
                 New positions will inherit these rules. Override on individual tokens as needed.
               </p>

@@ -4,8 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Save, Zap, CircleDot, CirclePause, CircleOff } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff } from "lucide-react";
 import { Link } from "wouter";
 import { useState } from "react";
 import { Switch } from "@/components/ui/switch";
@@ -14,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
+import { RuleBuilder, RuleValues, RuleSummary } from "@/components/rule-builder";
 import type { TokenSnapshot, Holding } from "@shared/schema";
 
 interface SignalSource {
@@ -62,9 +62,12 @@ export default function TokenPage() {
   });
 
   const [editingPosition, setEditingPosition] = useState<number | null>(null);
-  const [tpThresholds, setTpThresholds] = useState<string>("");
-  const [tpPercents, setTpPercents] = useState<string>("");
-  const [stopLoss, setStopLoss] = useState<string>("");
+  const [editingRuleValues, setEditingRuleValues] = useState<RuleValues>({
+    takeProfitThresholds: [4, 10, 25, 100],
+    takeProfitPercentages: [25, 25, 25, 25],
+    stopLossPercent: 50,
+    stopLossMode: "auto",
+  });
 
   const updateRiskMutation = useMutation({
     mutationFn: async ({ positionId, data }: { positionId: number; data: any }) => {
@@ -108,22 +111,22 @@ export default function TokenPage() {
 
   const startEditing = (position: Holding) => {
     setEditingPosition(position.id);
-    setTpThresholds((position.takeProfitThresholds as number[] || [4, 10, 25, 100]).join(", "));
-    setTpPercents((position.takeProfitPercentages as number[] || [25, 25, 25, 25]).join(", "));
-    setStopLoss(position.stopLossPercent?.toString() || "50");
+    setEditingRuleValues({
+      takeProfitThresholds: (position.takeProfitThresholds as number[]) || [4, 10, 25, 100],
+      takeProfitPercentages: (position.takeProfitPercentages as number[]) || [25, 25, 25, 25],
+      stopLossPercent: position.stopLossPercent ?? 50,
+      stopLossMode: (position.stopLossMode as "auto" | "alert") || "auto",
+    });
   };
 
   const saveRiskSettings = (positionId: number) => {
-    const thresholds = tpThresholds.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
-    const percents = tpPercents.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
-    const sl = parseFloat(stopLoss);
-
     updateRiskMutation.mutate({
       positionId,
       data: {
-        takeProfitThresholds: thresholds.length > 0 ? thresholds : undefined,
-        takeProfitPercentages: percents.length > 0 ? percents : undefined,
-        stopLossPercent: !isNaN(sl) ? sl : undefined,
+        takeProfitThresholds: editingRuleValues.takeProfitThresholds,
+        takeProfitPercentages: editingRuleValues.takeProfitPercentages,
+        stopLossPercent: editingRuleValues.stopLossPercent,
+        stopLossMode: editingRuleValues.stopLossMode,
       }
     });
   };
@@ -558,36 +561,13 @@ export default function TokenPage() {
 
                   {editingPosition === position.id ? (
                     <div className="space-y-3">
-                      <div>
-                        <label className="text-xs text-muted-foreground">Take-Profit Thresholds (multipliers, comma-separated)</label>
-                        <Input
-                          value={tpThresholds}
-                          onChange={(e) => setTpThresholds(e.target.value)}
-                          placeholder="4, 10, 25, 100"
-                          className="mt-1"
-                          data-testid={`input-tp-thresholds-${position.id}`}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted-foreground">Sell % at each threshold (comma-separated)</label>
-                        <Input
-                          value={tpPercents}
-                          onChange={(e) => setTpPercents(e.target.value)}
-                          placeholder="25, 25, 25, 25"
-                          className="mt-1"
-                          data-testid={`input-tp-percents-${position.id}`}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-xs text-muted-foreground">Stop-Loss % (sell if price drops by this much)</label>
-                        <Input
-                          value={stopLoss}
-                          onChange={(e) => setStopLoss(e.target.value)}
-                          placeholder="50"
-                          className="mt-1"
-                          data-testid={`input-stop-loss-${position.id}`}
-                        />
-                      </div>
+                      <RuleBuilder
+                        values={editingRuleValues}
+                        onChange={setEditingRuleValues}
+                        showSaveButton={false}
+                        compact={true}
+                        testIdPrefix={`position-${position.id}`}
+                      />
                       <div className="flex gap-2">
                         <Button 
                           size="sm" 
@@ -595,7 +575,6 @@ export default function TokenPage() {
                           disabled={updateRiskMutation.isPending}
                           data-testid={`button-save-risk-${position.id}`}
                         >
-                          <Save className="h-3 w-3 mr-1" />
                           Save
                         </Button>
                         <Button 
@@ -610,19 +589,15 @@ export default function TokenPage() {
                     </div>
                   ) : (
                     <div className="flex items-center justify-between">
-                      <div className="text-sm space-y-1">
-                        <p className="text-muted-foreground">
-                          <Shield className="h-3 w-3 inline mr-1" />
-                          Take-profit: {((position.takeProfitThresholds as number[]) || [4, 10, 25, 100]).map((t, i) => {
-                            const percents = (position.takeProfitPercentages as number[]) || [25, 25, 25, 25];
-                            return `${percents[i] || 25}% @ ${t}x`;
-                          }).join(", ")}
-                        </p>
-                        <p className="text-muted-foreground">
-                          <Target className="h-3 w-3 inline mr-1" />
-                          Stop-loss: {position.stopLossPercent || 50}%
-                        </p>
-                      </div>
+                      <RuleSummary 
+                        values={{
+                          takeProfitThresholds: (position.takeProfitThresholds as number[]) || [4, 10, 25, 100],
+                          takeProfitPercentages: (position.takeProfitPercentages as number[]) || [25, 25, 25, 25],
+                          stopLossPercent: position.stopLossPercent ?? 50,
+                          stopLossMode: (position.stopLossMode as "auto" | "alert") || "auto",
+                        }}
+                        testIdPrefix={`position-${position.id}`}
+                      />
                       <Button 
                         variant="outline" 
                         size="sm" 

@@ -817,6 +817,7 @@ export const holdingSchema = z.object({
   takeProfitPercentages: z.array(z.number()).optional(),
   stopLossPercent: z.number().optional(),
   stopLossFloorUsd: z.number().optional(),
+  stopLossMode: z.enum(["auto", "alert"]).default("auto"),
   autoMirrorSells: z.boolean().default(false),
   positionSource: z.string().default("copy"),
   signalWalletId: z.number().optional(),
