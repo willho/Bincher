@@ -12,13 +12,13 @@ import {
   TrendingUp, 
   TrendingDown, 
   ExternalLink, 
-  Clock, 
   ArrowUpDown,
   Filter,
   Wallet,
   Archive,
   ChevronRight
 } from "lucide-react";
+import { PortfolioValueChart, AllocationChart, PortfolioPnlChart } from "@/components/portfolio-charts";
 import type { Holding } from "@shared/schema";
 
 interface SignalWallet {
@@ -271,6 +271,12 @@ export default function HoldingsPage() {
             <div className="text-2xl font-bold" data-testid="text-positions-count">{activeHoldings.length}</div>
           </CardContent>
         </Card>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <PortfolioValueChart />
+        <PortfolioPnlChart />
+        <AllocationChart holdings={activeHoldings} />
       </div>
 
       <Card data-testid="card-holdings-list">

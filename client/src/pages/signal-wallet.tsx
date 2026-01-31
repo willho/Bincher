@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
+import { SignalWalletActivityChart } from "@/components/portfolio-charts";
 
 interface Trade {
   id: number;
@@ -550,6 +551,8 @@ export default function SignalWalletPage() {
           </CardContent>
         </Card>
       </div>
+
+      <SignalWalletActivityChart trades={trades} />
 
       {stats.mostTradedTokens.length > 0 && (
         <Card data-testid="card-most-traded">
