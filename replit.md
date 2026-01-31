@@ -92,6 +92,14 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - Auto-adjusts relationship type based on affinity (friendly ≥50, professional ≥20, adversarial ≤-30)
 - **Remaining**: Update affinity dynamically based on trade outcomes and warning compliance
 
+### Community Insights / Crowd Wisdom (Pending)
+- Schema exists (`communityInsights` table) but not wired up
+- **Tokens**: Miss Pincher shares anonymized opinions like "A few traders I've chatted with are bullish on this one"
+- **Signal Wallets**: "Several traders I know have had good results following this wallet" or "This wallet tends to exit positions quickly"
+- Needs: consent mechanism, insight extraction from chat, query tool for Miss Pincher
+- Never exposes user identity - only sentiment, credibility level, and summary
+- Could track insight accuracy over time (did bullish calls age well?)
+
 ### UI Improvements (Proposed)
 - Add real-time alerts for significant market movements
 - Focus on clarity and ease of navigation
