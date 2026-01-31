@@ -429,7 +429,6 @@ export default function SignalWalletPage() {
             size="sm"
             onClick={() => navigate(`/signal/${wallet.id}/copy-settings`)}
             data-testid="button-copy-settings"
-            className={wallet.copyTradeEnabled ? "bg-green-600 hover:bg-green-700" : ""}
           >
             <Copy className="h-4 w-4 mr-2" />
             {wallet.copyTradeEnabled ? "Copy Trading Active" : "Configure Copy Trading"}

@@ -506,10 +506,9 @@ export default function SignalsPage() {
                                 <Button 
                                   size="icon" 
                                   variant="ghost" 
-                                  className="h-7 w-7"
                                   data-testid={`button-copy-settings-${wallet.id}`}
                                 >
-                                  <SettingsIcon className="h-3 w-3" />
+                                  <SettingsIcon className="h-4 w-4" />
                                 </Button>
                               </Link>
                             </TooltipTrigger>
