@@ -276,6 +276,12 @@ export async function getHoldings(userId: number): Promise<Holding[]> {
     highestMultiplier: row.highestMultiplier ?? 1,
     alertedMilestones: (row.alertedMilestones as number[]) ?? [],
     reclaimedMilestones: (row.reclaimedMilestones as number[]) ?? [],
+    tokenWalletPublicKey: row.tokenWalletPublicKey ?? undefined,
+    sourceSwapId: row.sourceSwapId ?? undefined,
+    sourceWalletAddress: row.sourceWalletAddress ?? undefined,
+    sourceWalletLabel: row.sourceWalletLabel ?? undefined,
+    signalWalletId: row.signalWalletId ?? undefined,
+    positionSource: row.positionSource ?? "copy",
   }));
 }
 

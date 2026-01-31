@@ -6,9 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown } from "lucide-react";
+import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 
@@ -51,6 +51,22 @@ interface TokenHolding {
 }
 
 type HoldingsSortOption = "value" | "name" | "change" | "age";
+type HoldingsTab = "signal" | "copied";
+
+interface CopiedHolding {
+  id: number;
+  tokenMint: string;
+  tokenSymbol: string;
+  tokenName?: string;
+  amountBought: number;
+  currentAmount: number;
+  solSpent: number;
+  buyPrice: number;
+  buyTimestamp: number;
+  lastPrice?: number;
+  signalWalletId?: number;
+  sourceWalletLabel?: string;
+}
 
 interface WalletActivity {
   wallet: {
@@ -107,6 +123,7 @@ export default function SignalWalletPage() {
   const walletId = params.id;
   const [timeframe, setTimeframe] = useState("24h");
   const [holdingsSort, setHoldingsSort] = useState<HoldingsSortOption>("value");
+  const [holdingsTab, setHoldingsTab] = useState<HoldingsTab>("signal");
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
   const wsRef = useRef<WebSocket | null>(null);
@@ -136,6 +153,18 @@ export default function SignalWalletPage() {
     enabled: !!walletId,
     refetchInterval: 30000,
   });
+
+  // Fetch user's copied holdings from this signal wallet
+  const { data: userHoldings } = useQuery<CopiedHolding[]>({
+    queryKey: ["/api/copy-trade/holdings"],
+  });
+
+  // Filter user holdings to only those from this signal wallet
+  const myCopiedHoldings = useMemo(() => {
+    if (!userHoldings || !walletId) return [];
+    const id = parseInt(walletId);
+    return userHoldings.filter((h) => h.signalWalletId === id && h.currentAmount > 0);
+  }, [userHoldings, walletId]);
 
   const backfillMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/signal-wallets/${walletId}/backfill`),
@@ -221,6 +250,104 @@ export default function SignalWalletPage() {
       }
     });
   }, [holdingsData?.holdings, holdingsSort, tokenFirstBuyMap]);
+
+  // Calculate unrealized PnL from current holdings
+  const unrealizedPnl = useMemo(() => {
+    const holdings = holdingsData?.holdings || [];
+    const trades = activity?.trades || [];
+    
+    let totalCost = 0;
+    let totalValue = 0;
+    
+    holdings.forEach((holding) => {
+      // Find buy trades for this token to calculate cost basis
+      const buyTrades = trades.filter((t) => t.isBuy && t.toToken === holding.mint);
+      const totalBought = buyTrades.reduce((sum, t) => sum + t.toAmount, 0);
+      const totalSpent = buyTrades.reduce((sum, t) => sum + (t.fromAmount * (t.solPriceAtTrade || 0)), 0);
+      
+      if (totalBought > 0 && holding.amount > 0) {
+        const avgCostPerToken = totalSpent / totalBought;
+        totalCost += avgCostPerToken * Math.min(holding.amount, totalBought);
+      }
+      totalValue += holding.valueUsd || 0;
+    });
+    
+    return { cost: totalCost, value: totalValue, pnl: totalValue - totalCost };
+  }, [holdingsData?.holdings, activity?.trades]);
+
+  // Calculate best performing token
+  const bestToken = useMemo((): { mint: string; symbol: string; pnl: number; pnlPercent: number } | null => {
+    const trades = activity?.trades || [];
+    const tokenPnL = new Map<string, { symbol: string; pnl: number; spent: number; received: number }>();
+    
+    trades.forEach((trade) => {
+      const tokenMint = trade.isBuy ? trade.toToken : trade.fromToken;
+      const symbol = trade.isBuy ? trade.toTokenSymbol : trade.fromTokenSymbol;
+      
+      if (!tokenPnL.has(tokenMint)) {
+        tokenPnL.set(tokenMint, { symbol, pnl: 0, spent: 0, received: 0 });
+      }
+      
+      const data = tokenPnL.get(tokenMint)!;
+      const usdValue = trade.isBuy 
+        ? trade.fromAmount * (trade.solPriceAtTrade || 0)
+        : trade.toAmount * (trade.solPriceAtTrade || 0);
+      
+      if (trade.isBuy) {
+        data.spent += usdValue;
+      } else {
+        data.received += usdValue;
+      }
+      data.pnl = data.received - data.spent;
+    });
+    
+    let best: { mint: string; symbol: string; pnl: number; pnlPercent: number } | null = null;
+    tokenPnL.forEach((data, mint) => {
+      if (data.received > 0 && data.spent > 0) {
+        const pnlPercent = ((data.received - data.spent) / data.spent) * 100;
+        if (!best || pnlPercent > best.pnlPercent) {
+          best = { mint, symbol: data.symbol, pnl: data.pnl, pnlPercent };
+        }
+      }
+    });
+    
+    return best;
+  }, [activity?.trades]);
+
+  // Calculate average hold time for closed positions
+  const avgHoldTime = useMemo(() => {
+    const trades = activity?.trades || [];
+    const tokenBuyTimes = new Map<string, number[]>();
+    const holdTimes: number[] = [];
+    
+    // First pass: collect buy timestamps
+    trades.forEach((trade) => {
+      if (trade.isBuy) {
+        const times = tokenBuyTimes.get(trade.toToken) || [];
+        times.push(trade.timestamp);
+        tokenBuyTimes.set(trade.toToken, times);
+      }
+    });
+    
+    // Second pass: calculate hold times for sells
+    trades.forEach((trade) => {
+      if (!trade.isBuy) {
+        const buyTimes = tokenBuyTimes.get(trade.fromToken);
+        if (buyTimes && buyTimes.length > 0) {
+          const firstBuy = Math.min(...buyTimes);
+          holdTimes.push(trade.timestamp - firstBuy);
+        }
+      }
+    });
+    
+    if (holdTimes.length === 0) return null;
+    const avgSeconds = holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length;
+    
+    // Format as human readable
+    if (avgSeconds < 3600) return `${Math.round(avgSeconds / 60)}m`;
+    if (avgSeconds < 86400) return `${Math.round(avgSeconds / 3600)}h`;
+    return `${Math.round(avgSeconds / 86400)}d`;
+  }, [activity?.trades]);
 
   if (isLoading) {
     return (
@@ -383,6 +510,78 @@ export default function SignalWalletPage() {
         </Card>
       </div>
 
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card data-testid="card-unrealized-pnl">
+          <CardHeader className="pb-2">
+            <CardDescription>Unrealized P&L</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2">
+              {unrealizedPnl.pnl >= 0 ? (
+                <TrendingUp className="h-5 w-5 text-green-500" />
+              ) : (
+                <TrendingDown className="h-5 w-5 text-red-500" />
+              )}
+              <span className={`text-2xl font-bold ${unrealizedPnl.pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                {unrealizedPnl.pnl >= 0 ? "+" : ""}{formatUsd(unrealizedPnl.pnl)}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Holdings worth {formatUsd(unrealizedPnl.value)}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="card-best-token">
+          <CardHeader className="pb-2">
+            <CardDescription>Best Token</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {bestToken ? (
+              <a
+                href={`https://solscan.io/token/${bestToken.mint}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:underline"
+                data-testid="link-best-token"
+              >
+                <div className="flex items-center gap-2">
+                  <Trophy className="h-5 w-5 text-yellow-500" />
+                  <span className="text-2xl font-bold">
+                    {bestToken.symbol}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  <span className="text-green-500">+{bestToken.pnlPercent.toFixed(0)}%</span> return
+                </p>
+              </a>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-yellow-500" />
+                <span className="text-2xl font-bold">-</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card data-testid="card-avg-hold">
+          <CardHeader className="pb-2">
+            <CardDescription>Avg Hold Time</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-2">
+              <Timer className="h-5 w-5 text-primary" />
+              <span className="text-2xl font-bold">
+                {avgHoldTime || "-"}
+              </span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Closed positions
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
       {stats.mostTradedTokens.length > 0 && (
         <Card data-testid="card-most-traded">
           <CardHeader>
@@ -413,44 +612,59 @@ export default function SignalWalletPage() {
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div className="flex items-center gap-2">
               <Coins className="h-5 w-5" />
-              <CardTitle>Current Holdings</CardTitle>
+              <CardTitle>Holdings</CardTitle>
             </div>
             <div className="flex items-center gap-2">
-              <Select value={holdingsSort} onValueChange={(v) => setHoldingsSort(v as HoldingsSortOption)}>
-                <SelectTrigger className="w-32" data-testid="select-holdings-sort">
-                  <ArrowUpDown className="h-3 w-3 mr-1" />
-                  <SelectValue placeholder="Sort by" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="value" data-testid="select-sort-value">By Value</SelectItem>
-                  <SelectItem value="name" data-testid="select-sort-name">By Name</SelectItem>
-                  <SelectItem value="change" data-testid="select-sort-change">By 24h %</SelectItem>
-                  <SelectItem value="age" data-testid="select-sort-age">By Age</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button 
-                variant="ghost" 
-                size="icon"
-                onClick={() => refetchHoldings()}
-                disabled={holdingsLoading}
-                data-testid="button-refresh-holdings"
-              >
-                <RefreshCw className={`h-4 w-4 ${holdingsLoading ? "animate-spin" : ""}`} />
-              </Button>
+              <Tabs value={holdingsTab} onValueChange={(v) => setHoldingsTab(v as HoldingsTab)}>
+                <TabsList>
+                  <TabsTrigger value="signal" data-testid="tab-signal-holdings">
+                    Signal Wallet
+                  </TabsTrigger>
+                  <TabsTrigger value="copied" data-testid="tab-copied-holdings">
+                    My Copies ({myCopiedHoldings.length})
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              {holdingsTab === "signal" && (
+                <>
+                  <Select value={holdingsSort} onValueChange={(v) => setHoldingsSort(v as HoldingsSortOption)}>
+                    <SelectTrigger className="w-32" data-testid="select-holdings-sort">
+                      <ArrowUpDown className="h-3 w-3 mr-1" />
+                      <SelectValue placeholder="Sort by" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="value" data-testid="select-sort-value">By Value</SelectItem>
+                      <SelectItem value="name" data-testid="select-sort-name">By Name</SelectItem>
+                      <SelectItem value="change" data-testid="select-sort-change">By 24h %</SelectItem>
+                      <SelectItem value="age" data-testid="select-sort-age">By Age</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button 
+                    variant="ghost" 
+                    size="icon"
+                    onClick={() => refetchHoldings()}
+                    disabled={holdingsLoading}
+                    data-testid="button-refresh-holdings"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${holdingsLoading ? "animate-spin" : ""}`} />
+                  </Button>
+                </>
+              )}
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {holdingsLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-12" />
-              <Skeleton className="h-12" />
-              <Skeleton className="h-12" />
-            </div>
-          ) : sortedHoldings.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No token holdings found for this wallet.
-            </div>
+          {holdingsTab === "signal" ? (
+            holdingsLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12" />
+                <Skeleton className="h-12" />
+                <Skeleton className="h-12" />
+              </div>
+            ) : sortedHoldings.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No token holdings found for this wallet.
+              </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -503,6 +717,74 @@ export default function SignalWalletPage() {
                 </tbody>
               </table>
             </div>
+          )
+          ) : (
+            // My Copied Holdings tab
+            myCopiedHoldings.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                You haven't copied any positions from this wallet yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b text-left text-sm text-muted-foreground">
+                      <th className="pb-3 font-medium">Token</th>
+                      <th className="pb-3 font-medium text-right">Amount</th>
+                      <th className="pb-3 font-medium text-right">Entry</th>
+                      <th className="pb-3 font-medium text-right">Current</th>
+                      <th className="pb-3 font-medium text-right">P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {myCopiedHoldings.map((holding) => {
+                      // Entry value: SOL spent converted to USD using solToUsd
+                      const entryValueUsd = solToUsd(holding.solSpent);
+                      // Current value: current token price * amount
+                      const currentValueUsd = (holding.lastPrice || 0) * holding.currentAmount;
+                      // Calculate P&L percentage
+                      const pnlPercent = entryValueUsd > 0 ? ((currentValueUsd - entryValueUsd) / entryValueUsd) * 100 : 0;
+                      
+                      return (
+                        <tr 
+                          key={holding.id} 
+                          className="border-b last:border-0 hover-elevate"
+                          data-testid={`row-copied-${holding.id}`}
+                        >
+                          <td className="py-3">
+                            <a 
+                              href={`https://solscan.io/token/${holding.tokenMint}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="hover:underline"
+                            >
+                              <div className="font-medium">{holding.tokenSymbol}</div>
+                              <div className="text-xs text-muted-foreground">{holding.tokenName || truncateAddress(holding.tokenMint)}</div>
+                            </a>
+                          </td>
+                          <td className="py-3 text-right font-mono text-sm">
+                            {holding.currentAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                          </td>
+                          <td className="py-3 text-right font-mono text-sm">
+                            {entryValueUsd > 0 ? formatUsd(entryValueUsd) : `${holding.solSpent.toFixed(4)} SOL`}
+                          </td>
+                          <td className="py-3 text-right font-mono text-sm">
+                            {currentValueUsd > 0 ? formatUsd(currentValueUsd) : "-"}
+                          </td>
+                          <td className="py-3 text-right">
+                            {entryValueUsd > 0 && currentValueUsd > 0 ? (
+                              <span className={pnlPercent >= 0 ? "text-green-500" : "text-red-500"}>
+                                {pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%
+                              </span>
+                            ) : "-"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
           )}
         </CardContent>
       </Card>
@@ -575,16 +857,24 @@ export default function SignalWalletPage() {
                         </Badge>
                       </td>
                       <td className="py-3">
-                        <div className="font-medium">
-                          {trade.isBuy 
-                            ? (trade.toTokenMetadata?.name || trade.toTokenSymbol)
-                            : (trade.fromTokenSymbol)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {trade.isBuy ? trade.toTokenSymbol : trade.fromTokenSymbol}
-                          {trade.isBuy && trade.toAmount > 0 && ` · ${trade.toAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
-                          {!trade.isBuy && trade.fromAmount > 0 && ` · ${trade.fromAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
-                        </div>
+                        <a
+                          href={`https://solscan.io/token/${trade.isBuy ? trade.toToken : trade.fromToken}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:underline"
+                          data-testid={`link-trade-token-${trade.id}`}
+                        >
+                          <div className="font-medium">
+                            {trade.isBuy 
+                              ? (trade.toTokenMetadata?.name || trade.toTokenSymbol)
+                              : (trade.fromTokenSymbol)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {trade.isBuy ? trade.toTokenSymbol : trade.fromTokenSymbol}
+                            {trade.isBuy && trade.toAmount > 0 && ` · ${trade.toAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+                            {!trade.isBuy && trade.fromAmount > 0 && ` · ${trade.fromAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+                          </div>
+                        </a>
                       </td>
                       <td className="py-3 text-right">
                         <div className="font-medium">
@@ -635,7 +925,37 @@ export default function SignalWalletPage() {
                             }
                             return <div className="text-xs text-muted-foreground" data-testid={`text-perf-${trade.id}`}>-</div>;
                           } else {
-                            // SELL trade - mark as realized
+                            // SELL trade - calculate realized P&L
+                            // Find buy trades for the same token to get entry cost
+                            const tokenMint = trade.fromToken;
+                            const buyTrades = activity?.trades?.filter(t => 
+                              t.isBuy && t.toToken === tokenMint && t.timestamp < trade.timestamp
+                            ) || [];
+                            
+                            if (buyTrades.length > 0 && trade.solPriceAtTrade) {
+                              // Calculate average entry cost per token
+                              let totalTokensBought = 0;
+                              let totalCostUsd = 0;
+                              
+                              buyTrades.forEach(buyTrade => {
+                                totalTokensBought += buyTrade.toAmount;
+                                totalCostUsd += buyTrade.fromAmount * (buyTrade.solPriceAtTrade || 0);
+                              });
+                              
+                              const avgEntryCostPerToken = totalTokensBought > 0 ? totalCostUsd / totalTokensBought : 0;
+                              const sellValuePerToken = (trade.toAmount * trade.solPriceAtTrade) / trade.fromAmount;
+                              
+                              if (avgEntryCostPerToken > 0) {
+                                const pnlPercent = ((sellValuePerToken - avgEntryCostPerToken) / avgEntryCostPerToken) * 100;
+                                return (
+                                  <div className={`font-medium ${pnlPercent >= 0 ? "text-green-500" : "text-red-500"}`} data-testid={`text-perf-${trade.id}`}>
+                                    {pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%
+                                    <div className="text-xs text-muted-foreground">Realized</div>
+                                  </div>
+                                );
+                              }
+                            }
+                            
                             return (
                               <Badge variant="outline" className="text-xs" data-testid={`text-perf-${trade.id}`}>
                                 Sold
