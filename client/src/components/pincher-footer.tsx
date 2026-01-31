@@ -100,6 +100,13 @@ export function PincherFooter() {
       apiRequest("POST", "/api/ai/chat", { message }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/chat"] });
+      // Invalidate all settings-related queries so UI reflects any changes Miss Pincher made
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/config"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/wallet"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/holdings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/copy-trade/pending"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trade-filters"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/user/settings"] });
       setInput("");
     },
   });
