@@ -109,8 +109,12 @@ export default function SignalWalletPage() {
   const backfillMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/signal-wallets/${walletId}/backfill`),
     onSuccess: (data: any) => {
+      const parts = [];
+      if (data.swapsStored > 0) parts.push(`${data.swapsStored} new`);
+      if (data.swapsUpdated > 0) parts.push(`${data.swapsUpdated} updated`);
+      const summary = parts.length > 0 ? parts.join(", ") : "no changes";
       toast({ 
-        description: `Refreshed! Found ${data.swapsFound} swaps, stored ${data.swapsStored} new ones.` 
+        description: `Refreshed! Found ${data.swapsFound} swaps (${summary}).` 
       });
       refetch();
     },

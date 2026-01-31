@@ -1925,12 +1925,19 @@ export async function registerRoutes(
         return res.status(500).json({ error: result.error });
       }
       
-      // Store swaps that don't already exist
+      // Store swaps that don't already exist, and update existing swaps with missing metadata
       let stored = 0;
+      let updated = 0;
       for (const swap of result.swaps) {
         try {
           // Check if swap already exists
-          const existing = await db.select({ id: swaps.id }).from(swaps)
+          const existing = await db.select({ 
+            id: swaps.id, 
+            fromTokenSymbol: swaps.fromTokenSymbol, 
+            toTokenSymbol: swaps.toTokenSymbol,
+            fromToken: swaps.fromToken,
+            toToken: swaps.toToken,
+          }).from(swaps)
             .where(eq(swaps.signature, swap.signature))
             .limit(1);
           
@@ -1965,6 +1972,29 @@ export async function registerRoutes(
               notificationSent: true, // Don't notify for backfilled swaps
             });
             stored++;
+          } else {
+            // Update existing swap if it has missing metadata (???)
+            const existingSwap = existing[0];
+            const needsFromUpdate = existingSwap.fromTokenSymbol === "???" || existingSwap.fromTokenSymbol?.includes("...");
+            const needsToUpdate = existingSwap.toTokenSymbol === "???" || existingSwap.toTokenSymbol?.includes("...");
+            
+            if (needsFromUpdate || needsToUpdate) {
+              const updates: { fromTokenSymbol?: string; toTokenSymbol?: string } = {};
+              
+              if (needsFromUpdate && !isBaseCurrency(existingSwap.fromToken)) {
+                const meta = await fetchTokenMetadata(existingSwap.fromToken);
+                if (meta?.symbol) updates.fromTokenSymbol = meta.symbol;
+              }
+              if (needsToUpdate && !isBaseCurrency(existingSwap.toToken)) {
+                const meta = await fetchTokenMetadata(existingSwap.toToken);
+                if (meta?.symbol) updates.toTokenSymbol = meta.symbol;
+              }
+              
+              if (Object.keys(updates).length > 0) {
+                await db.update(swaps).set(updates).where(eq(swaps.id, existingSwap.id));
+                updated++;
+              }
+            }
           }
         } catch (e) {
           // Ignore duplicate key errors
@@ -1976,6 +2006,7 @@ export async function registerRoutes(
         walletAddress: wallet.walletAddress,
         swapsFound: result.swaps.length,
         swapsStored: stored,
+        swapsUpdated: updated,
       });
     } catch (error) {
       console.error("Error backfilling signal wallet:", error);
