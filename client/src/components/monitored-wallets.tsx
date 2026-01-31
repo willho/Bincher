@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X, Share2, Users, Clock, CheckCircle, XCircle, Brain, Activity, TrendingUp, ChevronRight } from "lucide-react";
+import { Copy, Plus, Trash2, Wallet, RefreshCw, Edit2, Check, X, Share2, Users, Clock, CheckCircle, XCircle, Brain, Activity, TrendingUp, ChevronRight, Bell } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { Swap } from "@shared/schema";
 
@@ -360,45 +360,67 @@ export function MonitoredWallets() {
                         </>
                       )}
                     </div>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="flex items-center gap-1">
-                          <Switch
-                            checked={wallet.enabled ?? true}
-                            onCheckedChange={(enabled) =>
-                              updateWallet.mutate({ id: wallet.id, enabled })
-                            }
-                            data-testid={`switch-wallet-enabled-${wallet.id}`}
-                          />
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent>Monitor wallet swaps</TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <div className="flex items-center gap-1">
-                          <Switch
-                            checked={wallet.copyTradeEnabled ?? false}
-                            onCheckedChange={(copyTradeEnabled) =>
-                              updateWallet.mutate({ id: wallet.id, copyTradeEnabled })
-                            }
-                            data-testid={`switch-wallet-copy-${wallet.id}`}
-                            className={wallet.copyTradeEnabled ? "data-[state=checked]:bg-green-500" : ""}
-                          />
-                        </div>
-                      </TooltipTrigger>
-                      <TooltipContent>Copy trades from this wallet</TooltipContent>
-                    </Tooltip>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => deleteWallet.mutate(wallet.id)}
-                      disabled={deleteWallet.isPending}
-                      data-testid={`button-delete-wallet-${wallet.id}`}
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+                    <div className="flex flex-col gap-1 text-xs">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground w-12" data-testid={`text-wallet-monitor-label-${wallet.id}`}>Monitor</span>
+                            <Switch
+                              checked={wallet.enabled ?? true}
+                              onCheckedChange={(enabled) =>
+                                updateWallet.mutate({ id: wallet.id, enabled })
+                              }
+                              data-testid={`switch-wallet-enabled-${wallet.id}`}
+                            />
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>Monitor wallet swaps</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-2">
+                            <span className="text-muted-foreground w-12" data-testid={`text-wallet-copy-label-${wallet.id}`}>Copy</span>
+                            <Switch
+                              checked={wallet.copyTradeEnabled ?? false}
+                              onCheckedChange={(copyTradeEnabled) =>
+                                updateWallet.mutate({ id: wallet.id, copyTradeEnabled })
+                              }
+                              data-testid={`switch-wallet-copy-${wallet.id}`}
+                              className={wallet.copyTradeEnabled ? "data-[state=checked]:bg-green-500" : ""}
+                            />
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>Copy trades from this wallet</TooltipContent>
+                      </Tooltip>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setLocation(`/signal/${wallet.id}`);
+                            }}
+                            data-testid={`button-wallet-alerts-${wallet.id}`}
+                          >
+                            <Bell className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>View wallet alerts & details</TooltipContent>
+                      </Tooltip>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => deleteWallet.mutate(wallet.id)}
+                        disabled={deleteWallet.isPending}
+                        data-testid={`button-delete-wallet-${wallet.id}`}
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                      <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+                    </div>
                   </div>
 
                   {stats && (
