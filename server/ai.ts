@@ -1303,6 +1303,23 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "find_wallet_by_label",
+      description: "Search for a monitored wallet by its label/name. IMPORTANT: Always use this FIRST when the user refers to a wallet by name (like 'JSP', 'whale1', 'TraderX') instead of asking for an address. Returns the wallet if found.",
+      parameters: {
+        type: "object",
+        properties: {
+          label: {
+            type: "string",
+            description: "The label/name to search for (case-insensitive partial match)"
+          }
+        },
+        required: ["label"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "update_position_risk",
       description: "Update take-profit or stop-loss settings for a specific position. Use when user wants to set, change, or configure take-profit thresholds, sell percentages, or stop-loss for their holdings.",
       parameters: {
@@ -2949,6 +2966,9 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             toolResults.push(result.message);
           } else if (toolName === "list_monitored_wallets") {
             const result = await executeListMonitoredWallets(userId);
+            toolResults.push(result.message);
+          } else if (toolName === "find_wallet_by_label") {
+            const result = await executeFindWalletByLabel(userId, args);
             toolResults.push(result.message);
           } else if (toolName === "update_position_risk") {
             const result = await executeUpdatePositionRisk(userId, args);

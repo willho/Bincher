@@ -1925,6 +1925,10 @@ export async function registerRoutes(
         return res.status(500).json({ error: result.error });
       }
       
+      // Get current SOL price for new swaps (historical would be more accurate but this is a fallback)
+      const { getSolPriceUsd } = await import("./jupiter");
+      const currentSolPrice = await getSolPriceUsd();
+      
       // Store swaps that don't already exist, and update existing swaps with missing metadata
       let stored = 0;
       let updated = 0;
@@ -1937,6 +1941,7 @@ export async function registerRoutes(
             toTokenSymbol: swaps.toTokenSymbol,
             fromToken: swaps.fromToken,
             toToken: swaps.toToken,
+            solPriceAtTrade: swaps.solPriceAtTrade,
           }).from(swaps)
             .where(eq(swaps.signature, swap.signature))
             .limit(1);
@@ -1969,17 +1974,19 @@ export async function registerRoutes(
               toAmount: swap.toAmount,
               fee: swap.fee || null,
               slot: swap.slot,
+              solPriceAtTrade: currentSolPrice,
               notificationSent: true, // Don't notify for backfilled swaps
             });
             stored++;
           } else {
-            // Update existing swap if it has missing metadata (???)
+            // Update existing swap if it has missing metadata (??? or missing SOL price)
             const existingSwap = existing[0];
             const needsFromUpdate = existingSwap.fromTokenSymbol === "???" || existingSwap.fromTokenSymbol?.includes("...");
             const needsToUpdate = existingSwap.toTokenSymbol === "???" || existingSwap.toTokenSymbol?.includes("...");
+            const needsPriceUpdate = existingSwap.solPriceAtTrade === null || existingSwap.solPriceAtTrade === undefined;
             
-            if (needsFromUpdate || needsToUpdate) {
-              const updates: { fromTokenSymbol?: string; toTokenSymbol?: string } = {};
+            if (needsFromUpdate || needsToUpdate || needsPriceUpdate) {
+              const updates: { fromTokenSymbol?: string; toTokenSymbol?: string; solPriceAtTrade?: number } = {};
               
               if (needsFromUpdate && !isBaseCurrency(existingSwap.fromToken)) {
                 const meta = await fetchTokenMetadata(existingSwap.fromToken);
@@ -1988,6 +1995,9 @@ export async function registerRoutes(
               if (needsToUpdate && !isBaseCurrency(existingSwap.toToken)) {
                 const meta = await fetchTokenMetadata(existingSwap.toToken);
                 if (meta?.symbol) updates.toTokenSymbol = meta.symbol;
+              }
+              if (needsPriceUpdate) {
+                updates.solPriceAtTrade = currentSolPrice;
               }
               
               if (Object.keys(updates).length > 0) {

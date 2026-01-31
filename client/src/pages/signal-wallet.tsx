@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useSolPrice } from "@/hooks/use-sol-price";
 
 interface Trade {
   id: number;
@@ -91,6 +92,7 @@ export default function SignalWalletPage() {
   const walletId = params.id;
   const [timeframe, setTimeframe] = useState("24h");
   const { toast } = useToast();
+  const { solToUsd, formatUsd } = useSolPrice();
   const wsRef = useRef<WebSocket | null>(null);
 
   const { data: activity, isLoading, refetch } = useQuery<WalletActivity>({
@@ -420,13 +422,25 @@ export default function SignalWalletPage() {
                         </div>
                       </td>
                       <td className="py-3 text-right">
-                        {trade.solPriceAtTrade ? (
-                          <div className="font-medium text-muted-foreground">
-                            ${((trade.isBuy ? trade.fromAmount : trade.toAmount) * trade.solPriceAtTrade).toFixed(2)}
-                          </div>
-                        ) : (
-                          <div className="text-xs text-muted-foreground">-</div>
-                        )}
+                        {(() => {
+                          const solAmount = trade.isBuy ? trade.fromAmount : trade.toAmount;
+                          if (trade.solPriceAtTrade) {
+                            return (
+                              <div className="font-medium text-muted-foreground">
+                                ${(solAmount * trade.solPriceAtTrade).toFixed(2)}
+                              </div>
+                            );
+                          }
+                          // Fallback to current SOL price
+                          const usdValue = solToUsd(solAmount);
+                          return usdValue > 0 ? (
+                            <div className="font-medium text-muted-foreground" title="Using current SOL price">
+                              ~{formatUsd(usdValue)}
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">-</div>
+                          );
+                        })()}
                       </td>
                       <td className="py-3 text-right">
                         <a
