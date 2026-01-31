@@ -1,9 +1,9 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships, swaps } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
-import { eq, desc, and, isNotNull, gte, inArray } from "drizzle-orm";
+import { eq, desc, and, isNotNull, gte, inArray, sql } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
 import { recordAISuccess, recordAIFailure, isAIAvailable, getFallbackMessage } from "./ai-health";
 import { getHoldersCached } from "./price-aggregator";
@@ -1320,6 +1320,28 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "get_wallet_performance",
+      description: "Get performance statistics for a monitored wallet over a time period. Shows trades, wins/losses, P&L, and hit rate. Use when user asks about wallet performance, how a wallet did, or trading stats for a specific wallet.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletIdentifier: {
+            type: "string",
+            description: "The wallet address or label/name to look up"
+          },
+          timeframe: {
+            type: "string",
+            enum: ["24h", "7d", "30d", "all"],
+            description: "Time period for stats - defaults to 24h"
+          }
+        },
+        required: ["walletIdentifier"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "update_position_risk",
       description: "Update take-profit or stop-loss settings for a specific position. Use when user wants to set, change, or configure take-profit thresholds, sell percentages, or stop-loss for their holdings.",
       parameters: {
@@ -2491,6 +2513,152 @@ async function executeFindWalletByLabel(userId: number, args: any): Promise<{ su
   return {
     success: true,
     message: `Multiple wallets match "${label}":\n${summaries.join('\n')}\nPlease be more specific.`
+  };
+}
+
+async function executeGetWalletPerformance(userId: number, args: any): Promise<{ success: boolean; message: string }> {
+  const { walletIdentifier, timeframe = "24h" } = args;
+  
+  if (!walletIdentifier) {
+    return { success: false, message: "Wallet address or label required" };
+  }
+  
+  // First, try to find the wallet by label or address
+  let walletAddress = walletIdentifier;
+  let walletLabel = walletIdentifier;
+  
+  // Check if it's a label (search monitored wallets)
+  const userWallets = await db.select()
+    .from(monitoredWallets)
+    .where(eq(monitoredWallets.userId, userId));
+  
+  const searchLower = walletIdentifier.toLowerCase();
+  const matchByLabel = userWallets.find(w => 
+    w.label && w.label.toLowerCase().includes(searchLower)
+  );
+  const matchByAddress = userWallets.find(w =>
+    w.walletAddress.toLowerCase() === searchLower ||
+    w.walletAddress.toLowerCase().startsWith(searchLower)
+  );
+  
+  const matchedWallet = matchByLabel || matchByAddress;
+  if (matchedWallet) {
+    walletAddress = matchedWallet.walletAddress;
+    walletLabel = matchedWallet.label || walletAddress.slice(0, 8);
+  } else if (walletIdentifier.length < 32) {
+    return { success: false, message: `No monitored wallet found matching "${walletIdentifier}"` };
+  }
+  
+  // Calculate time cutoff
+  const now = Math.floor(Date.now() / 1000);
+  let cutoff = 0;
+  let periodLabel = "all time";
+  if (timeframe === "24h") {
+    cutoff = now - 24 * 60 * 60;
+    periodLabel = "last 24 hours";
+  } else if (timeframe === "7d") {
+    cutoff = now - 7 * 24 * 60 * 60;
+    periodLabel = "last 7 days";
+  } else if (timeframe === "30d") {
+    cutoff = now - 30 * 24 * 60 * 60;
+    periodLabel = "last 30 days";
+  }
+  
+  // Fetch swaps for this wallet
+  const walletSwaps = await db.select()
+    .from(swaps)
+    .where(and(
+      eq(swaps.source, walletAddress),
+      cutoff > 0 ? sql`${swaps.timestamp} >= ${cutoff}` : sql`1=1`
+    ))
+    .orderBy(swaps.timestamp);
+  
+  if (walletSwaps.length === 0) {
+    return { 
+      success: true, 
+      message: `${walletLabel} has no trades in the ${periodLabel}.` 
+    };
+  }
+  
+  // Analyze trades - track token positions
+  const tokenPositions: Record<string, { 
+    buys: { amount: number; solValue: number; timestamp: number }[];
+    sells: { amount: number; solValue: number; timestamp: number }[];
+  }> = {};
+  
+  let totalBuySol = 0;
+  let totalSellSol = 0;
+  let buyCount = 0;
+  let sellCount = 0;
+  
+  for (const swap of walletSwaps) {
+    const isBuy = swap.fromToken === "So11111111111111111111111111111111111111112" || 
+                  swap.fromTokenSymbol === "SOL";
+    const isSell = swap.toToken === "So11111111111111111111111111111111111111112" ||
+                   swap.toTokenSymbol === "SOL";
+    
+    if (isBuy) {
+      buyCount++;
+      const solSpent = swap.fromAmount;
+      totalBuySol += solSpent;
+      const tokenMint = swap.toToken;
+      if (!tokenPositions[tokenMint]) {
+        tokenPositions[tokenMint] = { buys: [], sells: [] };
+      }
+      tokenPositions[tokenMint].buys.push({ 
+        amount: swap.toAmount, 
+        solValue: solSpent,
+        timestamp: swap.timestamp 
+      });
+    } else if (isSell) {
+      sellCount++;
+      const solReceived = swap.toAmount;
+      totalSellSol += solReceived;
+      const tokenMint = swap.fromToken;
+      if (!tokenPositions[tokenMint]) {
+        tokenPositions[tokenMint] = { buys: [], sells: [] };
+      }
+      tokenPositions[tokenMint].sells.push({ 
+        amount: swap.fromAmount, 
+        solValue: solReceived,
+        timestamp: swap.timestamp 
+      });
+    }
+  }
+  
+  // Calculate wins/losses for closed positions
+  let wins = 0;
+  let losses = 0;
+  let realizedPnl = 0;
+  
+  for (const [tokenMint, position] of Object.entries(tokenPositions)) {
+    const totalBought = position.buys.reduce((sum, b) => sum + b.solValue, 0);
+    const totalSold = position.sells.reduce((sum, s) => sum + s.solValue, 0);
+    
+    if (totalSold > 0 && totalBought > 0) {
+      const pnl = totalSold - totalBought;
+      realizedPnl += pnl;
+      if (pnl > 0) wins++;
+      else losses++;
+    }
+  }
+  
+  const hitRate = (wins + losses) > 0 ? ((wins / (wins + losses)) * 100).toFixed(0) : "N/A";
+  const netPnl = realizedPnl.toFixed(2);
+  const netPnlSign = realizedPnl >= 0 ? "+" : "";
+  
+  const summary = [
+    `📊 ${walletLabel} Performance (${periodLabel}):`,
+    ``,
+    `Trades: ${buyCount} buys, ${sellCount} sells`,
+    `Win/Loss: ${wins}W / ${losses}L (${hitRate}% hit rate)`,
+    `Realized P&L: ${netPnlSign}${netPnl} SOL`,
+    `Volume: ${totalBuySol.toFixed(2)} SOL bought, ${totalSellSol.toFixed(2)} SOL sold`,
+  ];
+  
+  return {
+    success: true,
+    message: summary.join('\n')
   };
 }
 
