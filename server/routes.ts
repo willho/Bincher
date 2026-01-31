@@ -22,7 +22,7 @@ import {
   maskApiKey,
   getUserResendApiKey,
 } from "./api-keys";
-import { notificationSettingsSchema, tradeConfigSchema } from "@shared/schema";
+import { notificationSettingsSchema, tradeConfigSchema, insertWalletRuleDefaultsSchema } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
 import { createUser, authenticateUser, createSession, getSession, destroySession, getUserCount, findUserByEmail, createPasswordResetToken, validateResetToken, resetPassword } from "./auth";
@@ -44,7 +44,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -2087,6 +2087,146 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error backfilling signal wallet:", error);
       res.status(500).json({ error: "Failed to backfill wallet history" });
+    }
+  });
+
+  // Get wallet rule defaults
+  app.get("/api/signal-wallets/:id/rule-defaults", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      // Verify wallet ownership
+      const [wallet] = await db.select().from(monitoredWallets).where(
+        and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, req.userId!))
+      );
+      
+      if (!wallet) {
+        return res.status(404).json({ error: "Signal wallet not found" });
+      }
+      
+      // Get existing rule defaults or return null (will use system defaults)
+      const [defaults] = await db.select().from(walletRuleDefaults).where(
+        and(eq(walletRuleDefaults.walletId, walletId), eq(walletRuleDefaults.userId, req.userId!))
+      );
+      
+      res.json(defaults || null);
+    } catch (error) {
+      console.error("Error fetching wallet rule defaults:", error);
+      res.status(500).json({ error: "Failed to fetch rule defaults" });
+    }
+  });
+
+  // Create or update wallet rule defaults - using partial of shared schema
+  const updateRuleDefaultsSchema = insertWalletRuleDefaultsSchema
+    .pick({
+      takeProfitThresholds: true,
+      takeProfitPercentages: true,
+      stopLossPercent: true,
+      stopLossFloorUsd: true,
+      stopLossMode: true,
+      autoMirrorSells: true,
+      autonomyEnabled: true,
+    })
+    .partial();
+
+  app.put("/api/signal-wallets/:id/rule-defaults", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      
+      // Validate request body
+      const validationResult = updateRuleDefaultsSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({ error: "Invalid input", details: validationResult.error.errors });
+      }
+      const { takeProfitThresholds, takeProfitPercentages, stopLossPercent, stopLossFloorUsd, stopLossMode, autoMirrorSells, autonomyEnabled } = validationResult.data;
+      
+      // Verify wallet ownership
+      const [wallet] = await db.select().from(monitoredWallets).where(
+        and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, req.userId!))
+      );
+      
+      if (!wallet) {
+        return res.status(404).json({ error: "Signal wallet not found" });
+      }
+      
+      // Check if defaults already exist (get first one if multiple due to lack of unique constraint)
+      const existingDefaults = await db.select().from(walletRuleDefaults).where(
+        and(eq(walletRuleDefaults.walletId, walletId), eq(walletRuleDefaults.userId, req.userId!))
+      ).limit(1);
+      const existing = existingDefaults[0];
+      
+      if (existing) {
+        // Update existing
+        const [updated] = await db.update(walletRuleDefaults)
+          .set({
+            takeProfitThresholds: takeProfitThresholds ?? existing.takeProfitThresholds,
+            takeProfitPercentages: takeProfitPercentages ?? existing.takeProfitPercentages,
+            stopLossPercent: stopLossPercent ?? existing.stopLossPercent,
+            stopLossFloorUsd: stopLossFloorUsd !== undefined ? stopLossFloorUsd : existing.stopLossFloorUsd,
+            stopLossMode: stopLossMode ?? existing.stopLossMode,
+            autoMirrorSells: autoMirrorSells ?? existing.autoMirrorSells,
+            autonomyEnabled: autonomyEnabled ?? existing.autonomyEnabled,
+            updatedAt: Math.floor(Date.now() / 1000),
+          })
+          .where(eq(walletRuleDefaults.id, existing.id))
+          .returning();
+        res.json(updated);
+      } else {
+        // Create new
+        const [created] = await db.insert(walletRuleDefaults).values({
+          walletId,
+          userId: req.userId!,
+          takeProfitThresholds: takeProfitThresholds ?? [4, 10, 25, 100],
+          takeProfitPercentages: takeProfitPercentages ?? [25, 25, 25, 25],
+          stopLossPercent: stopLossPercent ?? 50,
+          stopLossFloorUsd: stopLossFloorUsd ?? null,
+          stopLossMode: stopLossMode ?? "auto",
+          autoMirrorSells: autoMirrorSells ?? false,
+          autonomyEnabled: autonomyEnabled ?? false,
+          createdAt: Math.floor(Date.now() / 1000),
+        }).returning();
+        res.json(created);
+      }
+    } catch (error) {
+      console.error("Error updating wallet rule defaults:", error);
+      res.status(500).json({ error: "Failed to update rule defaults" });
+    }
+  });
+
+  // Update position rule source (inherit vs override)
+  const updateRuleSourceSchema = z.object({
+    ruleSource: z.enum(["inherited", "override"]),
+  });
+
+  app.patch("/api/positions/:id/rule-source", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const positionId = parseInt(req.params.id);
+      
+      // Validate request body
+      const validationResult = updateRuleSourceSchema.safeParse(req.body);
+      if (!validationResult.success) {
+        return res.status(400).json({ error: "Invalid rule source. Must be 'inherited' or 'override'" });
+      }
+      const { ruleSource } = validationResult.data;
+      
+      // Verify position ownership
+      const [position] = await db.select().from(holdings).where(
+        and(eq(holdings.id, positionId), eq(holdings.userId, req.userId!))
+      );
+      
+      if (!position) {
+        return res.status(404).json({ error: "Position not found" });
+      }
+      
+      const [updated] = await db.update(holdings)
+        .set({ ruleSource })
+        .where(eq(holdings.id, positionId))
+        .returning();
+      
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating position rule source:", error);
+      res.status(500).json({ error: "Failed to update rule source" });
     }
   });
 

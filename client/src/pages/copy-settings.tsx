@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -10,7 +10,21 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, Copy, DollarSign, Percent, Clock, Shield, Filter, Zap } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { ArrowLeft, Copy, DollarSign, Percent, Clock, Shield, Filter, Zap, TrendingDown, TrendingUp } from "lucide-react";
+
+interface WalletRuleDefaults {
+  id: number;
+  walletId: number;
+  userId: number;
+  takeProfitThresholds: number[];
+  takeProfitPercentages: number[];
+  stopLossPercent: number;
+  stopLossFloorUsd: number | null;
+  stopLossMode: string;
+  autoMirrorSells: boolean;
+  autonomyEnabled: boolean;
+}
 
 interface MonitoredWallet {
   id: number;
@@ -35,11 +49,34 @@ interface MonitoredWallet {
 export default function CopySettingsPage() {
   const { id } = useParams<{ id: string }>();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  
+  // Rule defaults state
+  const [tpThresholds, setTpThresholds] = useState("4, 10, 25, 100");
+  const [tpPercents, setTpPercents] = useState("25, 25, 25, 25");
+  const [stopLoss, setStopLoss] = useState("50");
+  const [stopLossMode, setStopLossMode] = useState("auto");
   
   const { data: wallet, isLoading } = useQuery<MonitoredWallet>({
     queryKey: ["/api/monitored-wallets", id],
     queryFn: () => fetch(`/api/monitored-wallets/${id}`).then(r => r.json()),
   });
+
+  const { data: ruleDefaults, isLoading: isLoadingRules } = useQuery<WalletRuleDefaults | null>({
+    queryKey: ["/api/signal-wallets", id, "rule-defaults"],
+    queryFn: () => fetch(`/api/signal-wallets/${id}/rule-defaults`).then(r => r.json()),
+    enabled: !!id,
+  });
+
+  // Sync state when ruleDefaults loads
+  useEffect(() => {
+    if (ruleDefaults) {
+      setTpThresholds(ruleDefaults.takeProfitThresholds?.join(", ") || "4, 10, 25, 100");
+      setTpPercents(ruleDefaults.takeProfitPercentages?.join(", ") || "25, 25, 25, 25");
+      setStopLoss(ruleDefaults.stopLossPercent?.toString() || "50");
+      setStopLossMode(ruleDefaults.stopLossMode || "auto");
+    }
+  }, [ruleDefaults]);
 
   const updateMutation = useMutation({
     mutationFn: (data: Partial<MonitoredWallet>) =>
@@ -50,8 +87,33 @@ export default function CopySettingsPage() {
     },
   });
 
+  const updateRuleDefaultsMutation = useMutation({
+    mutationFn: (data: Partial<WalletRuleDefaults>) =>
+      apiRequest("PUT", `/api/signal-wallets/${id}/rule-defaults`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/signal-wallets", id, "rule-defaults"] });
+      toast({ title: "Rule defaults saved" });
+    },
+    onError: () => {
+      toast({ title: "Failed to save rule defaults", variant: "destructive" });
+    },
+  });
+
   const handleUpdate = (field: string, value: any) => {
     updateMutation.mutate({ [field]: value });
+  };
+
+  const saveRuleDefaults = () => {
+    const thresholds = tpThresholds.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+    const percents = tpPercents.split(",").map(s => parseFloat(s.trim())).filter(n => !isNaN(n));
+    const sl = parseFloat(stopLoss);
+
+    updateRuleDefaultsMutation.mutate({
+      takeProfitThresholds: thresholds.length > 0 ? thresholds : [4, 10, 25, 100],
+      takeProfitPercentages: percents.length > 0 ? percents : [25, 25, 25, 25],
+      stopLossPercent: !isNaN(sl) ? sl : 50,
+      stopLossMode,
+    });
   };
 
   if (isLoading) {
@@ -315,22 +377,98 @@ export default function CopySettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Position Rules - Placeholder for now */}
+      {/* Default Position Rules */}
       <Card data-testid="card-position-rules">
         <CardHeader>
           <div className="flex items-center gap-3">
             <Zap className="h-5 w-5 text-primary" />
             <div>
               <CardTitle>Default Position Rules</CardTitle>
-              <CardDescription>Auto-sell/buy rules applied to all copied positions</CardDescription>
+              <CardDescription>Auto-sell rules applied to all copied positions from this wallet</CardDescription>
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="text-center py-8 text-muted-foreground">
-            <p>Position rules coming soon</p>
-            <p className="text-xs mt-1">Set take-profit, stop-loss, and other automatic actions</p>
-          </div>
+        <CardContent className="space-y-4">
+          {isLoadingRules ? (
+            <Skeleton className="h-32 w-full" />
+          ) : (
+            <>
+              <div className="space-y-3 p-3 rounded-lg border">
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-green-500" />
+                  <Label className="text-sm font-medium">Take Profit</Label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Multipliers (x from entry)</Label>
+                    <Input
+                      value={tpThresholds}
+                      onChange={(e) => setTpThresholds(e.target.value)}
+                      placeholder="4, 10, 25, 100"
+                      className="mt-1"
+                      data-testid="input-tp-thresholds"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">e.g. 4x, 10x, 25x, 100x</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">% to sell at each level</Label>
+                    <Input
+                      value={tpPercents}
+                      onChange={(e) => setTpPercents(e.target.value)}
+                      placeholder="25, 25, 25, 25"
+                      className="mt-1"
+                      data-testid="input-tp-percents"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Must match number of thresholds</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3 p-3 rounded-lg border">
+                <div className="flex items-center gap-2">
+                  <TrendingDown className="h-4 w-4 text-red-500" />
+                  <Label className="text-sm font-medium">Stop Loss</Label>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Trigger at (% down)</Label>
+                    <Input
+                      value={stopLoss}
+                      onChange={(e) => setStopLoss(e.target.value)}
+                      placeholder="50"
+                      className="mt-1"
+                      data-testid="input-stop-loss"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">Sell if price drops by this %</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs text-muted-foreground">Mode</Label>
+                    <Select value={stopLossMode} onValueChange={setStopLossMode}>
+                      <SelectTrigger className="mt-1" data-testid="select-stop-loss-mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="auto">Auto (sell immediately)</SelectItem>
+                        <SelectItem value="alert">Alert (notify first)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <Button 
+                onClick={saveRuleDefaults} 
+                disabled={updateRuleDefaultsMutation.isPending}
+                className="w-full"
+                data-testid="button-save-rules"
+              >
+                {updateRuleDefaultsMutation.isPending ? "Saving..." : "Save Rule Defaults"}
+              </Button>
+              <p className="text-xs text-center text-muted-foreground">
+                New positions will inherit these rules. Override on individual tokens as needed.
+              </p>
+            </>
+          )}
         </CardContent>
       </Card>
     </div>

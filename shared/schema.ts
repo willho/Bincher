@@ -78,6 +78,36 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   dedupSkipIfPending: boolean("dedup_skip_if_pending").default(true), // Skip if already pending
 });
 
+// Wallet rule defaults - per-wallet default rules for positions
+// When a new position is created from this wallet, these rules are inherited
+// Position can override with ruleSource="override" and its own take profit/stop loss values
+export const walletRuleDefaults = pgTable("wallet_rule_defaults", {
+  id: serial("id").primaryKey(),
+  walletId: integer("wallet_id").notNull().unique(), // Reference to monitored_wallets.id - one defaults per wallet
+  userId: integer("user_id").notNull(),
+  
+  // Take profit configuration
+  takeProfitThresholds: jsonb("take_profit_thresholds").$type<number[]>().default([4, 10, 25, 100]), // Multipliers to trigger sells
+  takeProfitPercentages: jsonb("take_profit_percentages").$type<number[]>().default([25, 25, 25, 25]), // Percent to sell at each threshold
+  
+  // Stop loss configuration
+  stopLossPercent: real("stop_loss_percent").default(50), // Sell if down this %
+  stopLossFloorUsd: real("stop_loss_floor_usd"), // Skip stop-loss if position value below this $
+  stopLossMode: text("stop_loss_mode").default("auto"), // "auto" | "alert"
+  
+  // Autonomy defaults
+  autoMirrorSells: boolean("auto_mirror_sells").default(false), // Mirror signal wallet sells
+  autonomyEnabled: boolean("autonomy_enabled").default(false), // Allow AI to manage positions
+  
+  // Metadata
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertWalletRuleDefaultsSchema = createInsertSchema(walletRuleDefaults).omit({ id: true });
+export type InsertWalletRuleDefaults = z.infer<typeof insertWalletRuleDefaultsSchema>;
+export type WalletRuleDefaults = typeof walletRuleDefaults.$inferSelect;
+
 // Signal wallet profiles - track trading patterns for each wallet
 export const signalWalletProfiles = pgTable("signal_wallet_profiles", {
   id: serial("id").primaryKey(),
@@ -238,6 +268,9 @@ export const holdings = pgTable("holdings", {
   
   // Autonomy controls - per-position AI trading permissions
   autonomyEnabled: boolean("autonomy_enabled").default(false), // Allow AI to manage this position
+  
+  // Rule inheritance - whether position uses wallet defaults or custom overrides
+  ruleSource: text("rule_source").default("inherited"), // "inherited" (use wallet defaults) | "override" (use position-specific values)
 });
 
 // Pending buys - tokens queued for purchase with delay

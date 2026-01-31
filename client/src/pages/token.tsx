@@ -94,6 +94,18 @@ export default function TokenPage() {
     }
   });
 
+  const updateRuleSourceMutation = useMutation({
+    mutationFn: async ({ positionId, ruleSource }: { positionId: number; ruleSource: string }) => {
+      return apiRequest("PATCH", `/api/positions/${positionId}/rule-source`, { ruleSource });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/positions/${tokenMint}`] });
+    },
+    onError: () => {
+      toast({ title: "Failed to update rule source", variant: "destructive" });
+    }
+  });
+
   const startEditing = (position: Holding) => {
     setEditingPosition(position.id);
     setTpThresholds((position.takeProfitThresholds as number[] || [4, 10, 25, 100]).join(", "));
@@ -507,9 +519,9 @@ export default function TokenPage() {
                     <div className="flex items-center gap-2">
                       <Label className="text-xs text-muted-foreground">Rules:</Label>
                       <Select 
-                        value="inherited"
+                        value={(position as Holding & { ruleSource?: string }).ruleSource || "inherited"}
                         onValueChange={(value) => {
-                          // TODO: Wire up rule inheritance when schema is ready
+                          updateRuleSourceMutation.mutate({ positionId: position.id, ruleSource: value });
                           toast({ 
                             title: value === "inherited" ? "Using wallet defaults" : "Using custom rules",
                             description: value === "inherited" 
