@@ -220,6 +220,9 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
       milestonesToAlert: (result[0].milestonesToAlert as number[]) ?? [2, 4, 10],
       stopLossPercent: result[0].stopLossPercent ?? undefined,
       stopLossFloorUsd: result[0].stopLossFloorUsd ?? undefined,
+      slippageMode: (result[0].slippageMode as "auto" | "fixed") ?? "auto",
+      slippageMaxBps: result[0].slippageMaxBps ?? 500,
+      slippageMinBps: result[0].slippageMinBps ?? 50,
     };
   }
   
@@ -238,6 +241,9 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
     milestonesToAlert: (rows[0].milestonesToAlert as number[]) ?? [2, 4, 10],
     stopLossPercent: rows[0].stopLossPercent ?? undefined,
     stopLossFloorUsd: rows[0].stopLossFloorUsd ?? undefined,
+    slippageMode: (rows[0].slippageMode as "auto" | "fixed") ?? "auto",
+    slippageMaxBps: rows[0].slippageMaxBps ?? 500,
+    slippageMinBps: rows[0].slippageMinBps ?? 50,
   };
 }
 
@@ -253,6 +259,9 @@ export async function updateTradeConfig(userId: number, updates: Partial<TradeCo
     priceRiseTriggerPercent: updates.priceRiseTriggerPercent ?? current.priceRiseTriggerPercent,
     reclaimMultiplier: updates.reclaimMultiplier ?? current.reclaimMultiplier,
     milestonesToAlert: updates.milestonesToAlert ?? current.milestonesToAlert,
+    slippageMode: updates.slippageMode ?? current.slippageMode,
+    slippageMaxBps: updates.slippageMaxBps ?? current.slippageMaxBps,
+    slippageMinBps: updates.slippageMinBps ?? current.slippageMinBps,
   }).where(eq(tradeConfig.id, current.id));
   
   return { ...current, ...updates };

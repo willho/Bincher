@@ -1,13 +1,20 @@
 import { Connection, PublicKey, Transaction, VersionedTransaction, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { getHotWalletKeypair, getHotWalletBalance, getTokenWalletBalance } from "./wallet";
+import { getHotWalletKeypair, getHotWalletBalance, getTokenWalletBalance, getTradeConfig } from "./wallet";
 import { trackApiCall, shouldAllowApiCall } from "./api-budget";
 
 const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 const JUPITER_API = "https://quote-api.jup.ag/v6";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
-const SLIPPAGE_BPS = 500;
+const DEFAULT_SLIPPAGE_BPS = 500;
 const DEFAULT_PRIORITY_FEE_LAMPORTS = 100000; // 0.0001 SOL
+
+// Slippage configuration for trades
+export interface SlippageConfig {
+  mode: "auto" | "fixed";
+  maxBps: number; // Maximum slippage in basis points
+  minBps: number; // Minimum slippage for auto mode
+}
 
 const MIN_REQUEST_INTERVAL_MS = 500;
 const MAX_REQUESTS_PER_MINUTE = 30;
@@ -247,15 +254,29 @@ export function getRandomBuyPercentage(): number {
 export async function getQuote(
   inputMint: string,
   outputMint: string,
-  amountInLamports: number
+  amountInLamports: number,
+  slippageConfig?: SlippageConfig
 ): Promise<JupiterQuote | null> {
   try {
     const url = new URL(`${JUPITER_API}/quote`);
     url.searchParams.append("inputMint", inputMint);
     url.searchParams.append("outputMint", outputMint);
     url.searchParams.append("amount", amountInLamports.toString());
-    url.searchParams.append("slippageBps", SLIPPAGE_BPS.toString());
     url.searchParams.append("swapMode", "ExactIn");
+    
+    // Use dynamic slippage (autoSlippage) for auto mode, fixed slippage otherwise
+    if (slippageConfig?.mode === "auto") {
+      url.searchParams.append("autoSlippage", "true");
+      // Use maxBps as the slippage cap for auto mode
+      url.searchParams.append("slippageBps", slippageConfig.maxBps.toString());
+    } else {
+      // Fixed mode: use exact slippage value
+      const slippageBps = slippageConfig?.maxBps ?? DEFAULT_SLIPPAGE_BPS;
+      url.searchParams.append("slippageBps", slippageBps.toString());
+    }
+    
+    // Restrict intermediate tokens to avoid low-liquidity routes
+    url.searchParams.append("restrictIntermediateTokens", "true");
 
     const response = await rateLimitedFetch(url.toString());
     if (!response.ok) {
@@ -273,17 +294,28 @@ export async function getQuote(
 export async function executeSwap(
   quote: JupiterQuote,
   keypair: Keypair,
-  priorityFeeLamports?: number
+  priorityFeeLamports?: number,
+  slippageConfig?: SlippageConfig
 ): Promise<SwapResult> {
   try {
     const fee = priorityFeeLamports ?? await estimatePriorityFee();
-    const swapBody = {
+    
+    // Build swap body with dynamic slippage for auto mode
+    const swapBody: any = {
       quoteResponse: quote,
       userPublicKey: keypair.publicKey.toBase58(),
       wrapAndUnwrapSol: true,
       dynamicComputeUnitLimit: true,
       prioritizationFeeLamports: fee,
     };
+    
+    // Add dynamic slippage configuration for auto mode
+    if (slippageConfig?.mode === "auto") {
+      swapBody.dynamicSlippage = {
+        minBps: slippageConfig.minBps,
+        maxBps: slippageConfig.maxBps,
+      };
+    }
 
     const swapResponse = await rateLimitedFetch(`${JUPITER_API}/swap`, {
       method: "POST",
@@ -360,8 +392,18 @@ export async function buyToken(
     };
   }
 
+  // Get user's slippage settings
+  const tradeSettings = await getTradeConfig(userId);
+  const slippageConfig: SlippageConfig = {
+    mode: (tradeSettings.slippageMode as "auto" | "fixed") || "auto",
+    maxBps: tradeSettings.slippageMaxBps || 500,
+    minBps: tradeSettings.slippageMinBps || 50,
+  };
+  
+  console.log(`Using slippage: mode=${slippageConfig.mode}, max=${slippageConfig.maxBps}bps`);
+
   const amountInLamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
-  const quote = await getQuote(SOL_MINT, tokenMint, amountInLamports);
+  const quote = await getQuote(SOL_MINT, tokenMint, amountInLamports, slippageConfig);
   
   if (!quote) {
     return { success: false, error: "Failed to get quote from Jupiter" };
@@ -378,7 +420,7 @@ export async function buyToken(
     };
   }
 
-  return executeSwap(quote, keypair);
+  return executeSwap(quote, keypair, undefined, slippageConfig);
 }
 
 export async function sellToken(
@@ -393,7 +435,17 @@ export async function sellToken(
     return { success: false, error: "Hot wallet not found or decryption failed" };
   }
 
-  const quote = await getQuote(tokenMint, SOL_MINT, Math.floor(tokenAmount));
+  // Get user's slippage settings
+  const tradeSettings = await getTradeConfig(userId);
+  const slippageConfig: SlippageConfig = {
+    mode: (tradeSettings.slippageMode as "auto" | "fixed") || "auto",
+    maxBps: tradeSettings.slippageMaxBps || 500,
+    minBps: tradeSettings.slippageMinBps || 50,
+  };
+  
+  console.log(`Using slippage: mode=${slippageConfig.mode}, max=${slippageConfig.maxBps}bps`);
+
+  const quote = await getQuote(tokenMint, SOL_MINT, Math.floor(tokenAmount), slippageConfig);
   
   if (!quote) {
     return { success: false, error: "Failed to get quote from Jupiter" };
@@ -401,7 +453,7 @@ export async function sellToken(
 
   console.log(`Got quote: ${tokenAmount.toLocaleString()} tokens -> ${parseInt(quote.outAmount) / LAMPORTS_PER_SOL} SOL`);
 
-  return executeSwap(quote, keypair);
+  return executeSwap(quote, keypair, undefined, slippageConfig);
 }
 
 export async function getTokenPrice(tokenMint: string): Promise<number | null> {

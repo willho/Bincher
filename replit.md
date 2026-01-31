@@ -31,7 +31,7 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - **Real-time Swap Monitoring**: Utilizes Helius webhooks for push-based monitoring of Solana wallet swaps.
 - **Automated Copy Trading**: Implements a hot wallet system with AES-256-GCM encryption, dynamic priority fees, split buy systems, and progressive take-profit strategies. Each buy uses a unique, disposable token wallet.
 - **AI Token Analysis (Miss Pincher)**: An AI component (GPT-4o-mini powered) provides dynamic token heat scoring and qualitative analysis, offering a chat interface for user interaction and natural language-triggered actions.
-- **Security**: Robust authentication (PBKDF2 hashing, secure sessions), encrypted sensitive data storage.
+- **Security**: Robust authentication (PBKDF2 hashing, secure sessions), encrypted sensitive data storage. PIN protection system for trading actions with configurable modes (withdrawals_only, all_trades, threshold), daily spend limits, withdrawal address whitelisting, and Telegram confirmation for large transfers.
 - **Scalability**: Designed with user isolation and webhook-driven event processing.
 - **API Budget & Key Management**: Tracks API calls with limits and uses an admin API key pool for load balancing.
 - **Tiered Price Aggregation**: OHLC+ price data with multi-tier retention for swing detection.
@@ -72,6 +72,21 @@ A PostgreSQL database stores user accounts, sessions, monitored wallets, swap hi
 - Wire `logTokenEvent()` calls into price-monitor for significant price movements
 - Wire `logTokenEvent()` calls into familiar-whales when whale activity is detected
 - Wire `generateAndCacheAlert()` calls at appropriate trigger points for user notifications
+
+### Security System Implementation Status
+**Completed:**
+- PIN schema fields in users table (withdrawalPinHash, pinMode, pinThresholdUsd, etc.)
+- SecuritySettings UI component with full settings management
+- Security API routes (GET/POST /api/settings/security, set-pin, verify-pin)
+- server/security.ts module with utility functions
+- PIN enforcement wired into AI trade execution flow (executeConfirmedTrade)
+
+**Pending Wiring:**
+- Wire PIN checks into copy trading processor (trade-processor.ts)
+- Wire withdrawal whitelist checks into transfer/withdraw endpoints
+- Implement daily spend limit tracking and enforcement
+- Add Telegram confirmation flow for large transfers
+- Wire PIN checks into manual trading API routes (if any exist)
 
 ### Copy Trading Considerations
 - **dedupSkipIfPending default**: Currently defaults to `true`, which blocks multiple buys of the same token if a pending buy exists. This may prevent copying a signal trader who averages into positions (buys same token multiple times). Consider changing default to `false` to better mirror signal behavior. Needs more thought before implementation.

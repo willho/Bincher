@@ -2,13 +2,14 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ApiKeysSettings } from "@/components/api-keys-settings";
 import { AdminDashboard } from "@/components/admin-dashboard";
+import { SecuritySettings } from "@/components/security-settings";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Key, Bell, User, Shield, Bot, Mail, CheckCircle, ExternalLink, Loader2 } from "lucide-react";
+import { Key, Bell, User, Shield, Bot, Mail, CheckCircle, ExternalLink, Loader2, Lock } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -93,7 +94,7 @@ export default function SettingsPage() {
   });
 
   const isAdmin = session?.isAdmin ?? false;
-  const totalTabs = 3 + (isAdmin ? 1 : 0);
+  const totalTabs = 4 + (isAdmin ? 1 : 0);
 
   return (
     <div className="space-y-6">
@@ -115,6 +116,10 @@ export default function SettingsPage() {
           <TabsTrigger value="account" className="flex items-center gap-2" data-testid="tab-account">
             <User className="h-4 w-4" />
             <span className="hidden sm:inline">Account</span>
+          </TabsTrigger>
+          <TabsTrigger value="security" className="flex items-center gap-2" data-testid="tab-security">
+            <Lock className="h-4 w-4" />
+            <span className="hidden sm:inline">Security</span>
           </TabsTrigger>
           {isAdmin && (
             <TabsTrigger value="admin" className="flex items-center gap-2" data-testid="tab-admin">
@@ -328,6 +333,10 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="security" className="mt-6">
+          <SecuritySettings />
         </TabsContent>
 
         {isAdmin && (

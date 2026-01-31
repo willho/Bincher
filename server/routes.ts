@@ -1152,6 +1152,126 @@ export async function registerRoutes(
     }
   });
 
+  // ==================== Security Settings Routes ====================
+
+  // Get security settings
+  app.get("/api/settings/security", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const [user] = await db.select({
+        withdrawalPinHash: users.withdrawalPinHash,
+        pinMode: users.pinMode,
+        pinThresholdUsd: users.pinThresholdUsd,
+        dailySpendLimitUsd: users.dailySpendLimitUsd,
+        withdrawalWhitelist: users.withdrawalWhitelist,
+        telegramConfirmLargeTransfers: users.telegramConfirmLargeTransfers,
+        largeTransferThresholdUsd: users.largeTransferThresholdUsd,
+      }).from(users).where(eq(users.id, req.userId!));
+      
+      res.json({
+        hasPinSet: !!user?.withdrawalPinHash,
+        pinMode: user?.pinMode || "withdrawals_only",
+        pinThresholdUsd: user?.pinThresholdUsd || 100,
+        dailySpendLimitUsd: user?.dailySpendLimitUsd || null,
+        withdrawalWhitelist: (user?.withdrawalWhitelist as string[]) || [],
+        telegramConfirmLargeTransfers: user?.telegramConfirmLargeTransfers || false,
+        largeTransferThresholdUsd: user?.largeTransferThresholdUsd || 500,
+      });
+    } catch (error) {
+      console.error("Error getting security settings:", error);
+      res.status(500).json({ error: "Failed to get security settings" });
+    }
+  });
+
+  // Update security settings (except PIN)
+  app.post("/api/settings/security", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { 
+        pinMode, 
+        pinThresholdUsd, 
+        dailySpendLimitUsd, 
+        withdrawalWhitelist,
+        telegramConfirmLargeTransfers,
+        largeTransferThresholdUsd
+      } = req.body;
+      
+      if (pinMode && !["withdrawals_only", "all_trades", "threshold"].includes(pinMode)) {
+        return res.status(400).json({ error: "Invalid PIN mode" });
+      }
+      
+      await db.update(users)
+        .set({
+          pinMode: pinMode || "withdrawals_only",
+          pinThresholdUsd: pinThresholdUsd ?? 100,
+          dailySpendLimitUsd: dailySpendLimitUsd === 0 ? 0 : (dailySpendLimitUsd || null),
+          withdrawalWhitelist: withdrawalWhitelist || [],
+          telegramConfirmLargeTransfers: telegramConfirmLargeTransfers || false,
+          largeTransferThresholdUsd: largeTransferThresholdUsd ?? 500,
+        })
+        .where(eq(users.id, req.userId!));
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error updating security settings:", error);
+      res.status(500).json({ error: "Failed to update security settings" });
+    }
+  });
+
+  // Set PIN
+  app.post("/api/settings/security/set-pin", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { pin } = req.body;
+      
+      if (!pin || pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) {
+        return res.status(400).json({ error: "PIN must be 4-6 digits" });
+      }
+      
+      // Hash the PIN using PBKDF2 (same pattern as password hashing)
+      const { scryptSync, randomBytes } = await import("crypto");
+      const salt = randomBytes(16).toString("hex");
+      const hash = scryptSync(pin, salt, 64).toString("hex");
+      const pinHash = `${salt}:${hash}`;
+      
+      await db.update(users)
+        .set({ withdrawalPinHash: pinHash })
+        .where(eq(users.id, req.userId!));
+      
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error setting PIN:", error);
+      res.status(500).json({ error: "Failed to set PIN" });
+    }
+  });
+
+  // Verify PIN (used by AI tools before executing sensitive actions)
+  app.post("/api/settings/security/verify-pin", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { pin } = req.body;
+      
+      const [user] = await db.select({ withdrawalPinHash: users.withdrawalPinHash })
+        .from(users).where(eq(users.id, req.userId!));
+      
+      if (!user?.withdrawalPinHash) {
+        return res.json({ valid: true, noPinSet: true }); // No PIN required
+      }
+      
+      if (!pin) {
+        return res.json({ valid: false, pinRequired: true });
+      }
+      
+      // Verify PIN using timing-safe comparison
+      const { scryptSync, timingSafeEqual } = await import("crypto");
+      const [salt, storedHash] = user.withdrawalPinHash.split(":");
+      const hash = scryptSync(pin, salt, 64);
+      const storedHashBuffer = Buffer.from(storedHash, "hex");
+      const valid = timingSafeEqual(hash, storedHashBuffer);
+      
+      res.json({ valid, pinRequired: true });
+    } catch (error) {
+      console.error("Error verifying PIN:", error);
+      res.status(500).json({ error: "Failed to verify PIN" });
+    }
+  });
+
   // Get user's monitored wallet addresses
   app.get("/api/wallet", requireAuth, async (req: AuthenticatedRequest, res) => {
     const userId = req.userId!;

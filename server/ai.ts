@@ -10,6 +10,7 @@ import { getHoldersCached } from "./price-aggregator";
 import { fetchTokenMetadata } from "./helius";
 import { buyToken, sellToken, getTokenPrice } from "./jupiter";
 import { getHotWalletBalance, getTradeConfig, updateTradeConfig, getHoldings, getPendingBuys, getOrCreateHotWallet } from "./wallet";
+import { checkTradeAllowed, getSecuritySettings } from "./security";
 
 // In-memory store for pending admin instructions (expires after 5 minutes)
 const pendingAdminInstructions: Map<number, { instruction: string; expiresAt: number }> = new Map();
@@ -22,9 +23,11 @@ interface PendingTrade {
   tokenMint: string;
   tokenSymbol: string;
   amount: number; // SOL for buys, token amount for sells
+  amountUsd?: number; // USD value for PIN threshold checks
   proposedAt: number;
   expiresAt: number;
   userConfirmed: boolean; // Server-side: must be true before execution
+  pinVerified: boolean; // Server-side: PIN verified if required
   sourceWalletAddress?: string | null; // For signal wallet profile tracking on sells
   buyPrice?: number; // For calculating multiplier on sells
   buyTimestamp?: number; // For calculating hold time on sells
@@ -71,6 +74,9 @@ interface PendingSettings {
     maxDailySpendUsd?: number;
     minReserveSol?: number;
     stopLossPercent?: number;
+    slippageMode?: "auto" | "fixed";
+    slippageMaxBps?: number;
+    slippageMinBps?: number;
   };
   summary: string;
   riskWarnings: string[];
@@ -185,6 +191,16 @@ function generateSettingsSummary(updates: PendingSettings['updates']): string {
       parts.push(`Auto-sell if down ${updates.stopLossPercent}%`);
     }
   }
+  if (updates.slippageMode !== undefined) {
+    const mode = updates.slippageMode === "auto" ? "Auto (dynamic)" : "Fixed";
+    parts.push(`Set slippage mode to ${mode}`);
+  }
+  if (updates.slippageMaxBps !== undefined) {
+    parts.push(`Set max slippage to ${(updates.slippageMaxBps / 100).toFixed(1)}%`);
+  }
+  if (updates.slippageMinBps !== undefined) {
+    parts.push(`Set min slippage to ${(updates.slippageMinBps / 100).toFixed(1)}%`);
+  }
   
   return parts.join("\n• ");
 }
@@ -231,6 +247,22 @@ function validateSettingsUpdates(updates: PendingSettings['updates']): { valid: 
   
   if (updates.stopLossPercent !== undefined && (updates.stopLossPercent < 0 || updates.stopLossPercent > 100)) {
     errors.push("Stop-loss must be between 0 and 100 percent");
+  }
+  
+  if (updates.slippageMode !== undefined && !["auto", "fixed"].includes(updates.slippageMode)) {
+    errors.push("Slippage mode must be 'auto' or 'fixed'");
+  }
+  
+  if (updates.slippageMaxBps !== undefined) {
+    if (updates.slippageMaxBps < 50 || updates.slippageMaxBps > 1500) {
+      errors.push("Max slippage must be between 0.5% (50 bps) and 15% (1500 bps)");
+    }
+  }
+  
+  if (updates.slippageMinBps !== undefined) {
+    if (updates.slippageMinBps < 10 || updates.slippageMinBps > 500) {
+      errors.push("Min slippage must be between 0.1% (10 bps) and 5% (500 bps)");
+    }
   }
   
   return { valid: errors.length === 0, errors };
@@ -1121,10 +1153,15 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "execute_pending_trade",
-      description: "Execute a trade that was previously proposed and user confirmed. Only call this after user says 'yes', 'do it', 'confirm', 'go ahead', or similar confirmation.",
+      description: "Execute a trade that was previously proposed and user confirmed. Only call this after user says 'yes', 'do it', 'confirm', 'go ahead', or similar confirmation. If PIN is required, user will need to provide it.",
       parameters: {
         type: "object",
-        properties: {},
+        properties: {
+          pin: {
+            type: "string",
+            description: "Optional: User's security PIN if required for this trade. 4-6 digit number."
+          }
+        },
         required: []
       }
     }
@@ -1225,6 +1262,19 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
           stopLossPercent: {
             type: "number",
             description: "Auto-sell when position drops this percentage (0 to disable)"
+          },
+          slippageMode: {
+            type: "string",
+            enum: ["auto", "fixed"],
+            description: "Slippage mode: 'auto' lets Jupiter calculate optimal slippage, 'fixed' uses a constant value"
+          },
+          slippageMaxBps: {
+            type: "number",
+            description: "Maximum slippage in basis points (100 = 1%, 500 = 5%, 1500 = 15%). Caps auto mode, or fixed value for fixed mode."
+          },
+          slippageMinBps: {
+            type: "number",
+            description: "Minimum slippage in basis points for auto mode (50 = 0.5%). Ignored in fixed mode."
           }
         },
         required: []
@@ -1813,15 +1863,21 @@ async function executeProposeBuy(
   const price = await getTokenPrice(args.tokenMint);
   const priceStr = price ? `$${price.toFixed(8)}` : 'unknown price';
   
+  // Calculate USD value for PIN threshold checks
+  const solPriceUsd = await getTokenPrice("So11111111111111111111111111111111111111112") || 100;
+  const amountUsd = solAmount * solPriceUsd;
+  
   // Store pending trade - requires explicit confirmation before execute
   pendingTrades.set(userId, {
     type: 'buy',
     tokenMint: args.tokenMint,
     tokenSymbol: args.tokenSymbol,
     amount: solAmount,
+    amountUsd,
     proposedAt: Date.now(),
     expiresAt: Date.now() + PENDING_TRADE_TTL,
     userConfirmed: false,
+    pinVerified: false,
   });
   
   return {
@@ -1856,9 +1912,11 @@ async function executeProposeSell(
     tokenMint: args.tokenMint,
     tokenSymbol: args.tokenSymbol,
     amount: amountToSell,
+    amountUsd: estimatedValue || 0,
     proposedAt: Date.now(),
     expiresAt: Date.now() + PENDING_TRADE_TTL,
     userConfirmed: false,
+    pinVerified: false,
     sourceWalletAddress: holding.sourceWalletAddress,
     buyPrice: holding.buyPrice,
     buyTimestamp: holding.buyTimestamp,
@@ -1871,7 +1929,7 @@ async function executeProposeSell(
 }
 
 // Execute a confirmed pending trade - requires server-side confirmation first
-async function executeConfirmedTrade(userId: number): Promise<{ success: boolean; message: string }> {
+async function executeConfirmedTrade(userId: number, providedPin?: string): Promise<{ success: boolean; message: string }> {
   const pending = pendingTrades.get(userId);
   
   if (!pending) {
@@ -1886,6 +1944,23 @@ async function executeConfirmedTrade(userId: number): Promise<{ success: boolean
   // Server-side security: require explicit confirmation before execution
   if (!pending.userConfirmed) {
     return { success: false, message: "Trade not confirmed by user. User must explicitly confirm first." };
+  }
+  
+  // Check PIN requirements if not already verified
+  if (!pending.pinVerified) {
+    const amountUsd = pending.amountUsd || 0;
+    const securityCheck = await checkTradeAllowed(userId, amountUsd, providedPin);
+    
+    if (!securityCheck.allowed) {
+      if (securityCheck.pinRequired) {
+        return { 
+          success: false, 
+          message: `PIN required for this trade (${pending.type} ${pending.tokenSymbol} for ${pending.amount} SOL). Please provide your PIN to proceed.`
+        };
+      }
+      return { success: false, message: securityCheck.reason || "Trade not allowed" };
+    }
+    pending.pinVerified = true;
   }
   
   pendingTrades.delete(userId);
@@ -3484,7 +3559,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             const result = await executeProposeSell(userId, args);
             toolResults.push(result.message);
           } else if (toolName === "execute_pending_trade") {
-            const result = await executeConfirmedTrade(userId);
+            const result = await executeConfirmedTrade(userId, args.pin);
             toolResults.push(result.message);
           } else if (toolName === "cancel_pending_trade") {
             const result = executeCancelTrade(userId);

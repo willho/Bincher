@@ -43,6 +43,15 @@ export const users = pgTable("users", {
   smtpConfig: jsonb("smtp_config"), // { host, port, user, pass } for SMTP provider
   // Onboarding state
   onboardingCompleted: boolean("onboarding_completed").default(false),
+  
+  // Security settings
+  withdrawalPinHash: text("withdrawal_pin_hash"), // Hashed 4-6 digit PIN
+  pinMode: text("pin_mode").default("withdrawals_only"), // "withdrawals_only" | "all_trades" | "threshold"
+  pinThresholdUsd: real("pin_threshold_usd").default(100), // PIN required for trades over this amount
+  dailySpendLimitUsd: real("daily_spend_limit_usd"), // Max total spend per day
+  withdrawalWhitelist: jsonb("withdrawal_whitelist").$type<string[]>().default([]), // Approved external addresses
+  telegramConfirmLargeTransfers: boolean("telegram_confirm_large_transfers").default(false), // Confirm large transfers via Telegram
+  largeTransferThresholdUsd: real("large_transfer_threshold_usd").default(500), // What counts as "large"
 });
 
 // Monitored wallets - multiple wallet addresses per user
@@ -337,6 +346,11 @@ export const tradeConfig = pgTable("trade_config", {
   minReserveSol: real("min_reserve_sol"), // Keep at least this SOL in hot wallet
   dailySpentUsd: real("daily_spent_usd").default(0), // Track daily spend
   dailySpentResetAt: integer("daily_spent_reset_at"), // When to reset daily spend
+  
+  // Slippage configuration
+  slippageMode: text("slippage_mode").default("auto"), // "auto" | "fixed"
+  slippageMaxBps: integer("slippage_max_bps").default(500), // Max slippage in basis points (500 = 5%)
+  slippageMinBps: integer("slippage_min_bps").default(50), // Min slippage for auto mode (50 = 0.5%)
 });
 
 // Autonomous mode settings - per-user AI trading configuration
@@ -921,6 +935,10 @@ export const tradeConfigSchema = z.object({
   // Trading budget limits (Phase 8)
   maxTradeUsd: z.number().optional(),
   maxDailySpendUsd: z.number().optional(),
+  // Slippage configuration
+  slippageMode: z.enum(["auto", "fixed"]).default("auto"),
+  slippageMaxBps: z.number().default(500),
+  slippageMinBps: z.number().default(50),
   minReserveSol: z.number().optional(),
   dailySpentUsd: z.number().default(0),
   dailySpentResetAt: z.number().optional(),
