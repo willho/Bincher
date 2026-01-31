@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Activity, ArrowRight, Bell, Coins, DollarSign, Eye, Settings, TrendingUp, Wallet, Zap } from "lucide-react";
+import { Activity, ArrowRight, Bell, Coins, DollarSign, Eye, Radio, Settings, TrendingUp, Wallet, Zap } from "lucide-react";
 import { Alerts } from "@/components/alerts";
 import type { Swap, Holding } from "@shared/schema";
 
@@ -267,17 +267,31 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
+            <Link href="/holdings">
+              <Button variant="outline" size="sm" data-testid="link-quick-holdings">
+                <Coins className="h-4 w-4 mr-2" />
+                Holdings
+                <ArrowRight className="h-3 w-3 ml-2" />
+              </Button>
+            </Link>
+            <Link href="/signals">
+              <Button variant="outline" size="sm" data-testid="link-quick-signals">
+                <Radio className="h-4 w-4 mr-2" />
+                Signals
+                <ArrowRight className="h-3 w-3 ml-2" />
+              </Button>
+            </Link>
             <Link href="/trading">
               <Button variant="outline" size="sm" data-testid="link-quick-trading">
                 <TrendingUp className="h-4 w-4 mr-2" />
-                Hot Wallet & Positions
+                Hot Wallet
                 <ArrowRight className="h-3 w-3 ml-2" />
               </Button>
             </Link>
             <Link href="/watchlist">
               <Button variant="outline" size="sm" data-testid="link-quick-watchlist">
                 <Eye className="h-4 w-4 mr-2" />
-                Signal Wallets
+                Manage Wallets
                 <ArrowRight className="h-3 w-3 ml-2" />
               </Button>
             </Link>

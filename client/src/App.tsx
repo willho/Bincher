@@ -23,12 +23,14 @@ import WatchlistPage from "@/pages/watchlist";
 import TradingPage from "@/pages/trading";
 import TokenPage from "@/pages/token";
 import SignalWalletPage from "@/pages/signal-wallet";
+import HoldingsPage from "@/pages/holdings";
+import SignalsPage from "@/pages/signals";
 import SettingsPage from "@/pages/settings";
 import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
 import NotFound from "@/pages/not-found";
 import { PincherFooter } from "@/components/pincher-footer";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, List, Brain } from "lucide-react";
+import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, Coins, Radio } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { SidebarGroupLabel } from "@/components/ui/sidebar";
 import { apiRequest } from "@/lib/queryClient";
@@ -38,8 +40,10 @@ const overviewItems = [
 ];
 
 const tradingItems = [
-  { title: "Trading", href: "/trading", icon: TrendingUp, description: "Hot Wallet & Positions" },
-  { title: "Watchlist", href: "/watchlist", icon: Eye, description: "Signal Wallets" },
+  { title: "Holdings", href: "/holdings", icon: Coins, description: "Your Positions" },
+  { title: "Signals", href: "/signals", icon: Radio, description: "Signal Wallets" },
+  { title: "Trading", href: "/trading", icon: TrendingUp, description: "Hot Wallet" },
+  { title: "Watchlist", href: "/watchlist", icon: Eye, description: "Manage Wallets" },
 ];
 
 const systemItems = [
@@ -96,7 +100,8 @@ function AppSidebar() {
             <SidebarMenu>
               {tradingItems.map((item) => {
                 const isActive = location === item.href || 
-                  (item.href === "/trading" && location.startsWith("/trading/"));
+                  (item.href === "/trading" && location.startsWith("/trading/")) ||
+                  (item.href === "/holdings" && location.startsWith("/holdings/"));
                 return (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton 
@@ -229,6 +234,9 @@ function AuthenticatedApp() {
             <Switch>
               <Route path="/" component={DashboardPage} />
               <Route path="/dashboard" component={DashboardPage} />
+              <Route path="/holdings" component={HoldingsPage} />
+              <Route path="/holdings/:token" component={HoldingsPage} />
+              <Route path="/signals" component={SignalsPage} />
               <Route path="/watchlist" component={WatchlistPage} />
               <Route path="/signal/:id" component={SignalWalletPage} />
               <Route path="/trading" component={TradingPage} />
