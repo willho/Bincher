@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useParams, Link } from "wouter";
+import { useParams, Link, useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -120,6 +120,7 @@ function truncateAddress(address: string): string {
 
 export default function SignalWalletPage() {
   const params = useParams<{ id: string }>();
+  const [, navigate] = useLocation();
   const walletId = params.id;
   const [timeframe, setTimeframe] = useState("24h");
   const [holdingsSort, setHoldingsSort] = useState<HoldingsSortOption>("value");
@@ -419,24 +420,31 @@ export default function SignalWalletPage() {
               >
                 <ExternalLink className="h-3 w-3" />
               </a>
-              {wallet.copyTradeEnabled && (
-                <Badge variant="secondary" className="text-xs" data-testid="badge-copy-enabled">
-                  Copy Trading
-                </Badge>
-              )}
             </div>
           </div>
         </div>
-        <Button 
-          variant="outline" 
-          size="sm"
-          onClick={() => backfillMutation.mutate()}
-          disabled={backfillMutation.isPending}
-          data-testid="button-refresh"
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${backfillMutation.isPending ? "animate-spin" : ""}`} />
-          {backfillMutation.isPending ? "Refreshing..." : "Refresh History"}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button 
+            variant={wallet.copyTradeEnabled ? "default" : "outline"}
+            size="sm"
+            onClick={() => navigate(`/signal/${wallet.id}/copy-settings`)}
+            data-testid="button-copy-settings"
+            className={wallet.copyTradeEnabled ? "bg-green-600 hover:bg-green-700" : ""}
+          >
+            <Copy className="h-4 w-4 mr-2" />
+            {wallet.copyTradeEnabled ? "Copy Trading Active" : "Configure Copy Trading"}
+          </Button>
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={() => backfillMutation.mutate()}
+            disabled={backfillMutation.isPending}
+            data-testid="button-refresh"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${backfillMutation.isPending ? "animate-spin" : ""}`} />
+            {backfillMutation.isPending ? "Refreshing..." : "Refresh History"}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

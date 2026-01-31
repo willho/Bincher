@@ -22,6 +22,7 @@ import DashboardPage from "@/pages/dashboard-new";
 import TradingPage from "@/pages/trading";
 import TokenPage from "@/pages/token";
 import SignalWalletPage from "@/pages/signal-wallet";
+import CopySettingsPage from "@/pages/copy-settings";
 import HoldingsPage from "@/pages/holdings";
 import SignalsPage from "@/pages/signals";
 import SettingsPage from "@/pages/settings";
@@ -236,6 +237,7 @@ function AuthenticatedApp() {
               <Route path="/holdings/:token" component={HoldingsPage} />
               <Route path="/signals" component={SignalsPage} />
               <Route path="/signal/:id" component={SignalWalletPage} />
+              <Route path="/signal/:id/copy-settings" component={CopySettingsPage} />
               <Route path="/trading" component={TradingPage} />
               <Route path="/trading/:token" component={TokenPage} />
               <Route path="/settings" component={SettingsPage} />

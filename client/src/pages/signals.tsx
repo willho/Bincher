@@ -30,7 +30,8 @@ import {
   X,
   RefreshCw,
   Activity,
-  Clock
+  Clock,
+  Settings as SettingsIcon
 } from "lucide-react";
 import type { Holding, Swap } from "@shared/schema";
 
@@ -498,6 +499,21 @@ export default function SignalsPage() {
                               </div>
                             </TooltipTrigger>
                             <TooltipContent>Copy trades</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Link href={`/signal/${wallet.id}/copy-settings`}>
+                                <Button 
+                                  size="icon" 
+                                  variant="ghost" 
+                                  className="h-7 w-7"
+                                  data-testid={`button-copy-settings-${wallet.id}`}
+                                >
+                                  <SettingsIcon className="h-3 w-3" />
+                                </Button>
+                              </Link>
+                            </TooltipTrigger>
+                            <TooltipContent>Copy trade settings</TooltipContent>
                           </Tooltip>
                         </div>
                         <Button
