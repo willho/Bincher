@@ -909,20 +909,35 @@ export async function fetchWalletTokenHoldings(walletAddress: string): Promise<W
       });
     }
 
-    // Fetch metadata for each token (with rate limiting)
-    const enrichedHoldings: WalletTokenHolding[] = [];
-    for (const holding of holdings) {
-      const metadata = await fetchTokenMetadata(holding.mint);
-      enrichedHoldings.push({
-        ...holding,
-        symbol: metadata?.symbol,
-        name: metadata?.name,
-        priceUsd: metadata?.priceUsd,
-        valueUsd: metadata?.priceUsd ? holding.amount * metadata.priceUsd : undefined,
-        marketCap: metadata?.marketCap,
-        priceChange24h: metadata?.priceChange24h,
-      });
+    if (holdings.length === 0) {
+      return [];
     }
+
+    // Batch fetch prices (uses getBatchTokenPrices which batches in groups of 30)
+    const { getBatchTokenPrices } = await import("./jupiter");
+    const mints = holdings.map(h => h.mint);
+    const batchPrices = await getBatchTokenPrices(mints);
+
+    // Enrich holdings with batch price data and cached metadata for symbol/name
+    // No individual API calls here - rely only on batch prices and existing cache
+    const enrichedHoldings: WalletTokenHolding[] = holdings.map(holding => {
+      const priceData = batchPrices.get(holding.mint);
+      
+      // Check metadata cache for symbol/name (5-min TTL, no API call)
+      const cached = tokenMetadataCache.get(holding.mint);
+      const cachedMeta = cached && (Date.now() - cached.timestamp < METADATA_CACHE_TTL) ? cached.data : undefined;
+
+      const priceUsd = priceData?.price || cachedMeta?.priceUsd;
+      return {
+        ...holding,
+        symbol: cachedMeta?.symbol,
+        name: cachedMeta?.name,
+        priceUsd: priceUsd || undefined,
+        valueUsd: priceUsd ? holding.amount * priceUsd : undefined,
+        marketCap: priceData?.marketCap || cachedMeta?.marketCap,
+        priceChange24h: priceData?.priceChange24h || cachedMeta?.priceChange24h,
+      };
+    });
 
     return enrichedHoldings;
   } catch (error) {
