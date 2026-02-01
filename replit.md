@@ -52,6 +52,7 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **Signal Wallet Detail Page**: Displays individual wallet activity, trade history, hit rate, P&L, trading style analysis, and timeframe filters, with real-time WebSocket updates.
 - **AI-Controlled Blacklist**: Miss Pincher can add, remove, and list blacklisted tokens via natural language commands.
 - **AI Relationship System**: Tracks user affinity, relationship type, trades won, and warnings followed/ignored, with auto-adjustment of relationship type.
+- **Production System Logging**: Persistent logs in `system_logs` table for debugging copy trading issues. Hourly cleanup keeps only 100 most recent entries. Miss Pincher can query logs via the `query_system_logs` tool to help diagnose production issues. Key events logged: webhook errors, pending buy queued/skipped, swap execution success/failure.
 
 ## External Dependencies
 

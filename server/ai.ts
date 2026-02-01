@@ -1776,6 +1776,41 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "query_system_logs",
+      description: "Query production system logs to debug copy trading issues, webhook failures, swap execution errors, and other system problems. Use when user reports issues like 'copy trading not working', 'swaps failing', or 'trades not executing'.",
+      parameters: {
+        type: "object",
+        properties: {
+          service: {
+            type: "string",
+            enum: ["copy_trade", "alert", "webhook", "swap", "sell", "system", "telegram", "helius", "jupiter"],
+            description: "Filter by service type (e.g., 'copy_trade' for copy trading issues, 'swap' for swap failures)"
+          },
+          status: {
+            type: "string",
+            enum: ["error", "warning", "info", "success"],
+            description: "Filter by log status - use 'error' to find failures"
+          },
+          search: {
+            type: "string",
+            description: "Search term to find in log messages/context (e.g., token symbol, wallet address)"
+          },
+          hoursAgo: {
+            type: "number",
+            description: "Only show logs from the last N hours (default: 24)"
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of logs to return (default: 20, max: 50)"
+          }
+        },
+        required: []
+      }
+    }
   }
 ];
 
@@ -4190,6 +4225,40 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
           else if (toolName === "list_blacklist") {
             const result = await executeListBlacklist(userId);
             toolResults.push(result.message);
+          }
+          // System logs for debugging
+          else if (toolName === "query_system_logs") {
+            const { querySystemLogs } = await import("./system-logger");
+            const logs = await querySystemLogs({
+              service: args.service,
+              status: args.status,
+              search: args.search,
+              hoursAgo: args.hoursAgo || 24,
+              limit: Math.min(args.limit || 20, 50),
+              userId: userId,
+            });
+            
+            if (logs.length === 0) {
+              toolResults.push("No matching logs found in the specified time range.");
+            } else {
+              let summary = `Found ${logs.length} log entries:\n\n`;
+              for (const log of logs) {
+                const time = new Date(log.createdAt).toLocaleString();
+                const emoji = log.status === "error" ? "❌" : log.status === "warning" ? "⚠️" : log.status === "success" ? "✅" : "ℹ️";
+                summary += `${emoji} [${time}] ${log.service}/${log.action}: ${log.status}\n`;
+                if (log.errorMessage) {
+                  summary += `   Error: ${log.errorMessage}\n`;
+                }
+                if (log.context) {
+                  const ctxStr = JSON.stringify(log.context);
+                  if (ctxStr.length < 200) {
+                    summary += `   Context: ${ctxStr}\n`;
+                  }
+                }
+                summary += `\n`;
+              }
+              toolResults.push(summary);
+            }
           }
         } catch (parseError) {
           console.error("Failed to parse tool arguments:", parseError);

@@ -14,6 +14,7 @@ import {
 import { buyTokenWithWallet, getTokenPrice, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
+import { logError, logSuccess, logWarn } from "./system-logger";
 
 const PROCESSOR_INTERVAL_MS = 30000;
 
@@ -287,6 +288,12 @@ export async function executePendingBuy(
 
     if (!result.success) {
       console.error("Buy failed:", result.error);
+      logError("swap", "buy_execute", new Error(result.error || "Unknown swap error"), {
+        tokenMint: buy.tokenMint,
+        tokenSymbol: buy.tokenSymbol,
+        solAmount,
+        walletLabel: buy.sourceWalletLabel,
+      }, userId).catch(() => {});
       await cancelPendingBuy(pendingId, `buy_failed: ${result.error}`);
       return false;
     }
@@ -419,6 +426,15 @@ export async function executePendingBuy(
     console.log(`  Amount: ${result.outputAmount?.toLocaleString()} tokens`);
     console.log(`  Spent: ${result.inputAmount?.toFixed(4)} SOL`);
     
+    logSuccess("swap", "buy_execute", `Bought ${buy.tokenSymbol}`, {
+      tokenMint: buy.tokenMint,
+      tokenSymbol: buy.tokenSymbol,
+      solSpent: result.inputAmount,
+      tokensReceived: result.outputAmount,
+      signature: result.signature,
+      walletLabel: buy.sourceWalletLabel,
+    }, userId).catch(() => {});
+    
     // Update daily spend tracking
     const spentUsd = solSpentActual * solPriceUsd;
     const newDailySpent = dailySpent + spentUsd;
@@ -433,6 +449,9 @@ export async function executePendingBuy(
     return true;
   } catch (error) {
     console.error("Error executing pending buy:", error);
+    logError("swap", "pending_buy_error", error instanceof Error ? error : new Error(String(error)), {
+      pendingId,
+    }, userId).catch(() => {});
     await cancelPendingBuy(pendingId, `error: ${error}`);
     return false;
   }

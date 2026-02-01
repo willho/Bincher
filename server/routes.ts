@@ -48,6 +48,7 @@ import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signal
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
+import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess } from "./system-logger";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions, logTokenEvent, generateAndCacheAlert, reviewTradingRules } from "./ai";
 import { 
   isWalletInTop100, 
@@ -1110,8 +1111,19 @@ export async function registerRoutes(
             );
             if (pendingBuy) {
               console.log(`[CopyTrade] SUCCESS: Queued pending buy for ${swap.toTokenSymbol} for user ${userId} from wallet ${sourceWallet?.label || swapWalletAddress}`);
+              logSuccess("copy_trade", "pending_buy_queued", `Queued ${swap.toTokenSymbol} buy from ${sourceWallet?.label || 'unknown'}`, {
+                tokenMint: swap.toToken,
+                tokenSymbol: swap.toTokenSymbol,
+                walletLabel: sourceWallet?.label,
+                walletAddress: swapWalletAddress,
+              }, userId).catch(() => {});
             } else {
               console.log(`[CopyTrade] SKIPPED: addPendingBuy returned null (check dedup/balance/filters)`);
+              logWarn("copy_trade", "pending_buy_skipped", `Skipped ${swap.toTokenSymbol} - dedup/balance/filter`, {
+                tokenMint: swap.toToken,
+                tokenSymbol: swap.toTokenSymbol,
+                walletLabel: sourceWallet?.label,
+              }, userId).catch(() => {});
             }
         } else if (isBuy && !walletCopyEnabled) {
           console.log(`[CopyTrade] SKIPPED: Wallet ${sourceWallet?.label || swapWalletAddress.slice(0,8)} has copyTradeEnabled=false`);
@@ -1254,6 +1266,9 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       console.error("Error processing webhook:", error);
+      logError("webhook", "process_webhook", error instanceof Error ? error : new Error(String(error)), {
+        body: req.body ? JSON.stringify(req.body).slice(0, 500) : undefined,
+      }).catch(() => {});
       res.status(500).json({ error: "Failed to process webhook" });
     }
   });
@@ -4934,6 +4949,9 @@ export async function registerRoutes(
   
   // Start the price monitor to check holdings and trigger reclaims
   startPriceMonitor();
+
+  // Start hourly cleanup of system logs (keeps only 100 most recent)
+  startSystemLogCleanup();
 
   return httpServer;
 }
