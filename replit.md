@@ -104,6 +104,12 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 3. **Wire AI into enhanced copy settings** - Budget controls, mirror modes, dedup options via natural language
 4. **UI reactivity for AI changes** - When Miss Pincher changes settings via backend, invalidate React Query cache or broadcast via WebSocket
 
+### Critical Wiring (Pending)
+- Wire `logTokenEvent()` calls into webhook handler when swaps are detected
+- Wire `logTokenEvent()` calls into price-monitor for significant price movements
+- Wire `logTokenEvent()` calls into familiar-whales when whale activity is detected
+- Wire `generateAndCacheAlert()` calls at appropriate trigger points for user notifications
+
 ### Medium Priority (Memory System Enhancements)
 5. **Affinity decay** - Reduce relationship score over inactivity (e.g., -1 per day with no interaction)
 6. **Crab/insult detection** - Parse chat messages for relationship-affecting content
@@ -115,7 +121,24 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 10. **Smart forgetting** - Ebbinghaus-style decay of unused facts over time
 11. **User memory controls** - "Forget that" / "Remember this" commands via chat
 
-### Data Retention Plans
+### Copy Trading Considerations
+- **dedupSkipIfPending default**: Currently defaults to `true`, which blocks multiple buys of the same token if a pending buy exists. This may prevent copying a signal trader who averages into positions (buys same token multiple times). Consider changing default to `false` to better mirror signal behavior. Needs more thought before implementation.
+
+### Miss Pincher Relationship System (Status)
+- Relationship system wired up with `userRelationships` database table
+- Tracks: affinityScore (-100 to +100), relationshipType, tradesWonTogether, warningsFollowed/Ignored
+- Auto-adjusts relationship type based on affinity (friendly ≥50, professional ≥20, adversarial ≤-30)
+- **Missing**: Actual calls to `updateUserRelationship()` after events occur
+
+### Data Retention Plans (When data exceeds 10k rows)
 - **Signal cumulative tracking**: Raw transaction data 30 days, aggregates permanent
 - **Position snapshots**: 15min detailed → hourly summaries → daily (tiered compression)
 - **Chat history**: Last 50 messages per user, older summarized
+- **AI Chat Summarization**: Keep 7 days detailed, weekly AI summarization of older messages with overlap for context, delete raw after summarization
+- **System Logs**: Keep 7 days detailed → aggregate to daily counts by type → delete raw after 30 days
+- **Token Events**: Bucket hourly → daily → weekly (like OHLC)
+- **Cached Alerts**: Expire after 7 days
+- **API Usage**: Bucket to daily totals per endpoint, delete raw after 7 days
+- **Holder Snapshots**: Keep only latest per token, delete previous snapshots
+- **AI Predictions**: Keep 30 days for learning, then aggregate accuracy stats only
+- Implementation: Add scheduled daily cleanup job, piggyback on price aggregation pattern
