@@ -60,5 +60,38 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - **Resend**: Sending email notifications.
 - **Jupiter**: Executing token swaps on the Solana blockchain.
 - **PostgreSQL**: Primary database for persistent storage.
-- **DexScreener**: Fetching token metadata (price, market cap, liquidity, FDV, volume).
+- **DexScreener**: Primary source for token metadata (price, market cap, liquidity, FDV, volume).
+- **GeckoTerminal**: Fallback token metadata provider (free, 30 calls/min).
+- **Jupiter**: Fallback for token symbol/name lookup when other sources fail.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
+
+## Recent Changes (Feb 2026)
+
+### Token Metadata Fallback System
+- Implemented cascading metadata lookup: DexScreener → GeckoTerminal → Jupiter
+- Handles newly launched tokens better with multiple fallback sources
+- GeckoTerminal is free (no API key required)
+
+### Enhanced Copy Trading Schema
+- **Initial Buy Modes**: fixed SOL, % of hot wallet balance, % of trading budget
+- **Budget Controls**: Optional hourly/daily/weekly limits with auto-reset
+- **Mirror Buy Limits**: Per-token/hour/day limits, position cap enforcement
+- **Mirror Sell Modes**: Match signal %, fixed %, fixed SOL amount, full exit only
+- **Enhanced Dedup Options**: First buy only, cross-signal prevention, max buys per token, price protection, frozen token check
+
+### New Database Tables
+- `tokenBlacklist`: Per-user token blocking (prevents copy trading of specific tokens)
+- `copyTradingDefaults`: Global defaults for signal wallets dashboard
+- `signalCumulativeTracking`: Tracks signal wallet cumulative position per token for proportional mirroring
+
+### Signal Cumulative Tracking
+- Webhook handler now tracks signal wallet buys/sells per token
+- Enables accurate proportional mirror sells based on signal's actual position changes
+- Tracks total bought/sold tokens, SOL values, and transaction counts
+
+### Token Blacklist API
+- `GET /api/blacklist`: List blacklisted tokens
+- `POST /api/blacklist`: Add token to blacklist
+- `DELETE /api/blacklist/:tokenMint`: Remove from blacklist
+- `GET /api/blacklist/check/:tokenMint`: Check if token is blacklisted
+- Blacklisted tokens are automatically skipped during copy trading

@@ -83,10 +83,36 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   copyMirrorBuys: boolean("copy_mirror_buys"), // Mirror additional buys from this wallet (null = inherit from copyAutoMirror)
   copyMirrorSells: boolean("copy_mirror_sells"), // Mirror sells from this wallet (null = inherit from copyAutoMirror)
   
+  // Enhanced initial buy settings
+  copyInitialBuyMode: text("copy_initial_buy_mode").default("fixed"), // "fixed" | "percent_wallet" | "percent_budget"
+  
+  // Budget settings
+  copyBudgetEnabled: boolean("copy_budget_enabled").default(false),
+  copyBudgetTimeframe: text("copy_budget_timeframe").default("daily"), // "hourly" | "daily" | "weekly"
+  copyBudgetAmount: real("copy_budget_amount"), // SOL amount for budget
+  
+  // Mirror buy limits
+  copyMirrorBuyMode: text("copy_mirror_buy_mode").default("same"), // "same" | "fixed" | "percent_wallet" | "percent_budget"
+  copyMirrorBuyAmount: real("copy_mirror_buy_amount"), // Amount for mirror buys (if not "same")
+  copyMirrorBuyMaxPerToken: integer("copy_mirror_buy_max_per_token"), // Max mirror buys per token
+  copyMirrorBuyMaxPerHour: integer("copy_mirror_buy_max_per_hour"), // Max mirror buys per hour
+  copyMirrorBuyMaxPerDay: integer("copy_mirror_buy_max_per_day"), // Max mirror buys per day
+  copyPositionCapUsd: real("copy_position_cap_usd"), // Stop mirroring if bag exceeds this USD
+  
+  // Mirror sell settings
+  copyMirrorSellMode: text("copy_mirror_sell_mode").default("match_percent"), // "match_percent" | "fixed_percent" | "fixed_amount" | "full_exit_only"
+  copyMirrorSellPercent: real("copy_mirror_sell_percent"), // For fixed_percent mode
+  copyMirrorSellAmount: real("copy_mirror_sell_amount"), // For fixed_amount mode (SOL)
+  
   // Deduplication options
   dedupSkipIfHolding: boolean("dedup_skip_if_holding").default(true), // Skip if already holding
   dedupSkipIfEverHeld: boolean("dedup_skip_if_ever_held").default(false), // Skip if ever held
   dedupSkipIfPending: boolean("dedup_skip_if_pending").default(true), // Skip if already pending
+  dedupFirstBuyOnly: boolean("dedup_first_buy_only").default(false), // Only copy signal's first entry, not top-ups
+  dedupCrossSignalPrevention: boolean("dedup_cross_signal_prevention").default(false), // Only one signal can trigger per token
+  dedupMaxBuysPerTokenDaily: integer("dedup_max_buys_per_token_daily"), // Max buys per token per day
+  dedupMaxBuysPerTokenWeekly: integer("dedup_max_buys_per_token_weekly"), // Max buys per token per week
+  dedupPriceProtectionPercent: real("dedup_price_protection_percent"), // Skip if price moved more than X% since signal
 });
 
 // Wallet rule defaults - per-wallet default rules for positions
@@ -410,6 +436,102 @@ export const autonomousSettings = pgTable("autonomous_settings", {
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 });
+
+// Token blacklist - global list of tokens to never trade
+export const tokenBlacklist = pgTable("token_blacklist", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  tokenName: text("token_name"),
+  reason: text("reason"), // "rug" | "scam" | "frozen" | "manual" | etc.
+  addedAt: integer("added_at").notNull(),
+  addedBy: text("added_by").default("manual"), // "manual" | "auto" | "ai"
+});
+
+export const insertTokenBlacklistSchema = createInsertSchema(tokenBlacklist).omit({ id: true });
+export type InsertTokenBlacklist = z.infer<typeof insertTokenBlacklistSchema>;
+export type TokenBlacklist = typeof tokenBlacklist.$inferSelect;
+
+// Global copy trading defaults - applies to all signal wallets unless overridden
+export const copyTradingDefaults = pgTable("copy_trading_defaults", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  
+  // Initial buy defaults
+  copyBuyType: text("copy_buy_type").default("percentage"), // "fixed_sol" | "fixed_usd" | "percentage"
+  copyBuyAmount: real("copy_buy_amount").default(10), // Amount based on type
+  copyInitialBuyMode: text("copy_initial_buy_mode").default("fixed"), // "fixed" | "percent_wallet" | "percent_budget"
+  
+  // Budget defaults
+  copyBudgetEnabled: boolean("copy_budget_enabled").default(false),
+  copyBudgetTimeframe: text("copy_budget_timeframe").default("daily"), // "hourly" | "daily" | "weekly"
+  copyBudgetAmount: real("copy_budget_amount"), // SOL amount for budget
+  
+  // Mirror buy defaults
+  copyMirrorBuys: boolean("copy_mirror_buys").default(false),
+  copyMirrorBuyMode: text("copy_mirror_buy_mode").default("same"), // "same" | "fixed" | "percent_wallet" | "percent_budget"
+  copyMirrorBuyAmount: real("copy_mirror_buy_amount"),
+  copyMirrorBuyMaxPerToken: integer("copy_mirror_buy_max_per_token"),
+  copyMirrorBuyMaxPerHour: integer("copy_mirror_buy_max_per_hour"),
+  copyMirrorBuyMaxPerDay: integer("copy_mirror_buy_max_per_day"),
+  copyPositionCapUsd: real("copy_position_cap_usd"),
+  
+  // Mirror sell defaults
+  copyMirrorSells: boolean("copy_mirror_sells").default(false),
+  copyMirrorSellMode: text("copy_mirror_sell_mode").default("match_percent"), // "match_percent" | "fixed_percent" | "fixed_amount" | "full_exit_only"
+  copyMirrorSellPercent: real("copy_mirror_sell_percent"),
+  copyMirrorSellAmount: real("copy_mirror_sell_amount"),
+  
+  // Dedup defaults
+  dedupSkipIfHolding: boolean("dedup_skip_if_holding").default(true),
+  dedupSkipIfEverHeld: boolean("dedup_skip_if_ever_held").default(false),
+  dedupSkipIfPending: boolean("dedup_skip_if_pending").default(true),
+  dedupFirstBuyOnly: boolean("dedup_first_buy_only").default(false),
+  dedupCrossSignalPrevention: boolean("dedup_cross_signal_prevention").default(false),
+  dedupMaxBuysPerTokenDaily: integer("dedup_max_buys_per_token_daily"),
+  dedupMaxBuysPerTokenWeekly: integer("dedup_max_buys_per_token_weekly"),
+  dedupPriceProtectionPercent: real("dedup_price_protection_percent"),
+  
+  // Global safety settings
+  frozenTokenCheck: boolean("frozen_token_check").default(true), // Auto-block frozen tokens
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertCopyTradingDefaultsSchema = createInsertSchema(copyTradingDefaults).omit({ id: true });
+export type InsertCopyTradingDefaults = z.infer<typeof insertCopyTradingDefaultsSchema>;
+export type CopyTradingDefaults = typeof copyTradingDefaults.$inferSelect;
+
+// Signal cumulative tracking - track what signal wallets have bought per token
+// Used for proportional mirror sells
+export const signalCumulativeTracking = pgTable("signal_cumulative_tracking", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  signalWalletId: integer("signal_wallet_id").notNull(), // Reference to monitored_wallets
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  
+  // Cumulative tracking from when user started mirroring
+  totalTokensBought: real("total_tokens_bought").default(0), // Total tokens signal bought
+  totalSolSpent: real("total_sol_spent").default(0), // Total SOL signal spent
+  totalTokensSold: real("total_tokens_sold").default(0), // Total tokens signal sold
+  buyCount: integer("buy_count").default(0), // Number of buys from signal
+  sellCount: integer("sell_count").default(0), // Number of sells from signal
+  
+  firstBuyAt: integer("first_buy_at"), // When signal first bought
+  lastBuyAt: integer("last_buy_at"), // When signal last bought
+  lastSellAt: integer("last_sell_at"), // When signal last sold
+  
+  // Calculated fields
+  remainingTokens: real("remaining_tokens").default(0), // totalBought - totalSold
+  avgBuyPrice: real("avg_buy_price"), // Weighted average
+});
+
+export const insertSignalCumulativeTrackingSchema = createInsertSchema(signalCumulativeTracking).omit({ id: true });
+export type InsertSignalCumulativeTracking = z.infer<typeof insertSignalCumulativeTrackingSchema>;
+export type SignalCumulativeTracking = typeof signalCumulativeTracking.$inferSelect;
 
 // Trade rules - flexible buy/sell triggers with configurable parameters
 // Can be applied at hot wallet (default), signal wallet, or position level

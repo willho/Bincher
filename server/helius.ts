@@ -73,18 +73,8 @@ function evictExpiredCacheEntries() {
 }
 setInterval(evictExpiredCacheEntries, 10 * 60 * 1000);
 
-export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMetadata | undefined> {
-  // Skip SOL - it's native and doesn't have DexScreener data
-  if (mintAddress === "So11111111111111111111111111111111111111112") {
-    return undefined;
-  }
-  
-  // Check cache first
-  const cached = tokenMetadataCache.get(mintAddress);
-  if (cached && Date.now() - cached.timestamp < METADATA_CACHE_TTL) {
-    return cached.data;
-  }
-  
+// Fetch from DexScreener API
+async function fetchFromDexScreener(mintAddress: string): Promise<TokenMetadata | undefined> {
   const budgetCheck = await shouldAllowApiCall("dexscreener");
   if (!budgetCheck.allowed) {
     console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
@@ -93,17 +83,11 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
   
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`);
-    if (!response.ok) {
-      cacheMetadata(mintAddress, undefined);
-      return undefined;
-    }
+    if (!response.ok) return undefined;
     
     const data = await response.json();
-    await trackApiCall("dexscreener", "fetchTokenMetadata"); // Track after successful response
-    if (!data.pairs || data.pairs.length === 0) {
-      cacheMetadata(mintAddress, undefined);
-      return undefined;
-    }
+    await trackApiCall("dexscreener", "fetchTokenMetadata");
+    if (!data.pairs || data.pairs.length === 0) return undefined;
     
     // Get the pair with highest liquidity
     const pair = data.pairs.reduce((best: any, current: any) => {
@@ -112,9 +96,12 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
       return currLiq > bestLiq ? current : best;
     });
     
-    const metadata: TokenMetadata = {
-      name: pair.baseToken?.name,
-      symbol: pair.baseToken?.symbol,
+    // Skip if no name/symbol (DexScreener doesn't have metadata for this token)
+    if (!pair.baseToken?.name || !pair.baseToken?.symbol) return undefined;
+    
+    return {
+      name: pair.baseToken.name,
+      symbol: pair.baseToken.symbol,
       priceUsd: parseFloat(pair.priceUsd) || undefined,
       marketCap: pair.marketCap || pair.fdv || undefined,
       fdv: pair.fdv || undefined,
@@ -124,15 +111,111 @@ export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMeta
       dexId: pair.dexId,
       pairAddress: pair.pairAddress,
     };
-    
-    cacheMetadata(mintAddress, metadata);
-    return metadata;
   } catch (error) {
-    console.error("Error fetching token metadata:", error);
-    // Cache the failure to avoid repeated failed calls
-    cacheMetadata(mintAddress, undefined);
+    console.error("DexScreener fetch error:", error);
     return undefined;
   }
+}
+
+// Fetch from GeckoTerminal API (free, no API key required)
+async function fetchFromGeckoTerminal(mintAddress: string): Promise<TokenMetadata | undefined> {
+  try {
+    // GeckoTerminal token endpoint
+    const response = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${mintAddress}`, {
+      headers: { "Accept": "application/json" }
+    });
+    if (!response.ok) return undefined;
+    
+    const data = await response.json();
+    const attrs = data.data?.attributes;
+    if (!attrs) return undefined;
+    
+    // Skip if no name/symbol
+    if (!attrs.name || !attrs.symbol) return undefined;
+    
+    return {
+      name: attrs.name,
+      symbol: attrs.symbol,
+      priceUsd: parseFloat(attrs.price_usd) || undefined,
+      marketCap: parseFloat(attrs.market_cap_usd) || undefined,
+      fdv: parseFloat(attrs.fdv_usd) || undefined,
+      liquidity: parseFloat(attrs.total_reserve_in_usd) || undefined,
+      volume24h: parseFloat(attrs.volume_usd?.h24) || undefined,
+    };
+  } catch (error) {
+    console.error("GeckoTerminal fetch error:", error);
+    return undefined;
+  }
+}
+
+// Fetch from Jupiter token list (has good coverage of Solana tokens)
+async function fetchFromJupiter(mintAddress: string): Promise<TokenMetadata | undefined> {
+  try {
+    const response = await fetch(`https://tokens.jup.ag/token/${mintAddress}`);
+    if (!response.ok) return undefined;
+    
+    const data = await response.json();
+    if (!data.name || !data.symbol) return undefined;
+    
+    return {
+      name: data.name,
+      symbol: data.symbol,
+      // Jupiter doesn't provide price data, just metadata
+    };
+  } catch (error) {
+    console.error("Jupiter fetch error:", error);
+    return undefined;
+  }
+}
+
+export async function fetchTokenMetadata(mintAddress: string): Promise<TokenMetadata | undefined> {
+  // Skip SOL - it's native and doesn't need metadata lookup
+  if (mintAddress === "So11111111111111111111111111111111111111112") {
+    return { name: "Solana", symbol: "SOL" };
+  }
+  
+  // Skip USDC
+  if (mintAddress === "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") {
+    return { name: "USD Coin", symbol: "USDC" };
+  }
+  
+  // Check cache first
+  const cached = tokenMetadataCache.get(mintAddress);
+  if (cached && Date.now() - cached.timestamp < METADATA_CACHE_TTL) {
+    return cached.data;
+  }
+  
+  // Cascading fallback: DexScreener → GeckoTerminal → Jupiter
+  let metadata: TokenMetadata | undefined;
+  
+  // Try DexScreener first (most complete data)
+  metadata = await fetchFromDexScreener(mintAddress);
+  if (metadata?.name && metadata?.symbol) {
+    console.log(`[TokenMetadata] Found via DexScreener: ${metadata.symbol}`);
+    cacheMetadata(mintAddress, metadata);
+    return metadata;
+  }
+  
+  // Fallback to GeckoTerminal (good for newer tokens)
+  metadata = await fetchFromGeckoTerminal(mintAddress);
+  if (metadata?.name && metadata?.symbol) {
+    console.log(`[TokenMetadata] Found via GeckoTerminal: ${metadata.symbol}`);
+    cacheMetadata(mintAddress, metadata);
+    return metadata;
+  }
+  
+  // Fallback to Jupiter (basic metadata only)
+  metadata = await fetchFromJupiter(mintAddress);
+  if (metadata?.name && metadata?.symbol) {
+    console.log(`[TokenMetadata] Found via Jupiter: ${metadata.symbol}`);
+    cacheMetadata(mintAddress, metadata);
+    return metadata;
+  }
+  
+  // All sources failed
+  console.warn(`[TokenMetadata] No metadata found for ${mintAddress.slice(0, 8)}...`);
+  cacheMetadata(mintAddress, undefined);
+  return undefined;
 }
 
 // Helper to add to cache with size limit enforcement

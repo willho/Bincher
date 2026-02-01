@@ -44,7 +44,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -97,6 +97,173 @@ function broadcastStatus(status: any) {
       client.send(message);
     }
   });
+}
+
+// Signal Cumulative Tracking helpers
+async function updateSignalCumulativeTracking(
+  userId: number,
+  signalWalletId: number,
+  tokenMint: string,
+  tokenSymbol: string | undefined,
+  action: "buy" | "sell",
+  amount: number,
+  solValue: number | undefined,
+  signature: string
+): Promise<void> {
+  try {
+    const existing = await db.select().from(signalCumulativeTracking)
+      .where(and(
+        eq(signalCumulativeTracking.userId, userId),
+        eq(signalCumulativeTracking.signalWalletId, signalWalletId),
+        eq(signalCumulativeTracking.tokenMint, tokenMint)
+      ))
+      .limit(1);
+
+    if (existing.length > 0) {
+      const record = existing[0];
+      if (action === "buy") {
+        await db.update(signalCumulativeTracking)
+          .set({
+            totalBoughtTokens: (record.totalBoughtTokens || 0) + amount,
+            totalBoughtSol: (record.totalBoughtSol || 0) + (solValue || 0),
+            buyCount: (record.buyCount || 0) + 1,
+            lastBuyAt: new Date(),
+            lastBuySignature: signature,
+            updatedAt: new Date()
+          })
+          .where(eq(signalCumulativeTracking.id, record.id));
+      } else {
+        await db.update(signalCumulativeTracking)
+          .set({
+            totalSoldTokens: (record.totalSoldTokens || 0) + amount,
+            totalSoldSol: (record.totalSoldSol || 0) + (solValue || 0),
+            sellCount: (record.sellCount || 0) + 1,
+            lastSellAt: new Date(),
+            lastSellSignature: signature,
+            updatedAt: new Date()
+          })
+          .where(eq(signalCumulativeTracking.id, record.id));
+      }
+      console.log(`[SignalTracking] Updated ${action} for signal ${signalWalletId} token ${tokenSymbol || tokenMint.slice(0,8)}`);
+    } else {
+      await db.insert(signalCumulativeTracking).values({
+        userId,
+        signalWalletId,
+        tokenMint,
+        tokenSymbol: tokenSymbol || null,
+        totalBoughtTokens: action === "buy" ? amount : 0,
+        totalBoughtSol: action === "buy" ? (solValue || 0) : 0,
+        buyCount: action === "buy" ? 1 : 0,
+        lastBuyAt: action === "buy" ? new Date() : null,
+        lastBuySignature: action === "buy" ? signature : null,
+        totalSoldTokens: action === "sell" ? amount : 0,
+        totalSoldSol: action === "sell" ? (solValue || 0) : 0,
+        sellCount: action === "sell" ? 1 : 0,
+        lastSellAt: action === "sell" ? new Date() : null,
+        lastSellSignature: action === "sell" ? signature : null,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      console.log(`[SignalTracking] Created tracking record for signal ${signalWalletId} token ${tokenSymbol || tokenMint.slice(0,8)}`);
+    }
+  } catch (error) {
+    console.error(`[SignalTracking] Error updating tracking:`, error);
+  }
+}
+
+async function getSignalCumulativePosition(
+  userId: number,
+  signalWalletId: number,
+  tokenMint: string
+): Promise<{ totalBought: number; totalSold: number; netPosition: number; sellPercent: number } | null> {
+  try {
+    const record = await db.select().from(signalCumulativeTracking)
+      .where(and(
+        eq(signalCumulativeTracking.userId, userId),
+        eq(signalCumulativeTracking.signalWalletId, signalWalletId),
+        eq(signalCumulativeTracking.tokenMint, tokenMint)
+      ))
+      .limit(1);
+
+    if (record.length === 0) return null;
+
+    const totalBought = record[0].totalBoughtTokens || 0;
+    const totalSold = record[0].totalSoldTokens || 0;
+    const netPosition = totalBought - totalSold;
+    const sellPercent = totalBought > 0 ? (totalSold / totalBought) * 100 : 0;
+
+    return { totalBought, totalSold, netPosition, sellPercent };
+  } catch (error) {
+    console.error(`[SignalTracking] Error getting position:`, error);
+    return null;
+  }
+}
+
+// Token Blacklist helpers
+async function isTokenBlacklisted(userId: number, tokenMint: string): Promise<boolean> {
+  try {
+    const record = await db.select().from(tokenBlacklist)
+      .where(and(
+        eq(tokenBlacklist.userId, userId),
+        eq(tokenBlacklist.tokenMint, tokenMint)
+      ))
+      .limit(1);
+    return record.length > 0;
+  } catch (error) {
+    console.error(`[TokenBlacklist] Error checking blacklist:`, error);
+    return false;
+  }
+}
+
+async function addToBlacklist(
+  userId: number,
+  tokenMint: string,
+  tokenSymbol: string | undefined,
+  reason: string | undefined
+): Promise<boolean> {
+  try {
+    const existing = await isTokenBlacklisted(userId, tokenMint);
+    if (existing) return false;
+    
+    await db.insert(tokenBlacklist).values({
+      userId,
+      tokenMint,
+      tokenSymbol: tokenSymbol || null,
+      reason: reason || null,
+      createdAt: new Date()
+    });
+    console.log(`[TokenBlacklist] Added ${tokenSymbol || tokenMint.slice(0,8)} for user ${userId}`);
+    return true;
+  } catch (error) {
+    console.error(`[TokenBlacklist] Error adding to blacklist:`, error);
+    return false;
+  }
+}
+
+async function removeFromBlacklist(userId: number, tokenMint: string): Promise<boolean> {
+  try {
+    const result = await db.delete(tokenBlacklist)
+      .where(and(
+        eq(tokenBlacklist.userId, userId),
+        eq(tokenBlacklist.tokenMint, tokenMint)
+      ));
+    console.log(`[TokenBlacklist] Removed ${tokenMint.slice(0,8)} for user ${userId}`);
+    return true;
+  } catch (error) {
+    console.error(`[TokenBlacklist] Error removing from blacklist:`, error);
+    return false;
+  }
+}
+
+async function getBlacklist(userId: number): Promise<any[]> {
+  try {
+    return await db.select().from(tokenBlacklist)
+      .where(eq(tokenBlacklist.userId, userId))
+      .orderBy(desc(tokenBlacklist.createdAt));
+  } catch (error) {
+    console.error(`[TokenBlacklist] Error getting blacklist:`, error);
+    return [];
+  }
 }
 
 // Schema for updating notification settings
@@ -874,8 +1041,34 @@ export async function registerRoutes(
         // Log copy trading decision for debugging
         console.log(`[CopyTrade] Swap detected: ${isBuy ? 'BUY' : 'SELL'} ${swap.toTokenSymbol || swap.toToken.slice(0,8)} | walletCopyEnabled=${walletCopyEnabled} | wallet=${sourceWallet?.label || swapWalletAddress.slice(0,8)}${isStablecoinSwap ? ' | STABLECOIN_SWAP' : ''}`);
         
-        // Per-wallet copy trading enabled check (skip stablecoin swaps)
-        if (walletCopyEnabled && isBuy && !isStablecoinSwap) {
+        // Update signal cumulative tracking for proportional mirror sells
+        if (sourceWallet && !isStablecoinSwap) {
+          const tokenForTracking = isBuy ? swap.toToken : swap.fromToken;
+          const tokenSymbolForTracking = isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol;
+          const tokenAmount = isBuy ? (swap.toAmount || 0) : (swap.fromAmount || 0);
+          const solValue = isBuy ? (swap.fromAmount || 0) : (swap.toAmount || 0);
+          
+          updateSignalCumulativeTracking(
+            userId,
+            sourceWallet.id,
+            tokenForTracking,
+            tokenSymbolForTracking,
+            isBuy ? "buy" : "sell",
+            tokenAmount,
+            solValue,
+            payload.signature
+          ).catch(err => console.error("[SignalTracking] Error:", err));
+        }
+        
+        // Check token blacklist before copy trading
+        const tokenForBlacklistCheck = swap.toToken;
+        const isBlacklisted = await isTokenBlacklisted(userId, tokenForBlacklistCheck);
+        if (isBlacklisted) {
+          console.log(`[CopyTrade] SKIPPED: Token ${swap.toTokenSymbol || swap.toToken.slice(0,8)} is blacklisted`);
+        }
+        
+        // Per-wallet copy trading enabled check (skip stablecoin swaps and blacklisted tokens)
+        if (walletCopyEnabled && isBuy && !isStablecoinSwap && !isBlacklisted) {
             // Build per-wallet copy config
             const walletCopyConfig = sourceWallet ? {
               copyBuyType: sourceWallet.copyBuyType || undefined,
@@ -996,7 +1189,7 @@ export async function registerRoutes(
             } else if (!isBuy) {
               // Signal wallet is selling this token - update position scores
               // Mark this signal wallet as having sold, which affects position scoring
-              const tokenMintForSell = swap.fromTokenMint;
+              const tokenMintForSell = swap.fromToken;
               try {
                 const markedCount = await markSignalWalletSold(sourceWallet.id, tokenMintForSell);
                 if (markedCount > 0) {
@@ -3141,6 +3334,63 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting positions:", error);
       res.status(500).json({ error: "Failed to get positions" });
+    }
+  });
+
+  // ==================== Token Blacklist Routes ====================
+
+  // Get user's token blacklist
+  app.get("/api/blacklist", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const list = await getBlacklist(req.userId!);
+      res.json(list);
+    } catch (error) {
+      console.error("Error getting blacklist:", error);
+      res.status(500).json({ error: "Failed to get blacklist" });
+    }
+  });
+
+  // Add token to blacklist
+  app.post("/api/blacklist", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { tokenMint, tokenSymbol, reason } = req.body;
+      if (!tokenMint || typeof tokenMint !== "string") {
+        return res.status(400).json({ error: "Token mint address required" });
+      }
+      
+      const added = await addToBlacklist(req.userId!, tokenMint, tokenSymbol, reason);
+      if (!added) {
+        return res.status(409).json({ error: "Token already blacklisted" });
+      }
+      
+      res.json({ success: true, message: `Added ${tokenSymbol || tokenMint.slice(0,8)} to blacklist` });
+    } catch (error) {
+      console.error("Error adding to blacklist:", error);
+      res.status(500).json({ error: "Failed to add to blacklist" });
+    }
+  });
+
+  // Remove token from blacklist
+  app.delete("/api/blacklist/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { tokenMint } = req.params;
+      await removeFromBlacklist(req.userId!, tokenMint);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error removing from blacklist:", error);
+      res.status(500).json({ error: "Failed to remove from blacklist" });
+    }
+  });
+
+  // Check if token is blacklisted
+  app.get("/api/blacklist/check/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { tokenMint } = req.params;
+      const blacklisted = await isTokenBlacklisted(req.userId!, tokenMint);
+      res.json({ blacklisted });
+    } catch (error) {
+      console.error("Error checking blacklist:", error);
+      res.status(500).json({ error: "Failed to check blacklist" });
     }
   });
 
