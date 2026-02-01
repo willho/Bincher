@@ -1177,7 +1177,7 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "check_wallet_balance",
-      description: "Check the user's hot wallet SOL balance. Use when user asks about balance, funds, or how much they can spend.",
+      description: "Check the user's hot wallet SOL balance and full address. Use when user asks about balance, funds, hot wallet address, or how much they can spend.",
       parameters: {
         type: "object",
         properties: {},
@@ -1558,7 +1558,7 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "get_wallet_copy_config",
-      description: "Get copy trading configuration for a specific signal wallet. Use when user asks about a wallet's copy settings. Accepts wallet label/name or address.",
+      description: "Get copy trading configuration for a specific signal wallet including full wallet address. Use when user asks about a wallet's copy settings or address. Accepts wallet label/name or address.",
       parameters: {
         type: "object",
         properties: {
@@ -2061,7 +2061,7 @@ async function executeCheckBalance(userId: number): Promise<{ success: boolean; 
   const balance = await getHotWalletBalance(userId);
   return {
     success: true,
-    message: `Hot wallet balance: ${balance.toFixed(4)} SOL. Address: ${wallet.publicKey.slice(0, 8)}...${wallet.publicKey.slice(-6)}`
+    message: `Hot wallet balance: ${balance.toFixed(4)} SOL\nFull address: ${wallet.publicKey}`
   };
 }
 
@@ -2459,6 +2459,8 @@ SELL SETTINGS: Using global defaults (no wallet-specific rules set)`;
   return {
     success: true,
     message: `Copy config for ${label}:
+Full address: ${w.walletAddress}
+
 BUY SETTINGS:
 - Copy enabled: ${w.copyTradeEnabled ? 'YES' : 'NO'}
 - Buy type: ${w.copyBuyType || 'percentage'}
