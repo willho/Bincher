@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships, swaps, walletRuleDefaults } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships, swaps, walletRuleDefaults, tokenBlacklist } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray, sql } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
@@ -1669,6 +1669,60 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "add_to_blacklist",
+      description: "Add a token to the blacklist to prevent copy trading it. Use when user says things like 'blacklist TOKEN', 'block TOKEN', 'never buy TOKEN', 'ignore TOKEN for copy trading'.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenMint: {
+            type: "string",
+            description: "The token mint address to blacklist"
+          },
+          tokenSymbol: {
+            type: "string",
+            description: "The token symbol (e.g., 'BONK', 'PEPE') for display purposes"
+          },
+          reason: {
+            type: "string",
+            description: "Optional reason for blacklisting (e.g., 'rugpull', 'scam', 'low volume')"
+          }
+        },
+        required: ["tokenMint"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "remove_from_blacklist",
+      description: "Remove a token from the blacklist to allow copy trading it again. Use when user says things like 'unblock TOKEN', 'remove TOKEN from blacklist', 'allow TOKEN again'.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenMint: {
+            type: "string",
+            description: "The token mint address to remove from blacklist"
+          }
+        },
+        required: ["tokenMint"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_blacklist",
+      description: "Show all blacklisted tokens. Use when user asks 'what tokens are blacklisted', 'show blacklist', 'what am I blocking'.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
   }
 ];
 
@@ -1963,6 +2017,10 @@ async function executeConfirmedTrade(userId: number, providedPin?: string): Prom
   if (pending.type === 'buy') {
     const result = await buyToken(userId, pending.tokenMint, pending.amount);
     if (result.success) {
+      updateUserRelationship(userId, { 
+        affinityDelta: 1, 
+        addNote: `Executed buy: ${pending.tokenSymbol} for ${pending.amount} SOL` 
+      }).catch(err => console.error("[Relationship] Error on trade:", err));
       return {
         success: true,
         message: `BUY EXECUTED: Bought ${pending.tokenSymbol} for ${pending.amount} SOL. Signature: ${result.signature?.slice(0, 20)}...`
@@ -1984,10 +2042,23 @@ async function executeConfirmedTrade(userId: number, providedPin?: string): Prom
               : 60;
             await updateSignalWalletProfile(pending.sourceWalletAddress, multiplier, holdTimeMinutes);
             console.log(`Updated signal wallet profile for AI sell: ${pending.sourceWalletAddress} - ${multiplier.toFixed(2)}x`);
+            
+            const isProfitable = multiplier > 1;
+            updateUserRelationship(userId, { 
+              affinityDelta: isProfitable ? 2 : 0,
+              tradeWonDelta: isProfitable ? 1 : 0,
+              tradeLostDelta: !isProfitable ? 1 : 0,
+              addNote: `Sold ${pending.tokenSymbol} at ${multiplier.toFixed(2)}x` 
+            }).catch(err => console.error("[Relationship] Error on sell:", err));
           }
         } catch (error) {
           console.error("Failed to update signal wallet profile:", error);
         }
+      } else {
+        updateUserRelationship(userId, { 
+          affinityDelta: 1, 
+          addNote: `Executed sell: ${pending.tokenSymbol}` 
+        }).catch(err => console.error("[Relationship] Error on sell:", err));
       }
       return {
         success: true,
@@ -2121,6 +2192,107 @@ async function executeGetPendingOrders(userId: number): Promise<{ success: boole
   };
 }
 
+// Token blacklist management
+async function executeAddToBlacklist(
+  userId: number,
+  tokenMint: string,
+  tokenSymbol?: string,
+  reason?: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const existing = await db.select().from(tokenBlacklist)
+      .where(and(
+        eq(tokenBlacklist.userId, userId),
+        eq(tokenBlacklist.tokenMint, tokenMint)
+      ))
+      .limit(1);
+    
+    if (existing.length > 0) {
+      return { 
+        success: false, 
+        message: `Token ${tokenSymbol || tokenMint.slice(0,8)} is already blacklisted.` 
+      };
+    }
+    
+    await db.insert(tokenBlacklist).values({
+      userId,
+      tokenMint,
+      tokenSymbol: tokenSymbol || null,
+      reason: reason || null,
+      createdAt: new Date()
+    });
+    
+    const displayName = tokenSymbol || tokenMint.slice(0, 8) + '...';
+    const reasonText = reason ? ` (reason: ${reason})` : '';
+    return { 
+      success: true, 
+      message: `Added ${displayName} to blacklist${reasonText}. Copy trading will skip this token.` 
+    };
+  } catch (error) {
+    console.error('[AI Blacklist] Error adding to blacklist:', error);
+    return { success: false, message: 'Failed to add token to blacklist.' };
+  }
+}
+
+async function executeRemoveFromBlacklist(
+  userId: number,
+  tokenMint: string
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const result = await db.delete(tokenBlacklist)
+      .where(and(
+        eq(tokenBlacklist.userId, userId),
+        eq(tokenBlacklist.tokenMint, tokenMint)
+      ))
+      .returning();
+    
+    if (result.length === 0) {
+      return { 
+        success: false, 
+        message: `Token ${tokenMint.slice(0,8)}... was not found in your blacklist.` 
+      };
+    }
+    
+    const displayName = result[0].tokenSymbol || tokenMint.slice(0, 8) + '...';
+    return { 
+      success: true, 
+      message: `Removed ${displayName} from blacklist. Copy trading can now include this token.` 
+    };
+  } catch (error) {
+    console.error('[AI Blacklist] Error removing from blacklist:', error);
+    return { success: false, message: 'Failed to remove token from blacklist.' };
+  }
+}
+
+async function executeListBlacklist(userId: number): Promise<{ success: boolean; message: string }> {
+  try {
+    const blacklisted = await db.select().from(tokenBlacklist)
+      .where(eq(tokenBlacklist.userId, userId))
+      .orderBy(desc(tokenBlacklist.createdAt));
+    
+    if (blacklisted.length === 0) {
+      return { 
+        success: true, 
+        message: "Your blacklist is empty. All tokens are allowed for copy trading." 
+      };
+    }
+    
+    const items = blacklisted.map(b => {
+      const name = b.tokenSymbol || b.tokenMint.slice(0, 8) + '...';
+      const reason = b.reason ? ` - ${b.reason}` : '';
+      return `• ${name}${reason}`;
+    });
+    
+    return { 
+      success: true, 
+      message: `BLACKLISTED TOKENS (${blacklisted.length}):\n${items.join('\n')}\n\nThese tokens will be skipped during copy trading.` 
+    };
+  } catch (error) {
+    console.error('[AI Blacklist] Error listing blacklist:', error);
+    return { success: false, message: 'Failed to retrieve blacklist.' };
+  }
+}
+
 // Set copy trading config
 // Propose settings changes (with validation and risk warnings)
 async function executeProposeSettings(
@@ -2231,6 +2403,19 @@ async function executeConfirmSettings(userId: number): Promise<{ success: boolea
   }
   
   await updateTradeConfig(userId, updates);
+  
+  if (pending.riskWarnings.length > 0) {
+    updateUserRelationship(userId, { 
+      warningIgnoredDelta: pending.riskWarnings.length,
+      addNote: `Confirmed settings despite ${pending.riskWarnings.length} warning(s)` 
+    }).catch(err => console.error("[Relationship] Error on settings confirm:", err));
+  } else {
+    updateUserRelationship(userId, { 
+      affinityDelta: 1,
+      addNote: `Changed settings: ${changes.slice(0, 2).join(', ')}` 
+    }).catch(err => console.error("[Relationship] Error on settings confirm:", err));
+  }
+  
   pendingSettings.delete(userId);
   
   console.log(`[Settings] User ${userId} applied settings: ${changes.join(', ')}`);
@@ -2247,6 +2432,14 @@ function executeCancelSettings(userId: number): { success: boolean; message: str
   
   if (!pending) {
     return { success: false, message: "Nothing to cancel - no pending settings." };
+  }
+  
+  if (pending.riskWarnings.length > 0) {
+    updateUserRelationship(userId, { 
+      warningFollowedDelta: 1,
+      affinityDelta: 1,
+      addNote: `Cancelled settings after seeing ${pending.riskWarnings.length} warning(s)` 
+    }).catch(err => console.error("[Relationship] Error on settings cancel:", err));
   }
   
   pendingSettings.delete(userId);
@@ -3778,6 +3971,19 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             }
             
             toolResults.push(summary);
+          }
+          // Token blacklist management
+          else if (toolName === "add_to_blacklist") {
+            const result = await executeAddToBlacklist(userId, args.tokenMint, args.tokenSymbol, args.reason);
+            toolResults.push(result.message);
+          }
+          else if (toolName === "remove_from_blacklist") {
+            const result = await executeRemoveFromBlacklist(userId, args.tokenMint);
+            toolResults.push(result.message);
+          }
+          else if (toolName === "list_blacklist") {
+            const result = await executeListBlacklist(userId);
+            toolResults.push(result.message);
           }
         } catch (parseError) {
           console.error("Failed to parse tool arguments:", parseError);

@@ -96,11 +96,17 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - `GET /api/blacklist/check/:tokenMint`: Check if token is blacklisted
 - Blacklisted tokens are automatically skipped during copy trading
 
+### Miss Pincher AI Blacklist Tools (Feb 2026)
+- **add_to_blacklist**: Add token to blacklist via chat ("blacklist TOKEN", "block TOKEN")
+- **remove_from_blacklist**: Remove token from blacklist ("unblock TOKEN", "allow TOKEN")
+- **list_blacklist**: Show all blacklisted tokens ("what's blacklisted", "show blacklist")
+- Execution functions in ai.ts with proper error handling and user-friendly messages
+
 ## Paused Tasks / Backlog
 
 ### High Priority (AI Wiring Gaps)
-1. **Wire relationship updates** - Call `updateUserRelationship()` after trades complete, warnings followed/ignored, crab mentions detected
-2. **Wire AI into blacklist** - Miss Pincher can add/remove/list blacklisted tokens via chat
+1. **Wire relationship updates** - Call `updateUserRelationship()` after trades complete, warnings followed/ignored, crab mentions detected ✓ (COMPLETED)
+2. ~~**Wire AI into blacklist** - Miss Pincher can add/remove/list blacklisted tokens via chat~~ ✓ (COMPLETED Feb 2026)
 3. **Wire AI into enhanced copy settings** - Budget controls, mirror modes, dedup options via natural language
 4. **UI reactivity for AI changes** - When Miss Pincher changes settings via backend, invalidate React Query cache or broadcast via WebSocket
 
