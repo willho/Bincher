@@ -1480,7 +1480,7 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "configure_wallet_copy",
-      description: "Configure copy trading settings for a specific signal wallet. COMPREHENSIVE tool that handles buy amount, take-profit tiers, stop-loss, and all copy settings. Use when user says things like 'set 5x take profit', 'stop loss at 30%', 'buy 0.5 SOL on copies', or any combination.",
+      description: "Configure copy trading settings for a specific signal wallet. COMPREHENSIVE tool that handles buy amount, take-profit tiers, stop-loss, mirror modes, budget limits, and all copy settings. Use when user says things like 'set 5x take profit', 'stop loss at 30%', 'buy 0.5 SOL on copies', 'match their sells', 'only first buys', 'max 3 buys per token', or any combination.",
       parameters: {
         type: "object",
         properties: {
@@ -1529,6 +1529,59 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
           skipIfEverHeld: {
             type: "boolean",
             description: "Skip copy if you've ever held the token before"
+          },
+          skipIfPending: {
+            type: "boolean",
+            description: "Skip if there's already a pending buy for this token"
+          },
+          firstBuyOnly: {
+            type: "boolean",
+            description: "Only copy the signal wallet's first entry into a token, not subsequent top-ups"
+          },
+          crossSignalPrevention: {
+            type: "boolean",
+            description: "Only allow one signal wallet to trigger a buy per token (prevent multiple signals buying same token)"
+          },
+          maxBuysPerTokenDaily: {
+            type: "number",
+            description: "Maximum number of buys per token per day (e.g., 2 means max 2 buys of same token daily)"
+          },
+          maxBuysPerTokenWeekly: {
+            type: "number",
+            description: "Maximum number of buys per token per week"
+          },
+          priceProtectionPercent: {
+            type: "number",
+            description: "Skip if token price moved more than this % since signal's buy (e.g., 20 means skip if price changed >20%)"
+          },
+          mirrorBuyMaxPerToken: {
+            type: "number",
+            description: "Maximum mirror buys per token (limits position averaging)"
+          },
+          mirrorBuyMaxPerHour: {
+            type: "number",
+            description: "Maximum mirror buys per hour from this wallet"
+          },
+          mirrorBuyMaxPerDay: {
+            type: "number",
+            description: "Maximum mirror buys per day from this wallet"
+          },
+          positionCapUsd: {
+            type: "number",
+            description: "Stop mirroring if position value exceeds this USD amount"
+          },
+          mirrorSellMode: {
+            type: "string",
+            enum: ["match_percent", "fixed_percent", "fixed_amount", "full_exit_only"],
+            description: "How to mirror sells: 'match_percent' matches signal's sell %, 'fixed_percent' sells fixed %, 'fixed_amount' sells fixed SOL, 'full_exit_only' only mirrors full exits"
+          },
+          mirrorSellPercent: {
+            type: "number",
+            description: "For fixed_percent mode: sell this % of holdings when signal sells"
+          },
+          mirrorSellAmount: {
+            type: "number",
+            description: "For fixed_amount mode: sell this many SOL worth when signal sells"
           },
           takeProfitMultipliers: {
             type: "array",
@@ -2219,7 +2272,8 @@ async function executeAddToBlacklist(
       tokenMint,
       tokenSymbol: tokenSymbol || null,
       reason: reason || null,
-      createdAt: new Date()
+      addedAt: Math.floor(Date.now() / 1000),
+      addedBy: "ai"
     });
     
     const displayName = tokenSymbol || tokenMint.slice(0, 8) + '...';
@@ -2268,7 +2322,7 @@ async function executeListBlacklist(userId: number): Promise<{ success: boolean;
   try {
     const blacklisted = await db.select().from(tokenBlacklist)
       .where(eq(tokenBlacklist.userId, userId))
-      .orderBy(desc(tokenBlacklist.createdAt));
+      .orderBy(desc(tokenBlacklist.addedAt));
     
     if (blacklisted.length === 0) {
       return { 
@@ -2461,6 +2515,19 @@ async function executeConfigureWalletCopy(
     autoMirror?: boolean;
     skipIfHolding?: boolean;
     skipIfEverHeld?: boolean;
+    skipIfPending?: boolean;
+    firstBuyOnly?: boolean;
+    crossSignalPrevention?: boolean;
+    maxBuysPerTokenDaily?: number;
+    maxBuysPerTokenWeekly?: number;
+    priceProtectionPercent?: number;
+    mirrorBuyMaxPerToken?: number;
+    mirrorBuyMaxPerHour?: number;
+    mirrorBuyMaxPerDay?: number;
+    positionCapUsd?: number;
+    mirrorSellMode?: string;
+    mirrorSellPercent?: number;
+    mirrorSellAmount?: number;
     takeProfitMultipliers?: number[];
     takeProfitPercentages?: number[];
     stopLossPercent?: number;
@@ -2528,6 +2595,58 @@ async function executeConfigureWalletCopy(
   if (args.skipIfEverHeld !== undefined) {
     walletUpdates.dedupSkipIfEverHeld = args.skipIfEverHeld;
     changes.push(`skip if ever held: ${args.skipIfEverHeld ? 'YES' : 'NO'}`);
+  }
+  if (args.skipIfPending !== undefined) {
+    walletUpdates.dedupSkipIfPending = args.skipIfPending;
+    changes.push(`skip if pending: ${args.skipIfPending ? 'YES' : 'NO'}`);
+  }
+  if (args.firstBuyOnly !== undefined) {
+    walletUpdates.dedupFirstBuyOnly = args.firstBuyOnly;
+    changes.push(`first buy only: ${args.firstBuyOnly ? 'YES' : 'NO'}`);
+  }
+  if (args.crossSignalPrevention !== undefined) {
+    walletUpdates.dedupCrossSignalPrevention = args.crossSignalPrevention;
+    changes.push(`cross-signal prevention: ${args.crossSignalPrevention ? 'ON' : 'OFF'}`);
+  }
+  if (args.maxBuysPerTokenDaily !== undefined) {
+    walletUpdates.dedupMaxBuysPerTokenDaily = args.maxBuysPerTokenDaily;
+    changes.push(`max buys/token/day: ${args.maxBuysPerTokenDaily}`);
+  }
+  if (args.maxBuysPerTokenWeekly !== undefined) {
+    walletUpdates.dedupMaxBuysPerTokenWeekly = args.maxBuysPerTokenWeekly;
+    changes.push(`max buys/token/week: ${args.maxBuysPerTokenWeekly}`);
+  }
+  if (args.priceProtectionPercent !== undefined) {
+    walletUpdates.dedupPriceProtectionPercent = args.priceProtectionPercent;
+    changes.push(`price protection: ${args.priceProtectionPercent}%`);
+  }
+  if (args.mirrorBuyMaxPerToken !== undefined) {
+    walletUpdates.copyMirrorBuyMaxPerToken = args.mirrorBuyMaxPerToken;
+    changes.push(`max mirrors/token: ${args.mirrorBuyMaxPerToken}`);
+  }
+  if (args.mirrorBuyMaxPerHour !== undefined) {
+    walletUpdates.copyMirrorBuyMaxPerHour = args.mirrorBuyMaxPerHour;
+    changes.push(`max mirrors/hour: ${args.mirrorBuyMaxPerHour}`);
+  }
+  if (args.mirrorBuyMaxPerDay !== undefined) {
+    walletUpdates.copyMirrorBuyMaxPerDay = args.mirrorBuyMaxPerDay;
+    changes.push(`max mirrors/day: ${args.mirrorBuyMaxPerDay}`);
+  }
+  if (args.positionCapUsd !== undefined) {
+    walletUpdates.copyPositionCapUsd = args.positionCapUsd;
+    changes.push(`position cap: $${args.positionCapUsd}`);
+  }
+  if (args.mirrorSellMode !== undefined) {
+    walletUpdates.copyMirrorSellMode = args.mirrorSellMode;
+    changes.push(`mirror sell mode: ${args.mirrorSellMode}`);
+  }
+  if (args.mirrorSellPercent !== undefined) {
+    walletUpdates.copyMirrorSellPercent = args.mirrorSellPercent;
+    changes.push(`mirror sell %: ${args.mirrorSellPercent}%`);
+  }
+  if (args.mirrorSellAmount !== undefined) {
+    walletUpdates.copyMirrorSellAmount = args.mirrorSellAmount;
+    changes.push(`mirror sell amount: ${args.mirrorSellAmount} SOL`);
   }
   
   // Rule settings (walletRuleDefaults table)

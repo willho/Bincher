@@ -102,12 +102,19 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - **list_blacklist**: Show all blacklisted tokens ("what's blacklisted", "show blacklist")
 - Execution functions in ai.ts with proper error handling and user-friendly messages
 
+### Enhanced Copy Settings AI Control (Feb 2026)
+- Extended `configure_wallet_copy` tool with comprehensive settings:
+  - **Dedup options**: skipIfPending, firstBuyOnly, crossSignalPrevention, maxBuysPerTokenDaily/Weekly, priceProtectionPercent
+  - **Mirror buy limits**: mirrorBuyMaxPerToken/Hour/Day, positionCapUsd
+  - **Mirror sell modes**: match_percent, fixed_percent, fixed_amount, full_exit_only
+- Natural language examples: "only copy first buys from JSP", "max 2 buys per token per day", "match their sells", "cap position at $500"
+
 ## Paused Tasks / Backlog
 
 ### High Priority (AI Wiring Gaps)
 1. **Wire relationship updates** - Call `updateUserRelationship()` after trades complete, warnings followed/ignored, crab mentions detected ✓ (COMPLETED)
 2. ~~**Wire AI into blacklist** - Miss Pincher can add/remove/list blacklisted tokens via chat~~ ✓ (COMPLETED Feb 2026)
-3. **Wire AI into enhanced copy settings** - Budget controls, mirror modes, dedup options via natural language
+3. ~~**Wire AI into enhanced copy settings** - Budget controls, mirror modes, dedup options via natural language~~ ✓ (COMPLETED Feb 2026)
 4. **UI reactivity for AI changes** - When Miss Pincher changes settings via backend, invalidate React Query cache or broadcast via WebSocket
 
 ### Critical Wiring (Pending)
