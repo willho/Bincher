@@ -49,12 +49,10 @@ export function ApiKeysSettings() {
 
   const addKeyMutation = useMutation({
     mutationFn: async (data: { service: string; apiKey: string; keyLabel?: string }) => {
-      return apiRequest("/api/api-keys", {
-        method: "POST",
-        body: JSON.stringify(data),
-      });
+      const res = await apiRequest("POST", "/api/api-keys", data);
+      return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data: { isValid: boolean }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/api-keys"] });
       queryClient.invalidateQueries({ queryKey: ["/api/wallet-limits"] });
       setNewService("");
@@ -80,7 +78,7 @@ export function ApiKeysSettings() {
 
   const deleteKeyMutation = useMutation({
     mutationFn: async (keyId: number) => {
-      return apiRequest(`/api/api-keys/${keyId}`, { method: "DELETE" });
+      return apiRequest("DELETE", `/api/api-keys/${keyId}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/api-keys"] });
@@ -98,9 +96,10 @@ export function ApiKeysSettings() {
 
   const validateKeyMutation = useMutation({
     mutationFn: async (keyId: number) => {
-      return apiRequest(`/api/api-keys/${keyId}/validate`, { method: "POST" });
+      const res = await apiRequest("POST", `/api/api-keys/${keyId}/validate`);
+      return res.json();
     },
-    onSuccess: (data) => {
+    onSuccess: (data: { isValid: boolean }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/api-keys"] });
       queryClient.invalidateQueries({ queryKey: ["/api/wallet-limits"] });
       toast({
