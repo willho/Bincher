@@ -867,11 +867,15 @@ export async function registerRoutes(
         // Per-wallet copy trading - no global toggle required
         const walletCopyEnabled = sourceWallet?.copyTradeEnabled === true;
         
-        // Log copy trading decision for debugging
-        console.log(`[CopyTrade] Swap detected: ${isBuy ? 'BUY' : 'SELL'} ${swap.toTokenSymbol || swap.toToken.slice(0,8)} | walletCopyEnabled=${walletCopyEnabled} | wallet=${sourceWallet?.label || swapWalletAddress.slice(0,8)}`);
+        // Skip stablecoin swaps (SOL -> USDC or USDC -> SOL)
+        // These are cash-out operations, not token buys
+        const isStablecoinSwap = isBaseCurrency(swap.fromToken) && isBaseCurrency(swap.toToken);
         
-        // Per-wallet copy trading enabled check
-        if (walletCopyEnabled && isBuy) {
+        // Log copy trading decision for debugging
+        console.log(`[CopyTrade] Swap detected: ${isBuy ? 'BUY' : 'SELL'} ${swap.toTokenSymbol || swap.toToken.slice(0,8)} | walletCopyEnabled=${walletCopyEnabled} | wallet=${sourceWallet?.label || swapWalletAddress.slice(0,8)}${isStablecoinSwap ? ' | STABLECOIN_SWAP' : ''}`);
+        
+        // Per-wallet copy trading enabled check (skip stablecoin swaps)
+        if (walletCopyEnabled && isBuy && !isStablecoinSwap) {
             // Build per-wallet copy config
             const walletCopyConfig = sourceWallet ? {
               copyBuyType: sourceWallet.copyBuyType || undefined,
@@ -943,7 +947,9 @@ export async function registerRoutes(
           for (const position of existingPositions) {
             if (position.currentAmount <= 0) continue;
             
-            if (isBuy && sourceWallet.copyAutoMirror) {
+            // Use copyMirrorBuys if set, else fall back to legacy copyAutoMirror
+            const mirrorBuysEnabled = sourceWallet.copyMirrorBuys ?? sourceWallet.copyAutoMirror ?? false;
+            if (isBuy && mirrorBuysEnabled) {
               // Auto-mirror BUY: Signal wallet is buying more of a token we already hold from them
               // Top up our position proportionally (add to pending buy instead of immediate)
               console.log(`Auto-mirror BUY detected: ${sourceWallet.label} bought more ${swap.toTokenSymbol}, we already hold from this signal`);
@@ -1000,7 +1006,9 @@ export async function registerRoutes(
                 console.error(`[PositionScore] Error marking signal wallet sold:`, error);
               }
               
-              if (position.autoMirrorSells) {
+              // Use copyMirrorSells if set, else fall back to legacy copyAutoMirror
+              const mirrorSellsEnabled = sourceWallet.copyMirrorSells ?? sourceWallet.copyAutoMirror ?? false;
+              if (position.autoMirrorSells && mirrorSellsEnabled) {
                 // Auto-mirror SELL: Signal wallet is selling a token we hold from them
                 // Mirror proportionally based on signal wallet's original buy vs current sell
                 console.log(`Auto-mirror SELL detected: ${sourceWallet.label} sold ${swap.fromTokenSymbol}, mirroring for position ${position.id}`);
@@ -1861,6 +1869,8 @@ export async function registerRoutes(
         copyTiming: wallet.copyTiming || "delayed",
         copyDelayMinutes: wallet.copyDelayMinutes,
         copyAutoMirror: wallet.copyAutoMirror ?? false,
+        copyMirrorBuys: wallet.copyMirrorBuys ?? wallet.copyAutoMirror ?? false,
+        copyMirrorSells: wallet.copyMirrorSells ?? wallet.copyAutoMirror ?? false,
         dedupSkipIfHolding: wallet.dedupSkipIfHolding ?? true,
         dedupSkipIfEverHeld: wallet.dedupSkipIfEverHeld ?? false,
         dedupSkipIfPending: wallet.dedupSkipIfPending ?? true,
@@ -1882,6 +1892,8 @@ export async function registerRoutes(
     copyTiming: z.enum(["immediate", "delayed", "triggered"]).optional(),
     copyDelayMinutes: z.number().int().nonnegative().nullish(),
     copyAutoMirror: z.boolean().optional(),
+    copyMirrorBuys: z.boolean().optional(),
+    copyMirrorSells: z.boolean().optional(),
     dedupSkipIfHolding: z.boolean().optional(),
     dedupSkipIfEverHeld: z.boolean().optional(),
     dedupSkipIfPending: z.boolean().optional(),
@@ -1917,6 +1929,8 @@ export async function registerRoutes(
         copyTiming: updateData.copyTiming ?? existing.copyTiming,
         copyDelayMinutes: updateData.copyDelayMinutes !== undefined ? updateData.copyDelayMinutes : existing.copyDelayMinutes,
         copyAutoMirror: updateData.copyAutoMirror ?? existing.copyAutoMirror,
+        copyMirrorBuys: updateData.copyMirrorBuys ?? existing.copyMirrorBuys,
+        copyMirrorSells: updateData.copyMirrorSells ?? existing.copyMirrorSells,
         dedupSkipIfHolding: updateData.dedupSkipIfHolding ?? existing.dedupSkipIfHolding,
         dedupSkipIfEverHeld: updateData.dedupSkipIfEverHeld ?? existing.dedupSkipIfEverHeld,
         dedupSkipIfPending: updateData.dedupSkipIfPending ?? existing.dedupSkipIfPending,
@@ -1937,6 +1951,8 @@ export async function registerRoutes(
         copyTiming: updated.copyTiming || "delayed",
         copyDelayMinutes: updated.copyDelayMinutes,
         copyAutoMirror: updated.copyAutoMirror ?? false,
+        copyMirrorBuys: updated.copyMirrorBuys ?? updated.copyAutoMirror ?? false,
+        copyMirrorSells: updated.copyMirrorSells ?? updated.copyAutoMirror ?? false,
         dedupSkipIfHolding: updated.dedupSkipIfHolding ?? true,
         dedupSkipIfEverHeld: updated.dedupSkipIfEverHeld ?? false,
         dedupSkipIfPending: updated.dedupSkipIfPending ?? true,

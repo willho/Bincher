@@ -44,6 +44,8 @@ interface MonitoredWallet {
   copyTiming: string | null;
   copyDelayMinutes: number | null;
   copyAutoMirror: boolean | null;
+  copyMirrorBuys: boolean | null;
+  copyMirrorSells: boolean | null;
   dedupSkipIfHolding: boolean | null;
   dedupSkipIfEverHeld: boolean | null;
   dedupSkipIfPending: boolean | null;
@@ -331,13 +333,24 @@ export default function CopySettingsPage() {
           </div>
           <div className="flex items-center justify-between p-3 rounded-lg border">
             <div>
-              <Label>Auto-Mirror</Label>
-              <p className="text-xs text-muted-foreground">Also mirror additional buys and sells</p>
+              <Label>Mirror Buys</Label>
+              <p className="text-xs text-muted-foreground">Also copy when signal wallet buys more of a token you hold</p>
             </div>
             <Switch
-              checked={wallet.copyAutoMirror ?? false}
-              onCheckedChange={(v) => handleUpdate("copyAutoMirror", v)}
-              data-testid="switch-auto-mirror"
+              checked={wallet.copyMirrorBuys ?? wallet.copyAutoMirror ?? false}
+              onCheckedChange={(v) => handleUpdate("copyMirrorBuys", v)}
+              data-testid="switch-mirror-buys"
+            />
+          </div>
+          <div className="flex items-center justify-between p-3 rounded-lg border">
+            <div>
+              <Label>Mirror Sells</Label>
+              <p className="text-xs text-muted-foreground">Also sell when signal wallet sells a token you hold</p>
+            </div>
+            <Switch
+              checked={wallet.copyMirrorSells ?? wallet.copyAutoMirror ?? false}
+              onCheckedChange={(v) => handleUpdate("copyMirrorSells", v)}
+              data-testid="switch-mirror-sells"
             />
           </div>
         </CardContent>

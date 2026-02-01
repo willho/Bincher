@@ -79,7 +79,9 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   copyScoreThreshold: integer("copy_score_threshold"), // Only copy tokens above this AI score
   copyTiming: text("copy_timing").default("immediate"), // "immediate" | "delayed" | "triggered"
   copyDelayMinutes: integer("copy_delay_minutes"), // Delay before copying (if delayed)
-  copyAutoMirror: boolean("copy_auto_mirror").default(false), // Mirror additional buys/sells
+  copyAutoMirror: boolean("copy_auto_mirror").default(false), // Legacy: combined mirror setting
+  copyMirrorBuys: boolean("copy_mirror_buys"), // Mirror additional buys from this wallet (null = inherit from copyAutoMirror)
+  copyMirrorSells: boolean("copy_mirror_sells"), // Mirror sells from this wallet (null = inherit from copyAutoMirror)
   
   // Deduplication options
   dedupSkipIfHolding: boolean("dedup_skip_if_holding").default(true), // Skip if already holding

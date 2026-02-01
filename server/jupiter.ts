@@ -108,44 +108,33 @@ export function priorityFeeToSol(priorityFeeLamports: number): number {
 let cachedSolPrice: { price: number; timestamp: number } | null = null;
 const SOL_PRICE_CACHE_MS = 60000;
 
-// Get SOL price in USD from DexScreener
+// Get SOL price in USD from Binance (more reliable than DexScreener for SOL)
 export async function getSolPriceUsd(): Promise<number> {
   const now = Date.now();
   if (cachedSolPrice && (now - cachedSolPrice.timestamp) < SOL_PRICE_CACHE_MS) {
     return cachedSolPrice.price;
   }
   
-  const budgetCheck = await shouldAllowApiCall("dexscreener");
-  if (!budgetCheck.allowed) {
-    console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
-    return cachedSolPrice?.price || 150; // Fallback to cached or default
-  }
-  
   try {
-    // Use wrapped SOL address for DexScreener lookup
-    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${SOL_MINT}`);
+    // Use Binance ticker API for reliable SOL/USDT price
+    const response = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=SOLUSDT");
     if (!response.ok) {
-      console.error("DexScreener SOL price error:", await response.text());
-      return cachedSolPrice?.price || 150; // Fallback to cached or default
+      console.error("Binance SOL price error:", response.status);
+      return cachedSolPrice?.price || 200; // Fallback to cached or reasonable default
     }
     
     const data = await response.json();
-    await trackApiCall("dexscreener", "getSolPriceUsd"); // Track after successful response
-    if (data.pairs && data.pairs.length > 0) {
-      // Get price from the highest liquidity pair
-      const sortedPairs = data.pairs.sort((a: any, b: any) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-      const priceUsd = parseFloat(sortedPairs[0].priceNative) > 0 
-        ? 1 / parseFloat(sortedPairs[0].priceNative) * parseFloat(sortedPairs[0].priceUsd)
-        : parseFloat(sortedPairs[0].priceUsd) || 150;
-      
+    const priceUsd = parseFloat(data.price);
+    
+    if (priceUsd > 0) {
       cachedSolPrice = { price: priceUsd, timestamp: now };
       return priceUsd;
     }
     
-    return cachedSolPrice?.price || 150;
+    return cachedSolPrice?.price || 200;
   } catch (error) {
     console.error("Failed to fetch SOL price:", error);
-    return cachedSolPrice?.price || 150;
+    return cachedSolPrice?.price || 200;
   }
 }
 
