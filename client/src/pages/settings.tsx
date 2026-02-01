@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Key, Bell, User, Shield, Bot, Mail, CheckCircle, ExternalLink, Loader2, Lock } from "lucide-react";
+import { Key, Bell, User, Shield, Bot, Mail, CheckCircle, ExternalLink, Loader2, Lock, Ban, Plus, Trash2, TrendingUp } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 
@@ -18,6 +18,14 @@ interface SessionData {
   username?: string;
   userId?: number;
   isAdmin?: boolean;
+}
+
+interface BlacklistEntry {
+  id: number;
+  tokenMint: string;
+  tokenSymbol: string | null;
+  reason: string | null;
+  createdAt: string;
 }
 
 interface TelegramStatus {
@@ -93,8 +101,42 @@ export default function SettingsPage() {
     }
   });
 
+  // Token Blacklist state and queries
+  const [newBlacklistToken, setNewBlacklistToken] = useState("");
+  const [newBlacklistReason, setNewBlacklistReason] = useState("");
+
+  const { data: blacklist = [], isLoading: isLoadingBlacklist } = useQuery<BlacklistEntry[]>({
+    queryKey: ["/api/blacklist"],
+  });
+
+  const addToBlacklistMutation = useMutation({
+    mutationFn: (data: { tokenMint: string; reason?: string }) =>
+      apiRequest("POST", "/api/blacklist", data),
+    onSuccess: () => {
+      toast({ title: "Token added to blacklist" });
+      queryClient.invalidateQueries({ queryKey: ["/api/blacklist"] });
+      setNewBlacklistToken("");
+      setNewBlacklistReason("");
+    },
+    onError: (err: any) => {
+      toast({ title: err.message || "Failed to add to blacklist", variant: "destructive" });
+    },
+  });
+
+  const removeFromBlacklistMutation = useMutation({
+    mutationFn: (tokenMint: string) =>
+      apiRequest("DELETE", `/api/blacklist/${encodeURIComponent(tokenMint)}`),
+    onSuccess: () => {
+      toast({ title: "Token removed from blacklist" });
+      queryClient.invalidateQueries({ queryKey: ["/api/blacklist"] });
+    },
+    onError: () => {
+      toast({ title: "Failed to remove from blacklist", variant: "destructive" });
+    },
+  });
+
   const isAdmin = session?.isAdmin ?? false;
-  const totalTabs = 4 + (isAdmin ? 1 : 0);
+  const totalTabs = 5 + (isAdmin ? 1 : 0);
 
   return (
     <div className="space-y-6">
@@ -120,6 +162,10 @@ export default function SettingsPage() {
           <TabsTrigger value="security" className="flex items-center gap-2" data-testid="tab-security">
             <Lock className="h-4 w-4" />
             <span className="hidden sm:inline">Security</span>
+          </TabsTrigger>
+          <TabsTrigger value="trading" className="flex items-center gap-2" data-testid="tab-trading">
+            <TrendingUp className="h-4 w-4" />
+            <span className="hidden sm:inline">Trading</span>
           </TabsTrigger>
           {isAdmin && (
             <TabsTrigger value="admin" className="flex items-center gap-2" data-testid="tab-admin">
@@ -337,6 +383,104 @@ export default function SettingsPage() {
 
         <TabsContent value="security" className="mt-6">
           <SecuritySettings />
+        </TabsContent>
+
+        <TabsContent value="trading" className="mt-6">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Ban className="h-5 w-5" />
+                  Token Blacklist
+                </CardTitle>
+                <CardDescription>
+                  Blacklisted tokens will be skipped during copy trading. Use this to block scams or tokens you don't want to buy.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2 items-end">
+                  <div className="flex-1 space-y-1">
+                    <Label htmlFor="blacklist-token" className="text-xs">Token Mint Address</Label>
+                    <Input
+                      id="blacklist-token"
+                      placeholder="Token mint address..."
+                      value={newBlacklistToken}
+                      onChange={(e) => setNewBlacklistToken(e.target.value)}
+                      data-testid="input-blacklist-token"
+                    />
+                  </div>
+                  <div className="w-32 space-y-1">
+                    <Label htmlFor="blacklist-reason" className="text-xs">Reason (optional)</Label>
+                    <Input
+                      id="blacklist-reason"
+                      placeholder="Scam, rug..."
+                      value={newBlacklistReason}
+                      onChange={(e) => setNewBlacklistReason(e.target.value)}
+                      data-testid="input-blacklist-reason"
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => addToBlacklistMutation.mutate({ 
+                      tokenMint: newBlacklistToken.trim(), 
+                      reason: newBlacklistReason.trim() || undefined 
+                    })}
+                    disabled={!newBlacklistToken.trim() || addToBlacklistMutation.isPending}
+                    data-testid="button-add-blacklist"
+                  >
+                    {addToBlacklistMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Plus className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+
+                {isLoadingBlacklist ? (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : blacklist.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">
+                    No tokens blacklisted yet
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {blacklist.map((entry) => (
+                      <div 
+                        key={entry.id}
+                        className="flex items-center justify-between p-2 rounded-lg border bg-muted/50"
+                        data-testid={`blacklist-entry-${entry.id}`}
+                      >
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-mono truncate">
+                            {entry.tokenSymbol ? (
+                              <span className="font-medium">{entry.tokenSymbol}</span>
+                            ) : null}
+                            <span className="text-muted-foreground ml-2">
+                              {entry.tokenMint.slice(0, 8)}...{entry.tokenMint.slice(-8)}
+                            </span>
+                          </p>
+                          {entry.reason && (
+                            <p className="text-xs text-muted-foreground">{entry.reason}</p>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeFromBlacklistMutation.mutate(entry.tokenMint)}
+                          disabled={removeFromBlacklistMutation.isPending}
+                          data-testid={`button-remove-blacklist-${entry.id}`}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         {isAdmin && (
