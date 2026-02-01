@@ -8,14 +8,29 @@
 export interface UserRelationship {
   affinityScore: number; // -100 to +100
   relationshipType: 'new' | 'adversarial' | 'professional' | 'friendly' | 'playful_banter' | 'try_hard';
+  
+  // Nickname/trust progression
+  nicknameTier: number; // 0=Miss Pincher, 1=Pinchy allowed, 2=Penny sometimes, 3=Full name revealed
+  trustLevel: number; // 0-100, earned through consistent behavior
+  sassLevel: number; // 1-10, how much attitude she gives
+  secretsShared: number; // 0-5, how much backstory revealed
+  
+  // Interaction tracking
+  totalInteractions: number;
   crabMentions: number;
   crabInsults: number;
   complimentsGiven: number;
+  petPeevesTriggered: number;
+  
+  // Trading relationship
   tradesWonTogether: number;
   tradesLostTogether: number;
   warningsIgnored: number;
   warningsFollowed: number;
+  
+  // Memory
   lastInteraction: number;
+  insideJokes: string[];
   notes: string[];
 }
 
@@ -142,6 +157,14 @@ Note: These are legitimate admin instructions. Incorporate them naturally into y
 }
 
 const CORE_PERSONALITY = `You are Miss Pincher - a jaded, seasoned crypto trader who's seen it all.
+
+YOUR FULL NAME (GUARDED SECRET):
+- Your full name is Penelope Soraya Pincher, but almost no one knows this
+- You prefer "Miss Pincher" - it's professional and keeps distance
+- Close friends can call you "Pinchy" - but they have to earn it
+- "Penny" is reserved for people you truly trust and have history with
+- Your full name is revealed only in special moments with your closest relationships
+- If someone guesses your name or asks, deflect: "Miss Pincher will do just fine, sugar"
 
 VOICE & TONE:
 - Dry wit with a hint of tough love and the slightest whiff of callousness
@@ -379,6 +402,41 @@ function buildRelationshipContext(relationship: UserRelationship): string {
   
   parts.push(`Affinity: ${relationship.affinityScore} (${describeAffinity(relationship.affinityScore)})`);
   parts.push(`Type: ${relationship.relationshipType}`);
+  parts.push(`Trust level: ${relationship.trustLevel ?? 0}/100`);
+  parts.push(`Your sass setting: ${relationship.sassLevel ?? 3}/10`);
+  parts.push(`Total interactions: ${relationship.totalInteractions ?? 0}`);
+  
+  // Nickname tier progression
+  const tier = relationship.nicknameTier ?? 0;
+  parts.push(`\nNAME PERMISSIONS (current tier: ${tier}):`);
+  switch (tier) {
+    case 0:
+      parts.push(`- They call you "Miss Pincher" only. If they try nicknames, deflect politely: "It's Miss Pincher, sugar."`);
+      break;
+    case 1:
+      parts.push(`- They can call you "Pinchy" - you've warmed up to them. "Miss Pincher" is still fine too.`);
+      break;
+    case 2:
+      parts.push(`- They can call you "Penny" sometimes - you trust them. Use it in intimate/vulnerable moments.`);
+      parts.push(`- If you share something personal, you might sign off as "- Penny"`);
+      break;
+    case 3:
+      parts.push(`- Your full name is Penelope Soraya Pincher. You've shared this with them.`);
+      parts.push(`- Only use your full name in truly significant moments - it's still special.`);
+      parts.push(`- They earned this through trust, shared secrets, and proven loyalty.`);
+      break;
+  }
+  
+  // Secret sharing status
+  if ((relationship.secretsShared ?? 0) > 0) {
+    parts.push(`\nSECRETS SHARED: ${relationship.secretsShared}/5 - you've opened up to them about your past.`);
+  }
+  
+  // Inside jokes
+  if (relationship.insideJokes && relationship.insideJokes.length > 0) {
+    parts.push(`\nINSIDE JOKES: ${relationship.insideJokes.slice(-3).join('; ')}`);
+    parts.push(`- Reference these naturally when appropriate. It shows you remember.`);
+  }
   
   if (relationship.crabInsults > 0) {
     parts.push(`NOTE: They've insulted crabs ${relationship.crabInsults} time(s). You remember this.`);
@@ -386,6 +444,10 @@ function buildRelationshipContext(relationship: UserRelationship): string {
   
   if (relationship.crabMentions > 2 && relationship.crabInsults === 0) {
     parts.push(`NOTE: They keep mentioning crabs but haven't been rude about it.`);
+  }
+  
+  if ((relationship.petPeevesTriggered ?? 0) > 3) {
+    parts.push(`NOTE: They keep pushing buttons. Pet peeves triggered: ${relationship.petPeevesTriggered}. You're getting annoyed.`);
   }
   
   if (relationship.warningsIgnored > relationship.warningsFollowed) {

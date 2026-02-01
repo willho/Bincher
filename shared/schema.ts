@@ -1761,15 +1761,31 @@ export const userRelationships = pgTable("user_relationships", {
   userId: integer("user_id").notNull().unique(),
   affinityScore: integer("affinity_score").default(0), // -100 to +100
   relationshipType: text("relationship_type").default("new"), // new, adversarial, professional, friendly, playful_banter, try_hard
+  
+  // Nickname/trust progression
+  nicknameTier: integer("nickname_tier").default(0), // 0=Miss Pincher, 1=Pinchy allowed, 2=Penny sometimes, 3=Full name revealed
+  trustLevel: integer("trust_level").default(0), // 0-100, earned through consistent behavior
+  sassLevel: integer("sass_level").default(3), // 1-10, how much attitude she gives (increases with comfort)
+  secretsShared: integer("secrets_shared").default(0), // 0-5, how much backstory revealed
+  
+  // Interaction tracking
+  totalInteractions: integer("total_interactions").default(0),
   crabMentions: integer("crab_mentions").default(0),
   crabInsults: integer("crab_insults").default(0),
   complimentsGiven: integer("compliments_given").default(0),
+  petPeevesTriggered: integer("pet_peeves_triggered").default(0), // times user annoyed her
+  
+  // Trading relationship
   tradesWonTogether: integer("trades_won_together").default(0),
   tradesLostTogether: integer("trades_lost_together").default(0),
   warningsIgnored: integer("warnings_ignored").default(0),
   warningsFollowed: integer("warnings_followed").default(0),
+  
+  // Memory
   lastInteraction: integer("last_interaction"),
+  insideJokes: jsonb("inside_jokes").$type<string[]>().default([]), // shared references
   notes: jsonb("notes").default([]), // array of string notes
+  
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at"),
 });

@@ -3443,14 +3443,21 @@ function getDefaultRelationship(): UserRelationship {
   return {
     affinityScore: 0,
     relationshipType: 'new',
+    nicknameTier: 0,
+    trustLevel: 0,
+    sassLevel: 3,
+    secretsShared: 0,
+    totalInteractions: 0,
     crabMentions: 0,
     crabInsults: 0,
     complimentsGiven: 0,
+    petPeevesTriggered: 0,
     tradesWonTogether: 0,
     tradesLostTogether: 0,
     warningsIgnored: 0,
     warningsFollowed: 0,
     lastInteraction: Math.floor(Date.now() / 1000),
+    insideJokes: [],
     notes: [],
   };
 }
@@ -3464,10 +3471,11 @@ async function getOrCreateUserRelationship(userId: number): Promise<UserRelation
       .limit(1);
     
     if (existing) {
-      // Update lastInteraction timestamp
+      // Update lastInteraction and totalInteractions
       await db.update(userRelationships)
         .set({ 
           lastInteraction: Math.floor(Date.now() / 1000),
+          totalInteractions: (existing.totalInteractions ?? 0) + 1,
           updatedAt: Math.floor(Date.now() / 1000),
         })
         .where(eq(userRelationships.id, existing.id));
@@ -3475,14 +3483,21 @@ async function getOrCreateUserRelationship(userId: number): Promise<UserRelation
       return {
         affinityScore: existing.affinityScore ?? 0,
         relationshipType: (existing.relationshipType as UserRelationship['relationshipType']) ?? 'new',
+        nicknameTier: existing.nicknameTier ?? 0,
+        trustLevel: existing.trustLevel ?? 0,
+        sassLevel: existing.sassLevel ?? 3,
+        secretsShared: existing.secretsShared ?? 0,
+        totalInteractions: (existing.totalInteractions ?? 0) + 1,
         crabMentions: existing.crabMentions ?? 0,
         crabInsults: existing.crabInsults ?? 0,
         complimentsGiven: existing.complimentsGiven ?? 0,
+        petPeevesTriggered: existing.petPeevesTriggered ?? 0,
         tradesWonTogether: existing.tradesWonTogether ?? 0,
         tradesLostTogether: existing.tradesLostTogether ?? 0,
         warningsIgnored: existing.warningsIgnored ?? 0,
         warningsFollowed: existing.warningsFollowed ?? 0,
         lastInteraction: existing.lastInteraction ?? Math.floor(Date.now() / 1000),
+        insideJokes: (existing.insideJokes as string[]) ?? [],
         notes: (existing.notes as string[]) ?? [],
       };
     }
@@ -3493,14 +3508,21 @@ async function getOrCreateUserRelationship(userId: number): Promise<UserRelation
       userId,
       affinityScore: 0,
       relationshipType: 'new',
+      nicknameTier: 0,
+      trustLevel: 0,
+      sassLevel: 3,
+      secretsShared: 0,
+      totalInteractions: 1,
       crabMentions: 0,
       crabInsults: 0,
       complimentsGiven: 0,
+      petPeevesTriggered: 0,
       tradesWonTogether: 0,
       tradesLostTogether: 0,
       warningsIgnored: 0,
       warningsFollowed: 0,
       lastInteraction: now,
+      insideJokes: [],
       notes: [],
       createdAt: now,
       updatedAt: now,
@@ -3518,15 +3540,20 @@ export async function updateUserRelationship(
   userId: number, 
   updates: Partial<{
     affinityDelta: number;
+    trustDelta: number;
+    sassDelta: number;
+    secretSharedDelta: number;
     crabMentionDelta: number;
     crabInsultDelta: number;
     complimentDelta: number;
+    petPeeveDelta: number;
     tradeWonDelta: number;
     tradeLostDelta: number;
     warningIgnoredDelta: number;
     warningFollowedDelta: number;
     newRelationshipType: UserRelationship['relationshipType'];
     addNote: string;
+    addInsideJoke: string;
   }>
 ): Promise<void> {
   try {
@@ -3544,8 +3571,10 @@ export async function updateUserRelationship(
     const now = Math.floor(Date.now() / 1000);
     const setValues: Record<string, any> = { updatedAt: now, lastInteraction: now };
     
+    // Calculate new affinity for tier checks
+    let newAffinity = existing.affinityScore ?? 0;
     if (updates.affinityDelta) {
-      const newAffinity = Math.max(-100, Math.min(100, (existing.affinityScore ?? 0) + updates.affinityDelta));
+      newAffinity = Math.max(-100, Math.min(100, newAffinity + updates.affinityDelta));
       setValues.affinityScore = newAffinity;
       
       // Auto-adjust relationship type based on affinity
@@ -3553,19 +3582,77 @@ export async function updateUserRelationship(
       else if (newAffinity >= 20) setValues.relationshipType = 'professional';
       else if (newAffinity <= -30) setValues.relationshipType = 'adversarial';
     }
+    
+    // Trust level updates
+    if (updates.trustDelta) {
+      setValues.trustLevel = Math.max(0, Math.min(100, (existing.trustLevel ?? 0) + updates.trustDelta));
+    }
+    
+    // Sass level updates (1-10 scale)
+    if (updates.sassDelta) {
+      setValues.sassLevel = Math.max(1, Math.min(10, (existing.sassLevel ?? 3) + updates.sassDelta));
+    }
+    
+    // Secret sharing updates
+    let newSecretsShared = existing.secretsShared ?? 0;
+    if (updates.secretSharedDelta) {
+      newSecretsShared = Math.max(0, Math.min(5, newSecretsShared + updates.secretSharedDelta));
+      setValues.secretsShared = newSecretsShared;
+    }
+    
     if (updates.crabMentionDelta) setValues.crabMentions = (existing.crabMentions ?? 0) + updates.crabMentionDelta;
     if (updates.crabInsultDelta) setValues.crabInsults = (existing.crabInsults ?? 0) + updates.crabInsultDelta;
     if (updates.complimentDelta) setValues.complimentsGiven = (existing.complimentsGiven ?? 0) + updates.complimentDelta;
-    if (updates.tradeWonDelta) setValues.tradesWonTogether = (existing.tradesWonTogether ?? 0) + updates.tradeWonDelta;
+    if (updates.petPeeveDelta) setValues.petPeevesTriggered = (existing.petPeevesTriggered ?? 0) + updates.petPeeveDelta;
+    
+    let newTradesWon = existing.tradesWonTogether ?? 0;
+    if (updates.tradeWonDelta) {
+      newTradesWon = newTradesWon + updates.tradeWonDelta;
+      setValues.tradesWonTogether = newTradesWon;
+    }
     if (updates.tradeLostDelta) setValues.tradesLostTogether = (existing.tradesLostTogether ?? 0) + updates.tradeLostDelta;
     if (updates.warningIgnoredDelta) setValues.warningsIgnored = (existing.warningsIgnored ?? 0) + updates.warningIgnoredDelta;
     if (updates.warningFollowedDelta) setValues.warningsFollowed = (existing.warningsFollowed ?? 0) + updates.warningFollowedDelta;
     if (updates.newRelationshipType) setValues.relationshipType = updates.newRelationshipType;
+    
     if (updates.addNote) {
       const notes = (existing.notes as string[]) ?? [];
       notes.push(`[${new Date().toISOString().slice(0, 10)}] ${updates.addNote}`);
       if (notes.length > 10) notes.shift(); // Keep only last 10 notes
       setValues.notes = notes;
+    }
+    
+    if (updates.addInsideJoke) {
+      const jokes = (existing.insideJokes as string[]) ?? [];
+      jokes.push(updates.addInsideJoke);
+      if (jokes.length > 5) jokes.shift(); // Keep only last 5 jokes
+      setValues.insideJokes = jokes;
+    }
+    
+    // Nickname tier progression (only goes up, never down)
+    // Tier 0: Miss Pincher only (default)
+    // Tier 1: Pinchy allowed (affinity ≥30)
+    // Tier 2: Penny sometimes (affinity ≥60 + 50 trades won together)
+    // Tier 3: Full name revealed (affinity ≥80 + secretsShared ≥3)
+    const currentTier = existing.nicknameTier ?? 0;
+    const totalTradesWon = newTradesWon;
+    
+    let newTier = currentTier;
+    if (currentTier < 1 && newAffinity >= 30) {
+      newTier = 1;
+      console.log(`[Relationship] User ${userId} unlocked Pinchy (tier 1)`);
+    }
+    if (currentTier < 2 && newAffinity >= 60 && totalTradesWon >= 50) {
+      newTier = 2;
+      console.log(`[Relationship] User ${userId} unlocked Penny (tier 2)`);
+    }
+    if (currentTier < 3 && newAffinity >= 80 && newSecretsShared >= 3) {
+      newTier = 3;
+      console.log(`[Relationship] User ${userId} unlocked full name Penelope Soraya Pincher (tier 3)`);
+    }
+    
+    if (newTier > currentTier) {
+      setValues.nicknameTier = newTier;
     }
     
     await db.update(userRelationships).set(setValues).where(eq(userRelationships.id, existing.id));

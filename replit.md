@@ -67,6 +67,13 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 
 ## Recent Changes (Feb 2026)
 
+### Miss Pincher Identity & Relationship Progression (Feb 2026)
+- **Full Name Established**: Penelope Soraya Pincher - revealed progressively through relationship tiers
+- **Nickname Tier System**: 0=Miss Pincher only, 1=Pinchy (affinity≥30), 2=Penny (affinity≥60+50 trades), 3=Full name (affinity≥80+3 secrets)
+- **New Relationship Fields**: nicknameTier, trustLevel (0-100), sassLevel (1-10), secretsShared (0-5), totalInteractions, petPeevesTriggered, insideJokes
+- **Auto Tier Progression**: Nickname tier automatically upgrades when thresholds are met (never degrades)
+- **Enhanced System Prompt**: buildRelationshipContext includes name permissions, inside jokes, secrets, and new behavioral cues
+
 ### Token Metadata Fallback System
 - Implemented cascading metadata lookup: DexScreener → GeckoTerminal → Jupiter
 - Handles newly launched tokens better with multiple fallback sources
