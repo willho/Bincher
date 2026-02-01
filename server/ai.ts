@@ -1606,7 +1606,7 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "get_positions",
-      description: "Get detailed information about trading positions. Use when user asks about their positions, holdings by source, or specific position details.",
+      description: "Get detailed information about trading positions including position wallet addresses. Use when user asks about their positions, holdings by source, position details, or position wallet addresses.",
       parameters: {
         type: "object",
         properties: {
@@ -2600,6 +2600,11 @@ async function executeGetPositions(
     
     if (p.sourceWalletAddress) {
       line += ` (from ${p.sourceWalletAddress.slice(0, 6)}...)`;
+    }
+    
+    // Include position wallet address if available
+    if (p.tokenWalletPublicKey) {
+      line += `\n  Position wallet: ${p.tokenWalletPublicKey}`;
     }
     
     return line;

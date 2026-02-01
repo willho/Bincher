@@ -99,7 +99,8 @@ import {
   getAllHoldings, 
   getTokenWalletKeypair, 
   getOrCreateHotWallet,
-  sendProfitsToMainWallet 
+  sendProfitsToMainWallet,
+  ensurePositionWalletGas
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, getTokenPrice, getBatchTokenPrices, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
@@ -887,27 +888,34 @@ async function executeReclaim(
     let result;
     
     // Use token wallet if available, otherwise fall back to main wallet
-    if (holding.tokenWalletEncryptedKey) {
+    if (holding.tokenWalletEncryptedKey && holding.tokenWalletPublicKey) {
       const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
       if (!tokenWalletKeypair) {
         console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
         // Fallback to main wallet if token wallet decryption fails
         result = await sellToken(userId, holding.tokenMint, tokensToSell);
       } else {
-        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        // Ensure position wallet has enough gas for the sell (hot wallet backup)
+        const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+        const gasCheck = await ensurePositionWalletGas(userId, holding.tokenWalletPublicKey, gasReserve);
+        if (!gasCheck.success) {
+          console.error(`Failed to ensure gas for ${holding.tokenSymbol}: ${gasCheck.error}, falling back to main wallet`);
+          result = await sellToken(userId, holding.tokenMint, tokensToSell);
+        } else {
+          result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
         
-        // Send profits back to main wallet (keep 4x gas reserve)
-        if (result.success) {
-          const mainWallet = await getOrCreateHotWallet(userId);
-          if (mainWallet) {
-            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
-            const profitResult = await sendProfitsToMainWallet(
-              tokenWalletKeypair,
-              mainWallet.publicKey,
-              gasReserve
-            );
-            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
-              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL profits to main wallet`);
+          // Send profits back to main wallet (keep 4x gas reserve)
+          if (result.success) {
+            const mainWallet = await getOrCreateHotWallet(userId);
+            if (mainWallet) {
+              const profitResult = await sendProfitsToMainWallet(
+                tokenWalletKeypair,
+                mainWallet.publicKey,
+                gasReserve
+              );
+              if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+                console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL profits to main wallet`);
+              }
             }
           }
         }
@@ -1001,27 +1009,34 @@ async function executeProgressiveReclaim(
     let result;
     
     // Use token wallet if available, otherwise fall back to main wallet
-    if (holding.tokenWalletEncryptedKey) {
+    if (holding.tokenWalletEncryptedKey && holding.tokenWalletPublicKey) {
       const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
       if (!tokenWalletKeypair) {
         console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
         // Fallback to main wallet if token wallet decryption fails
         result = await sellToken(userId, holding.tokenMint, tokensToSell);
       } else {
-        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        // Ensure position wallet has enough gas for the sell (hot wallet backup)
+        const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+        const gasCheck = await ensurePositionWalletGas(userId, holding.tokenWalletPublicKey, gasReserve);
+        if (!gasCheck.success) {
+          console.error(`Failed to ensure gas for ${holding.tokenSymbol}: ${gasCheck.error}, falling back to main wallet`);
+          result = await sellToken(userId, holding.tokenMint, tokensToSell);
+        } else {
+          result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
         
-        // Send profits back to main wallet (keep 4x gas reserve)
-        if (result.success) {
-          const mainWallet = await getOrCreateHotWallet(userId);
-          if (mainWallet) {
-            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
-            const profitResult = await sendProfitsToMainWallet(
-              tokenWalletKeypair,
-              mainWallet.publicKey,
-              gasReserve
-            );
-            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
-              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL profits to main wallet`);
+          // Send profits back to main wallet (keep 4x gas reserve)
+          if (result.success) {
+            const mainWallet = await getOrCreateHotWallet(userId);
+            if (mainWallet) {
+              const profitResult = await sendProfitsToMainWallet(
+                tokenWalletKeypair,
+                mainWallet.publicKey,
+                gasReserve
+              );
+              if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+                console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL profits to main wallet`);
+              }
             }
           }
         }
@@ -1115,26 +1130,33 @@ async function executeStopLoss(
     let result;
     
     // Use token wallet if available, otherwise fall back to main wallet
-    if (holding.tokenWalletEncryptedKey) {
+    if (holding.tokenWalletEncryptedKey && holding.tokenWalletPublicKey) {
       const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
       if (!tokenWalletKeypair) {
         console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
         result = await sellToken(userId, holding.tokenMint, tokensToSell);
       } else {
-        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        // Ensure position wallet has enough gas for the sell (hot wallet backup)
+        const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+        const gasCheck = await ensurePositionWalletGas(userId, holding.tokenWalletPublicKey, gasReserve);
+        if (!gasCheck.success) {
+          console.error(`Failed to ensure gas for ${holding.tokenSymbol}: ${gasCheck.error}, falling back to main wallet`);
+          result = await sellToken(userId, holding.tokenMint, tokensToSell);
+        } else {
+          result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
         
-        // Send any remaining SOL back to main wallet
-        if (result.success) {
-          const mainWallet = await getOrCreateHotWallet(userId);
-          if (mainWallet) {
-            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
-            const profitResult = await sendProfitsToMainWallet(
-              tokenWalletKeypair,
-              mainWallet.publicKey,
-              gasReserve
-            );
-            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
-              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL back to main wallet after stop-loss`);
+          // Send any remaining SOL back to main wallet
+          if (result.success) {
+            const mainWallet = await getOrCreateHotWallet(userId);
+            if (mainWallet) {
+              const profitResult = await sendProfitsToMainWallet(
+                tokenWalletKeypair,
+                mainWallet.publicKey,
+                gasReserve
+              );
+              if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+                console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL back to main wallet after stop-loss`);
+              }
             }
           }
         }
@@ -1221,26 +1243,33 @@ export async function executeAutoMirrorSell(
     let result;
     
     // Use token wallet if available, otherwise fall back to main wallet
-    if (holding.tokenWalletEncryptedKey) {
+    if (holding.tokenWalletEncryptedKey && holding.tokenWalletPublicKey) {
       const tokenWalletKeypair = getTokenWalletKeypair(holding.tokenWalletEncryptedKey);
       if (!tokenWalletKeypair) {
         console.error(`Failed to decrypt token wallet for ${holding.tokenSymbol}, falling back to main wallet`);
         result = await sellToken(userId, holding.tokenMint, tokensToSell);
       } else {
-        result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
+        // Ensure position wallet has enough gas for the sell (hot wallet backup)
+        const gasReserve = priorityFeeToSol(await estimatePriorityFee());
+        const gasCheck = await ensurePositionWalletGas(userId, holding.tokenWalletPublicKey, gasReserve);
+        if (!gasCheck.success) {
+          console.error(`Failed to ensure gas for ${holding.tokenSymbol}: ${gasCheck.error}, falling back to main wallet`);
+          result = await sellToken(userId, holding.tokenMint, tokensToSell);
+        } else {
+          result = await sellTokenWithWallet(tokenWalletKeypair, holding.tokenMint, tokensToSell);
         
-        // Send SOL back to main wallet
-        if (result.success) {
-          const mainWallet = await getOrCreateHotWallet(userId);
-          if (mainWallet) {
-            const gasReserve = priorityFeeToSol(await estimatePriorityFee());
-            const profitResult = await sendProfitsToMainWallet(
-              tokenWalletKeypair,
-              mainWallet.publicKey,
-              gasReserve
-            );
-            if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
-              console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL back to main wallet after auto-mirror sell`);
+          // Send SOL back to main wallet
+          if (result.success) {
+            const mainWallet = await getOrCreateHotWallet(userId);
+            if (mainWallet) {
+              const profitResult = await sendProfitsToMainWallet(
+                tokenWalletKeypair,
+                mainWallet.publicKey,
+                gasReserve
+              );
+              if (profitResult.success && profitResult.amountSent && profitResult.amountSent > 0) {
+                console.log(`Sent ${profitResult.amountSent.toFixed(4)} SOL back to main wallet after auto-mirror sell`);
+              }
             }
           }
         }

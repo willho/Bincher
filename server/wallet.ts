@@ -793,15 +793,64 @@ export async function fundTokenWallet(
   }
 }
 
+// Get SOL balance of a token/position wallet (for gas checks)
+// Note: This returns native SOL balance, NOT SPL token balance
 export async function getTokenWalletBalance(publicKey: string): Promise<number> {
   try {
     const connection = new Connection(HELIUS_RPC, "confirmed");
     const pubkey = new PublicKey(publicKey);
-    const balance = await connection.getBalance(pubkey);
+    const balance = await connection.getBalance(pubkey); // Returns lamports (native SOL)
     return balance / LAMPORTS_PER_SOL;
   } catch (error) {
-    console.error("Failed to get token wallet balance:", error);
+    console.error("Failed to get token wallet SOL balance:", error);
     return 0;
+  }
+}
+
+// Ensure position wallet has enough gas for a sell operation
+// Returns true if wallet has sufficient gas, false if funding failed
+export async function ensurePositionWalletGas(
+  userId: number,
+  tokenWalletPublicKey: string,
+  requiredGasSol: number
+): Promise<{ success: boolean; funded: boolean; error?: string }> {
+  try {
+    const currentBalance = await getTokenWalletBalance(tokenWalletPublicKey);
+    const minRequired = requiredGasSol * 1.5; // 50% buffer
+    
+    if (currentBalance >= minRequired) {
+      return { success: true, funded: false }; // Already has enough
+    }
+    
+    console.log(`Position wallet ${tokenWalletPublicKey.slice(0, 8)}... low on gas: ${currentBalance.toFixed(6)} SOL, need ${minRequired.toFixed(6)} SOL`);
+    
+    // Get hot wallet to fund from
+    const mainWalletKeypair = await getHotWalletKeypair(userId);
+    if (!mainWalletKeypair) {
+      return { success: false, funded: false, error: "Hot wallet not found" };
+    }
+    
+    // Check hot wallet has enough
+    const hotBalance = await getHotWalletBalance(userId);
+    const topUpAmount = minRequired - currentBalance + 0.001; // Extra buffer
+    
+    if (hotBalance < topUpAmount + 0.01) { // Keep 0.01 SOL in hot wallet
+      return { success: false, funded: false, error: `Hot wallet balance too low: ${hotBalance.toFixed(4)} SOL` };
+    }
+    
+    // Fund the position wallet
+    console.log(`Funding position wallet with ${topUpAmount.toFixed(6)} SOL from hot wallet backup`);
+    const fundResult = await fundTokenWallet(mainWalletKeypair, tokenWalletPublicKey, topUpAmount);
+    
+    if (!fundResult.success) {
+      return { success: false, funded: false, error: fundResult.error };
+    }
+    
+    console.log(`Position wallet gas funded: ${fundResult.signature}`);
+    return { success: true, funded: true };
+  } catch (error) {
+    console.error("Failed to ensure position wallet gas:", error);
+    return { success: false, funded: false, error: String(error) };
   }
 }
 
