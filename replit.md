@@ -95,3 +95,27 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - `DELETE /api/blacklist/:tokenMint`: Remove from blacklist
 - `GET /api/blacklist/check/:tokenMint`: Check if token is blacklisted
 - Blacklisted tokens are automatically skipped during copy trading
+
+## Paused Tasks / Backlog
+
+### High Priority (AI Wiring Gaps)
+1. **Wire relationship updates** - Call `updateUserRelationship()` after trades complete, warnings followed/ignored, crab mentions detected
+2. **Wire AI into blacklist** - Miss Pincher can add/remove/list blacklisted tokens via chat
+3. **Wire AI into enhanced copy settings** - Budget controls, mirror modes, dedup options via natural language
+4. **UI reactivity for AI changes** - When Miss Pincher changes settings via backend, invalidate React Query cache or broadcast via WebSocket
+
+### Medium Priority (Memory System Enhancements)
+5. **Affinity decay** - Reduce relationship score over inactivity (e.g., -1 per day with no interaction)
+6. **Crab/insult detection** - Parse chat messages for relationship-affecting content
+7. **Memory viewing command** - "What do you remember about me?" shows stored facts and relationship status
+8. **Selective fact extraction** - Extract 1-2 key facts per conversation instead of storing full messages
+
+### Future (Major Enhancements)
+9. **Vector memory search** - Store embeddings of key facts for semantic retrieval (Mem0-style)
+10. **Smart forgetting** - Ebbinghaus-style decay of unused facts over time
+11. **User memory controls** - "Forget that" / "Remember this" commands via chat
+
+### Data Retention Plans
+- **Signal cumulative tracking**: Raw transaction data 30 days, aggregates permanent
+- **Position snapshots**: 15min detailed → hourly summaries → daily (tiered compression)
+- **Chat history**: Last 50 messages per user, older summarized
