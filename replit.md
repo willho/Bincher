@@ -63,3 +63,21 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **DexScreener**: Primary source for token metadata (price, market cap, liquidity, FDV, volume).
 - **GeckoTerminal**: Fallback token metadata provider.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
+
+## Paused Tasks / Backlog
+
+### Miss Pincher Procedural Personality Enhancement
+*Paused: 2026-02-01*
+
+Goal: Create vibrant, procedural personality that shines from day 1. Multi-dimensional relationship system where personality emerges from dimension mix, not linear progression.
+
+1. **Expand user_relationships schema**: Add multi-dimensional scores (adversarial, friendly, playful, professional), chat-based affinity tracking, inside jokes array, memorable events
+2. **Build chat-based affinity system**: +1 per message, +2 compliments, +3 following advice - trades become secondary driver
+3. **Create procedural personality mixer**: Compute personality blend from dimension scores, pass compact state to AI
+4. **Rewrite CORE_PERSONALITY**: Dense punchy prose - full name Penelope Soraya Pincher prominent, voice examples
+5. **Condense CARIBBEAN_LANGUAGE_SYSTEM**: Examples + triggers format, drop verbose percentage breakdowns
+6. **Tighten CRAB_MYSTERY**: Compact slip-ups list and trigger reactions
+7. **Rewrite TRADING_PHILOSOPHY**: Signature reaction lines, condense PROFESSIONAL_BOUNDARIES/BACKSTORY/SECURITY
+8. **Rewrite buildRelationshipContext**: Pass computed state numbers not paragraphs
+9. **Increase AI temperature to 0.85**: More personality expression
+10. **Test chat**: Verify personality shines from first message, relationship affects intimacy not presence
