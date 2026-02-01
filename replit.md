@@ -29,7 +29,7 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 
 ### Key Features & Design Patterns
 - **Real-time Swap Monitoring**: Utilizes Helius webhooks for efficient Solana wallet swap monitoring.
-- **Automated Copy Trading**: Features a hot wallet system with AES-256-GCM encryption, dynamic priority fees, split buy systems, and progressive take-profit strategies. Each buy uses a unique, disposable token wallet.
+- **Automated Copy Trading**: Features a hot wallet system with AES-256-GCM encryption, dynamic priority fees, split buy systems, and progressive take-profit strategies. Each buy uses a unique, disposable token wallet. Hot wallet provides backup gas funding to position wallets when SOL runs low before sells.
 - **AI Token Analysis (Miss Pincher)**: A GPT-4o-mini powered AI provides dynamic token heat scoring and qualitative analysis, with a chat interface for natural language interaction and action triggers.
 - **Security**: Robust authentication (PBKDF2, secure sessions), encrypted data storage, PIN protection for trading actions (configurable modes), daily spend limits, withdrawal address whitelisting, and Telegram confirmation for large transfers.
 - **Scalability**: Designed with user isolation and webhook-driven event processing.
