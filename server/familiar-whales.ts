@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { familiarWhales, whaleTokenPositions } from "@shared/schema";
+import { familiarWhales, whaleTokenPositions, tokenEvents } from "@shared/schema";
 import { eq, and, desc, sql, gt, isNull } from "drizzle-orm";
 
 export interface WhaleActivityEvent {
@@ -91,15 +91,38 @@ export async function recordWhaleActivity(event: WhaleActivityEvent): Promise<Fa
             .where(eq(familiarWhales.id, whale.id))
             .then(rows => rows[0]);
           
+          const message = isKnownSuccessful
+            ? `Known successful whale (${((whale.successRate || 0) * 100).toFixed(0)}% win rate, ${whale.totalExits} trades) just entered ${event.tokenSymbol || 'this token'}!`
+            : `Familiar whale spotted in ${event.tokenSymbol || 'this token'} (seen in ${whale.totalTokensSeen} tokens)`;
+          
+          await db.insert(tokenEvents).values({
+            tokenMint: event.tokenMint,
+            tokenSymbol: event.tokenSymbol || "???",
+            eventType: isKnownSuccessful ? "successful_whale_buy" : "familiar_whale_buy",
+            priority: isKnownSuccessful ? "high" : "normal",
+            title: isKnownSuccessful 
+              ? `Successful whale entered ${event.tokenSymbol || 'token'}`
+              : `Familiar whale entered ${event.tokenSymbol || 'token'}`,
+            description: message,
+            metadata: {
+              walletAddress: event.walletAddress,
+              rank: event.rank,
+              successRate: (whale.successRate || 0) * 100,
+              totalExits: whale.totalExits || 0,
+              totalTokensSeen: whale.totalTokensSeen || 1,
+            },
+            createdAt: now,
+            priceAtEvent: event.priceUsd,
+            relatedWallet: event.walletAddress,
+          }).catch(err => console.error("[FamiliarWhale] logTokenEvent error:", err));
+          
           return {
             whale: updatedWhale || whale,
             position,
             isKnownSuccessful,
             successRate: (whale.successRate || 0) * 100,
             tokensTraded: whale.totalTokensSeen || 1,
-            message: isKnownSuccessful
-              ? `Known successful whale (${((whale.successRate || 0) * 100).toFixed(0)}% win rate, ${whale.totalExits} trades) just entered ${event.tokenSymbol || 'this token'}!`
-              : `Familiar whale spotted in ${event.tokenSymbol || 'this token'} (seen in ${whale.totalTokensSeen} tokens)`
+            message,
           };
         }
       }
@@ -130,6 +153,28 @@ export async function recordWhaleActivity(event: WhaleActivityEvent): Promise<Fa
           .where(eq(whaleTokenPositions.id, position.id));
         
         await updateWhaleStats(whale.id);
+        
+        if (exitMultiplier > 1.5) {
+          const holdTimeHours = (holdTimeMinutes / 60).toFixed(1);
+          await db.insert(tokenEvents).values({
+            tokenMint: event.tokenMint,
+            tokenSymbol: event.tokenSymbol || position.tokenSymbol || "???",
+            eventType: "whale_profit_exit",
+            priority: exitMultiplier >= 3 ? "high" : "normal",
+            title: `Whale exited ${event.tokenSymbol || 'token'} at ${exitMultiplier.toFixed(1)}x`,
+            description: `Familiar whale exited with ${exitMultiplier.toFixed(2)}x profit after ${holdTimeHours}h`,
+            metadata: {
+              walletAddress: event.walletAddress,
+              exitMultiplier,
+              holdTimeMinutes,
+              entryPriceUsd: position.entryPriceUsd,
+              exitPriceUsd: event.priceUsd,
+            },
+            createdAt: now,
+            priceAtEvent: event.priceUsd,
+            relatedWallet: event.walletAddress,
+          }).catch(err => console.error("[FamiliarWhale] exit event error:", err));
+        }
       }
     }
     
