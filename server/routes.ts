@@ -813,6 +813,16 @@ export async function registerRoutes(
         const savedSwap = await storage.addSwap(swap);
         console.log("Swap detected and saved:", savedSwap.id, "for user:", userId);
 
+        // Wrap all post-swap processing in try/catch to capture errors
+        try {
+          // Log that we're starting post-swap processing
+          await logInfo("webhook", "post_swap_start", `Processing swap ${savedSwap.id} for user ${userId}`, {
+            swapId: savedSwap.id,
+            walletAddress: swapWalletAddress,
+            fromToken: swap.fromTokenSymbol,
+            toToken: swap.toTokenSymbol,
+          }, userId);
+
         // Log token event for AI tracking
         const isBuyEvent = isBaseCurrency(swap.fromToken);
         const tokenMint = isBuyEvent ? swap.toToken : swap.fromToken;
@@ -1018,6 +1028,13 @@ export async function registerRoutes(
           .limit(1);
         
         // Send Telegram activity alert with actionable buttons
+        console.log(`[Webhook] Sending Telegram activity alert for user ${userId}...`);
+        await logInfo("webhook", "telegram_alert_attempt", `Sending Telegram alert for ${swap.toTokenSymbol || swap.fromTokenSymbol}`, {
+          walletLabel: sourceWallet?.label,
+          tokenSymbol: isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol,
+          type: isBuy ? "buy" : "sell",
+        }, userId);
+        
         sendTelegramActivityAlert(userId, {
           walletLabel: sourceWallet?.label || "Wallet",
           walletAddress: swapWalletAddress,
@@ -1034,6 +1051,15 @@ export async function registerRoutes(
         // Copy trading: Queue pending buy if this is a BUY (SOL/USDC -> Token)
         // Per-wallet copy trading - no global toggle required
         const walletCopyEnabled = sourceWallet?.copyTradeEnabled === true;
+        
+        // Log copy trading decision to system_logs for debugging
+        await logInfo("copy_trade", "decision_start", `Copy trade check: ${isBuy ? 'BUY' : 'SELL'} ${swap.toTokenSymbol}`, {
+          isBuy,
+          walletCopyEnabled,
+          walletLabel: sourceWallet?.label,
+          walletAddress: swapWalletAddress,
+          sourceWalletFound: !!sourceWallet,
+        }, userId);
         
         // Skip stablecoin swaps (SOL -> USDC or USDC -> SOL)
         // These are cash-out operations, not token buys
@@ -1256,6 +1282,19 @@ export async function registerRoutes(
               }
             }
           }
+        }
+
+        } catch (postSwapError) {
+          // Log any error that occurs during post-swap processing
+          console.error("[Webhook] Post-swap processing error:", postSwapError);
+          await logError("webhook", "post_swap_error", `Post-swap processing failed: ${postSwapError instanceof Error ? postSwapError.message : String(postSwapError)}`, {
+            swapId: savedSwap.id,
+            walletAddress: swapWalletAddress,
+            fromToken: swap.fromTokenSymbol,
+            toToken: swap.toTokenSymbol,
+            errorStack: postSwapError instanceof Error ? postSwapError.stack : undefined,
+          }, userId);
+          // Continue processing other webhooks even if one fails
         }
 
         // Update status
