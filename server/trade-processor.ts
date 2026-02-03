@@ -14,7 +14,7 @@ import {
 import { buyTokenWithWallet, getTokenPrice, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { sendEmail, formatNumber } from "./email";
 import { storage } from "./storage";
-import { logError, logSuccess, logWarn } from "./system-logger";
+import { logError, logSuccess, logWarn, logTrade, logErrorToTable } from "./system-logger";
 
 const PROCESSOR_INTERVAL_MS = 30000;
 
@@ -288,12 +288,20 @@ export async function executePendingBuy(
 
     if (!result.success) {
       console.error("Buy failed:", result.error);
-      logError("swap", "buy_execute", new Error(result.error || "Unknown swap error"), {
-        tokenMint: buy.tokenMint,
-        tokenSymbol: buy.tokenSymbol,
-        solAmount,
-        walletLabel: buy.sourceWalletLabel,
-      }, userId).catch(() => {});
+      // Log to dedicated trade logs
+      logTrade("buy", "failed", buy.tokenMint, {
+        userId,
+        signalWalletId: buy.signalWalletId || undefined,
+        tokenSymbol: buy.tokenSymbol || undefined,
+        amountSol: solAmount,
+        failureReason: result.error || "Unknown swap error",
+        context: { walletLabel: buy.sourceWalletLabel },
+      }).catch(() => {});
+      // Also log to error logs
+      logErrorToTable("trade", "buy_execute", "unknown", result.error || "Unknown swap error", {
+        userId,
+        context: { tokenMint: buy.tokenMint, tokenSymbol: buy.tokenSymbol, solAmount },
+      }).catch(() => {});
       await cancelPendingBuy(pendingId, `buy_failed: ${result.error}`);
       return false;
     }
@@ -435,6 +443,16 @@ export async function executePendingBuy(
       walletLabel: buy.sourceWalletLabel,
     }, userId).catch(() => {});
     
+    // Log to dedicated trade logs
+    logTrade("buy", "success", buy.tokenMint, {
+      userId,
+      signalWalletId: buy.signalWalletId || undefined,
+      tokenSymbol: buy.tokenSymbol || undefined,
+      amountSol: result.inputAmount || solAmount,
+      tokensReceived: result.outputAmount || undefined,
+      signature: result.signature || undefined,
+    }).catch(() => {});
+    
     // Update daily spend tracking
     const spentUsd = solSpentActual * solPriceUsd;
     const newDailySpent = dailySpent + spentUsd;
@@ -449,9 +467,16 @@ export async function executePendingBuy(
     return true;
   } catch (error) {
     console.error("Error executing pending buy:", error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    // Log to legacy system logs
     logError("swap", "pending_buy_error", error instanceof Error ? error : new Error(String(error)), {
       pendingId,
     }, userId).catch(() => {});
+    // Log to dedicated error logs
+    logErrorToTable("trade", "pending_buy_error", "unknown", errorMsg, {
+      userId,
+      context: { pendingId },
+    }).catch(() => {});
     await cancelPendingBuy(pendingId, `error: ${error}`);
     return false;
   }

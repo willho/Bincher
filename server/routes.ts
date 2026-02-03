@@ -48,7 +48,7 @@ import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signal
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
-import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs } from "./system-logger";
+import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs, logWebhook, logErrorToTable } from "./system-logger";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions, logTokenEvent, generateAndCacheAlert, reviewTradingRules } from "./ai";
 import { 
   isWalletInTop100, 
@@ -1287,18 +1287,25 @@ export async function registerRoutes(
         } catch (postSwapError) {
           // Log any error that occurs during post-swap processing
           console.error("[Webhook] Post-swap processing error:", postSwapError);
+          const errorMsg = postSwapError instanceof Error ? postSwapError.message : String(postSwapError);
           try {
             const errorObj = postSwapError instanceof Error 
               ? postSwapError 
               : new Error(String(postSwapError));
+            // Log to legacy system logs
             await logError("webhook", "post_swap_error", errorObj, {
               swapId: savedSwap.id,
               walletAddress: swapWalletAddress,
               fromToken: swap.fromTokenSymbol,
               toToken: swap.toTokenSymbol,
             }, userId);
+            // Log to dedicated error logs
+            await logErrorToTable("webhook", "post_swap_error", "unknown", errorMsg, {
+              userId,
+              context: { swapId: savedSwap.id, walletAddress: swapWalletAddress },
+            });
           } catch (logErr) {
-            console.error("[Webhook] Failed to log error to system_logs:", logErr);
+            console.error("[Webhook] Failed to log error:", logErr);
           }
           // Continue processing other webhooks even if one fails
         }
@@ -1311,8 +1318,14 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       console.error("Error processing webhook:", error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      // Log to legacy system logs
       logError("webhook", "process_webhook", error instanceof Error ? error : new Error(String(error)), {
         body: req.body ? JSON.stringify(req.body).slice(0, 500) : undefined,
+      }).catch(() => {});
+      // Log to dedicated error logs
+      logErrorToTable("webhook", "process_webhook", "unknown", errorMsg, {
+        context: { body: req.body ? JSON.stringify(req.body).slice(0, 200) : undefined },
       }).catch(() => {});
       res.status(500).json({ error: "Failed to process webhook" });
     }
