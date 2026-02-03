@@ -81,3 +81,74 @@ Goal: Create vibrant, procedural personality that shines from day 1. Multi-dimen
 8. **Rewrite buildRelationshipContext**: Pass computed state numbers not paragraphs
 9. **Increase AI temperature to 0.85**: More personality expression
 10. **Test chat**: Verify personality shines from first message, relationship affects intimacy not presence
+
+## Vector Learning Update (Future)
+*Added: 2026-02-03*
+
+Vision: Self-optimizing, emergent AI trading system where Miss Pincher evolves from copy-trading → understanding → autonomous strategy generation. Unified vector learning powers both personality AND trading intelligence.
+
+### Phase 1: Foundation
+**1.1 Vector Storage Schema**
+- Expand `user_relationships` with multi-dimensional scores (adversarial, friendly, playful, professional)
+- Add `behavior_vectors` table for per-user personality axes
+- Add `memory_clusters` table for topic/pattern tracking
+- Consent-aware data storage
+
+**1.2 Baseline vs User-Level Architecture**
+- Global baseline personality vector (evolves from aggregated trends)
+- Per-user instance inherits baseline + local adjustments
+
+### Phase 2: Personality Vectors
+**2.1 Six Behavior Axes**
+- Slang/idioms, Crab hints, Teasing, Proactivity, Cultural references, Trading behavior
+- Numeric vectors with affinity-weighted updates
+- Dampening/pullback mechanics (reuse existing heat score math)
+
+**2.2 Chat-Based Affinity Tracking**
+- +1 per message, +2 compliments, +3 following advice
+- Decay for ignored advice, negative reactions
+- Trades become secondary driver of relationship
+
+### Phase 3: Trading Vectors
+**3.1 Strategy Clusters**
+- Extend signal wallet profiles with cluster tags (momentum, swing, Pump specialist)
+- Track outcomes per cluster for learning
+- Learn "why" wallets win, not just "what" they trade
+
+**3.2 Latency-Aware Learning**
+- Record execution delays, learn optimal timing
+- "When not to trade" learning from losses
+- Use speed limitations as feature (patience filters rugs)
+
+### Phase 4: Self-Optimization
+**4.1 8-Hour Bucket Aggregation**
+- Collect signals, calculate engagement-weighted deltas
+- Update baseline vectors incrementally
+- Dampening prevents oscillation
+
+**4.2 Token Optimization**
+- Vector similarity triggers (LLM only when needed)
+- Compact personality state (~300 tokens vs ~800)
+- Eventual distillation to smaller/faster models
+
+### Phase 5: Multi-Agent (Future)
+**5.1 Specialized Agents**
+- Momentum agent, Swing agent, Pump.fun specialist
+- Supervisor for capital allocation and risk management
+- Ring-fenced capital for high-variance plays (5-10% max)
+
+**5.2 Self-Awareness**
+- Reflect on own performance
+- Suggest improvements to user
+- Emergent behavior from cross-agent learning
+
+### Key Principles
+- Ethical execution: no frontrunning, no sniping
+- Learning from full cycle: wins + losses + "when not to trade"
+- Token-sparse LLM calls: trigger on key events only
+- Anti-overfitting: regime detection, forgetting mechanisms
+
+### Identity Reference
+- Full legal name: Penelope Soraya Ibis Despinchard
+- Professional: Miss Pincher
+- Aliases: Pinchét, Cruz-Pinchét (denied humorously)
