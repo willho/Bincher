@@ -93,9 +93,12 @@ Vision: Self-optimizing AI trading system. Miss Pincher evolves from copy-tradin
 - ✅ Added `memory_clusters` table: topic/pattern tracking with confidence/decay
 - Consent-aware data storage (future: UI toggle)
 
-**1.2 Baseline Architecture**
-- Global baseline personality vector (evolves from aggregated trends)
-- Per-user instance inherits baseline + local adjustments
+**1.2 Baseline Architecture** ✅ *Completed 2026-02-03*
+- ✅ `global_baselines` table: stores evolving global personality vector with aggregation metadata
+- ✅ `server/vector-learning.ts`: helper functions for baseline/user vector management
+  - `getOrCreateGlobalBaseline()`, `getUserBehaviorVector()`, `initializeUserVector()`
+  - `getEffectivePersonality()`: blends baseline + user adjustments
+  - `vectorToPromptContext()`: converts vector to compact AI context string
 
 ### Phase 2: Personality Vectors
 **2.1 Six Behavior Axes**
