@@ -1726,10 +1726,55 @@ export async function registerRoutes(
         };
       }
 
-      res.json({ logs, aiSummary });
+      // Get API usage summary
+      const apiServices = ["helius", "jupiter", "dexscreener", "geckoterminal"];
+      const apiLogs = logs.filter(l => apiServices.includes(l.service));
+      const apiSummary = {
+        callCount: apiLogs.length,
+        byService: apiServices.reduce((acc, svc) => {
+          acc[svc] = apiLogs.filter(l => l.service === svc).length;
+          return acc;
+        }, {} as Record<string, number>),
+        avgLatencyMs: apiLogs.length > 0
+          ? Math.round(apiLogs.reduce((sum, l) => sum + (l.latencyMs || 0), 0) / apiLogs.length)
+          : 0,
+      };
+
+      res.json({ logs, aiSummary, apiSummary });
     } catch (error) {
       console.error("Error getting system logs:", error);
       res.status(500).json({ error: "Failed to get logs" });
+    }
+  });
+
+  // Admin: Get usage analytics (time-series, projections, user breakdown)
+  app.get("/api/admin/usage-analytics", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) {
+        return res.status(403).json({ error: "Admin only" });
+      }
+
+      const { getUsageTimeSeries, getUserUsageBreakdown, getUsageProjections } = await import("./system-logger");
+      
+      const [timeSeries, userBreakdown, projections] = await Promise.all([
+        getUsageTimeSeries(24),
+        getUserUsageBreakdown(24),
+        getUsageProjections(),
+      ]);
+
+      // Enrich user breakdown with usernames
+      const enrichedUserBreakdown = await Promise.all(
+        userBreakdown.map(async (u) => {
+          const userData = await storage.getUserById(u.userId);
+          return { ...u, username: userData?.username || `User #${u.userId}` };
+        })
+      );
+
+      res.json({ timeSeries, userBreakdown: enrichedUserBreakdown, projections });
+    } catch (error) {
+      console.error("Error getting usage analytics:", error);
+      res.status(500).json({ error: "Failed to get analytics" });
     }
   });
 

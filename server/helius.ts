@@ -81,12 +81,24 @@ async function fetchFromDexScreener(mintAddress: string): Promise<TokenMetadata 
     return undefined;
   }
   
+  const startTime = Date.now();
   try {
     const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${mintAddress}`);
-    if (!response.ok) return undefined;
+    const latencyMs = Date.now() - startTime;
+    
+    if (!response.ok) {
+      const { logApiCall } = await import("./system-logger");
+      logApiCall("dexscreener", "fetchTokenMetadata", false, latencyMs, { mint: mintAddress, status: response.status }).catch(() => {});
+      return undefined;
+    }
     
     const data = await response.json();
     await trackApiCall("dexscreener", "fetchTokenMetadata");
+    
+    // Log successful API call
+    const { logApiCall } = await import("./system-logger");
+    logApiCall("dexscreener", "fetchTokenMetadata", true, latencyMs, { mint: mintAddress }).catch(() => {});
+    
     if (!data.pairs || data.pairs.length === 0) return undefined;
     
     // Get the pair with highest liquidity

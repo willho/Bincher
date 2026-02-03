@@ -246,6 +246,7 @@ export async function getQuote(
   amountInLamports: number,
   slippageConfig?: SlippageConfig
 ): Promise<JupiterQuote | null> {
+  const startTime = Date.now();
   try {
     const url = new URL(`${JUPITER_API}/quote`);
     url.searchParams.append("inputMint", inputMint);
@@ -268,12 +269,19 @@ export async function getQuote(
     url.searchParams.append("restrictIntermediateTokens", "true");
 
     const response = await rateLimitedFetch(url.toString());
+    const latencyMs = Date.now() - startTime;
+    
     if (!response.ok) {
       console.error("Jupiter quote error:", await response.text());
+      const { logApiCall } = await import("./system-logger");
+      logApiCall("jupiter", "getQuote", false, latencyMs, { inputMint, outputMint, status: response.status }).catch(() => {});
       return null;
     }
 
-    return await response.json();
+    const quote = await response.json();
+    const { logApiCall } = await import("./system-logger");
+    logApiCall("jupiter", "getQuote", true, latencyMs, { inputMint, outputMint }).catch(() => {});
+    return quote;
   } catch (error) {
     console.error("Failed to get Jupiter quote:", error);
     return null;

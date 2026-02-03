@@ -155,6 +155,42 @@ interface SystemLogsResponse {
     estimatedCostUsd: number;
     avgLatencyMs: number;
   } | null;
+  apiSummary: {
+    callCount: number;
+    byService: Record<string, number>;
+    avgLatencyMs: number;
+  };
+}
+
+interface TimeSeriesDataPoint {
+  timestamp: number;
+  aiCalls: number;
+  aiTokens: number;
+  aiCost: number;
+  apiCalls: number;
+}
+
+interface UserUsageBreakdown {
+  userId: number;
+  username: string;
+  aiCalls: number;
+  aiTokens: number;
+  aiCost: number;
+  apiCalls: number;
+  lastActivity: number;
+}
+
+interface UsageProjections {
+  hourly: { calls: number; cost: number };
+  daily: { calls: number; cost: number };
+  weekly: { calls: number; cost: number };
+  monthly: { calls: number; cost: number };
+}
+
+interface UsageAnalyticsResponse {
+  timeSeries: TimeSeriesDataPoint[];
+  userBreakdown: UserUsageBreakdown[];
+  projections: UsageProjections;
 }
 
 export function AdminDashboard() {
@@ -223,6 +259,11 @@ export function AdminDashboard() {
       return res.json();
     },
     refetchInterval: 30000,
+  });
+
+  const { data: usageAnalytics, isLoading: analyticsLoading } = useQuery<UsageAnalyticsResponse>({
+    queryKey: ["/api/admin/usage-analytics"],
+    refetchInterval: 60000,
   });
 
   const setNetworkModeMutation = useMutation({
@@ -1271,11 +1312,11 @@ export function AdminDashboard() {
             <Brain className="h-5 w-5" />
             System Logs
           </CardTitle>
-          <CardDescription>AI token usage, costs, and system events</CardDescription>
+          <CardDescription>AI token usage, API calls, costs, and system events</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Filter Tabs */}
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <Button
               variant={logsFilter === "ai" ? "default" : "outline"}
               size="sm"
@@ -1312,11 +1353,42 @@ export function AdminDashboard() {
             </Button>
           </div>
 
+          {/* Cost Projections */}
+          {analyticsLoading ? (
+            <Skeleton className="h-24 w-full" />
+          ) : usageAnalytics?.projections && (
+            <div className="p-3 bg-primary/5 border border-primary/20 rounded-lg">
+              <p className="text-xs font-medium text-primary mb-2">Projected AI Costs (based on 24h usage)</p>
+              <div className="grid grid-cols-4 gap-2 text-center">
+                <div>
+                  <p className="text-xs text-muted-foreground">Hour</p>
+                  <p className="text-sm font-semibold">${usageAnalytics.projections.hourly.cost.toFixed(4)}</p>
+                  <p className="text-xs text-muted-foreground">{usageAnalytics.projections.hourly.calls} calls</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Day</p>
+                  <p className="text-sm font-semibold">${usageAnalytics.projections.daily.cost.toFixed(4)}</p>
+                  <p className="text-xs text-muted-foreground">{usageAnalytics.projections.daily.calls} calls</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Week</p>
+                  <p className="text-sm font-semibold">${usageAnalytics.projections.weekly.cost.toFixed(4)}</p>
+                  <p className="text-xs text-muted-foreground">{usageAnalytics.projections.weekly.calls} calls</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Month</p>
+                  <p className="text-sm font-semibold text-primary">${usageAnalytics.projections.monthly.cost.toFixed(2)}</p>
+                  <p className="text-xs text-muted-foreground">{usageAnalytics.projections.monthly.calls} calls</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* AI Summary */}
           {systemLogs?.aiSummary && logsFilter === "ai" && (
             <div className="grid grid-cols-2 gap-3 p-3 bg-muted/50 rounded-lg">
               <div>
-                <p className="text-xs text-muted-foreground">API Calls</p>
+                <p className="text-xs text-muted-foreground">AI Calls</p>
                 <p className="text-lg font-semibold">{systemLogs.aiSummary.callCount}</p>
               </div>
               <div>
@@ -1330,6 +1402,78 @@ export function AdminDashboard() {
               <div>
                 <p className="text-xs text-muted-foreground">Avg Latency</p>
                 <p className="text-lg font-semibold">{systemLogs.aiSummary.avgLatencyMs}ms</p>
+              </div>
+            </div>
+          )}
+
+          {/* API Usage Summary */}
+          {systemLogs?.apiSummary && systemLogs.apiSummary.callCount > 0 && (
+            <div className="p-3 bg-muted/30 rounded-lg">
+              <p className="text-xs font-medium mb-2">API Usage (last 50 events)</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(systemLogs.apiSummary.byService).map(([service, count]) => 
+                  count > 0 && (
+                    <Badge key={service} variant="outline" className="text-xs">
+                      {service}: {count}
+                    </Badge>
+                  )
+                )}
+                <span className="text-xs text-muted-foreground ml-auto">
+                  avg {systemLogs.apiSummary.avgLatencyMs}ms
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Usage Graph (Simple Bar Chart) */}
+          {usageAnalytics?.timeSeries && usageAnalytics.timeSeries.length > 0 && (
+            <div className="p-3 bg-muted/30 rounded-lg">
+              <p className="text-xs font-medium mb-2">24h Usage Timeline (AI calls per hour)</p>
+              <div className="flex items-end gap-0.5 h-16">
+                {usageAnalytics.timeSeries.map((point, i) => {
+                  const maxCalls = Math.max(...usageAnalytics.timeSeries.map(p => p.aiCalls), 1);
+                  const height = (point.aiCalls / maxCalls) * 100;
+                  const hour = new Date(point.timestamp).getHours();
+                  return (
+                    <Tooltip key={i}>
+                      <TooltipTrigger asChild>
+                        <div
+                          className="flex-1 bg-primary/60 hover:bg-primary transition-colors rounded-t cursor-pointer min-w-[4px]"
+                          style={{ height: `${Math.max(height, 4)}%` }}
+                          data-testid={`graph-bar-${i}`}
+                        />
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p className="text-xs">
+                          {hour}:00 - {point.aiCalls} AI calls, ${point.aiCost.toFixed(4)}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+              <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                <span>24h ago</span>
+                <span>Now</span>
+              </div>
+            </div>
+          )}
+
+          {/* User Attribution */}
+          {usageAnalytics?.userBreakdown && usageAnalytics.userBreakdown.length > 0 && (
+            <div className="p-3 bg-muted/30 rounded-lg">
+              <p className="text-xs font-medium mb-2">User Attribution (24h)</p>
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {usageAnalytics.userBreakdown.slice(0, 10).map((user) => (
+                  <div key={user.userId} className="flex items-center justify-between text-xs" data-testid={`user-usage-${user.userId}`}>
+                    <span className="font-medium truncate max-w-[120px]">{user.username}</span>
+                    <div className="flex gap-2 text-muted-foreground">
+                      <span>{user.aiCalls} AI</span>
+                      <span>{user.apiCalls} API</span>
+                      <span className="text-primary font-medium">${user.aiCost.toFixed(4)}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
