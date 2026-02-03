@@ -5215,6 +5215,238 @@ export async function registerRoutes(
     }
   });
 
+  // === BUDGET & API MANAGEMENT ROUTES ===
+  
+  // Get user's budget status
+  app.get("/api/budget/status", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { calculateBudgetStatus } = await import("./budget-manager");
+      const status = await calculateBudgetStatus(req.userId!);
+      res.json(status);
+    } catch (error) {
+      console.error("Error fetching budget status:", error);
+      res.status(500).json({ error: "Failed to fetch budget status" });
+    }
+  });
+
+  // Get surplus pool summary
+  app.get("/api/budget/pool", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getPoolSummary } = await import("./budget-manager");
+      const pool = await getPoolSummary();
+      res.json(pool);
+    } catch (error) {
+      console.error("Error fetching pool summary:", error);
+      res.status(500).json({ error: "Failed to fetch pool summary" });
+    }
+  });
+
+  // Get API queue stats
+  app.get("/api/budget/queue", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getQueueStats } = await import("./budget-manager");
+      const stats = await getQueueStats(req.userId!);
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching queue stats:", error);
+      res.status(500).json({ error: "Failed to fetch queue stats" });
+    }
+  });
+
+  // === DATA POOL ROUTES ===
+
+  // Get token data from pool - requires auth
+  app.get("/api/pool/token/:mint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getTokenData, isPriceStale, isMarketDataStale } = await import("./data-pool");
+      const data = await getTokenData(req.params.mint);
+      
+      if (!data) {
+        return res.status(404).json({ error: "Token not found in pool" });
+      }
+
+      const priceStale = await isPriceStale(req.params.mint);
+      const marketStale = await isMarketDataStale(req.params.mint);
+
+      res.json({
+        ...data,
+        priceStale,
+        marketStale,
+      });
+    } catch (error) {
+      console.error("Error fetching token from pool:", error);
+      res.status(500).json({ error: "Failed to fetch token data" });
+    }
+  });
+
+  // Report token data from frontend (crowdsourced) - requires auth
+  app.post("/api/pool/report", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const schema = z.object({
+        tokenMint: z.string().min(32).max(64),
+        tokenSymbol: z.string().max(20).optional(),
+        tokenName: z.string().max(100).optional(),
+        priceUsd: z.number().min(0).optional(),
+        marketCap: z.number().min(0).optional(),
+        fdv: z.number().min(0).optional(),
+        liquidity: z.number().min(0).optional(),
+        volume24h: z.number().min(0).optional(),
+        priceChange24h: z.number().optional(),
+        pairAddress: z.string().optional(),
+        dexId: z.string().optional(),
+      });
+
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid request body", details: parsed.error.issues });
+      }
+
+      const { tokenMint, tokenSymbol, tokenName, priceUsd, marketCap, fdv, liquidity, volume24h, priceChange24h, pairAddress, dexId } = parsed.data;
+
+      const { upsertTokenData } = await import("./data-pool");
+      const data = await upsertTokenData(
+        tokenMint,
+        { tokenSymbol, tokenName, priceUsd, marketCap, fdv, liquidity, volume24h, priceChange24h, pairAddress, dexId },
+        'frontend',
+        req.userId!
+      );
+
+      res.json({ success: true, token: data });
+    } catch (error) {
+      console.error("Error reporting token data:", error);
+      res.status(500).json({ error: "Failed to report token data" });
+    }
+  });
+
+  // Get holder cache for token - requires auth
+  app.get("/api/pool/holders/:mint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getHolderCache, isHolderCacheStale } = await import("./data-pool");
+      const cache = await getHolderCache(req.params.mint);
+
+      if (!cache) {
+        return res.status(404).json({ error: "Holder cache not found" });
+      }
+
+      const isStale = await isHolderCacheStale(req.params.mint);
+
+      res.json({
+        ...cache,
+        isStale,
+      });
+    } catch (error) {
+      console.error("Error fetching holder cache:", error);
+      res.status(500).json({ error: "Failed to fetch holder cache" });
+    }
+  });
+
+  // === CLUSTER DETECTION ROUTES ===
+
+  // Detect coordinated buying for a token
+  app.get("/api/clusters/coordinated/:mint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const windowMinutes = parseInt(req.query.window as string) || 15;
+      const { detectCoordinatedBuying } = await import("./cluster-detection");
+      const result = await detectCoordinatedBuying(req.params.mint, windowMinutes);
+      res.json(result);
+    } catch (error) {
+      console.error("Error detecting coordinated buying:", error);
+      res.status(500).json({ error: "Failed to detect coordinated buying" });
+    }
+  });
+
+  // Get timing clusters for a token
+  app.get("/api/clusters/timing/:mint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const lookbackHours = parseInt(req.query.hours as string) || 24;
+      const { detectTimingClusters } = await import("./cluster-detection");
+      const clusters = await detectTimingClusters(req.params.mint, lookbackHours);
+      res.json({ clusters });
+    } catch (error) {
+      console.error("Error detecting timing clusters:", error);
+      res.status(500).json({ error: "Failed to detect timing clusters" });
+    }
+  });
+
+  // Get cluster for a specific wallet
+  app.get("/api/clusters/wallet/:address", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getClusterForWallet } = await import("./cluster-detection");
+      const cluster = await getClusterForWallet(req.params.address);
+      res.json({ cluster });
+    } catch (error) {
+      console.error("Error getting wallet cluster:", error);
+      res.status(500).json({ error: "Failed to get wallet cluster" });
+    }
+  });
+
+  // Get cluster stats (admin)
+  app.get("/api/clusters/stats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getClusterStats } = await import("./cluster-detection");
+      const stats = await getClusterStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting cluster stats:", error);
+      res.status(500).json({ error: "Failed to get cluster stats" });
+    }
+  });
+
+  // Refresh cluster cache (admin)
+  app.post("/api/clusters/refresh", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { refreshClusterCache, getClusterStats } = await import("./cluster-detection");
+      await refreshClusterCache();
+      const stats = await getClusterStats();
+      res.json({ success: true, stats });
+    } catch (error) {
+      console.error("Error refreshing clusters:", error);
+      res.status(500).json({ error: "Failed to refresh clusters" });
+    }
+  });
+
+  // Get data pool stats (admin)
+  app.get("/api/pool/stats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getDataPoolStats } = await import("./data-pool");
+      const stats = await getDataPoolStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching pool stats:", error);
+      res.status(500).json({ error: "Failed to fetch pool stats" });
+    }
+  });
+
+  // Claim fetch work from queue (crowdsourcing)
+  app.post("/api/pool/claim-work", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const limit = parseInt(req.body.limit) || 5;
+      const { claimFetchWork } = await import("./data-pool");
+      const work = await claimFetchWork(req.userId!, limit);
+      res.json({ work });
+    } catch (error) {
+      console.error("Error claiming work:", error);
+      res.status(500).json({ error: "Failed to claim work" });
+    }
+  });
+
+  // Complete fetch work
+  app.post("/api/pool/complete-work", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { itemId, success, error } = req.body;
+      if (!itemId) {
+        return res.status(400).json({ error: "itemId is required" });
+      }
+
+      const { completeFetchWork } = await import("./data-pool");
+      await completeFetchWork(itemId, success, error);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error completing work:", error);
+      res.status(500).json({ error: "Failed to complete work" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
   
