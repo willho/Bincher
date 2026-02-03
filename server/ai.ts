@@ -541,7 +541,8 @@ import {
   type MarketMood,
   getPincherWelcome,
   calculateAffinityChange,
-  determineRelationshipType
+  determineRelationshipType,
+  buildPincherSystemPromptAsync
 } from "./pincher-personality";
 
 const scoreResultSchema = z.object({
@@ -3929,8 +3930,8 @@ export async function chatWithAI(
     ? `\n\nCROSS-CHANNEL CONTEXT: User has also been chatting on ${recentOtherChannel[0].channel === 'telegram' ? 'Telegram' : 'Web'}. Recent topics there: ${recentOtherChannel.map(m => m.content.slice(0, 50)).join(' | ')}`
     : '';
   
-  // Generate the personality-driven system prompt
-  let systemPrompt = buildPincherSystemPrompt(pincherContext);
+  // Generate the personality-driven system prompt with vector learning
+  let systemPrompt = await buildPincherSystemPromptAsync(pincherContext);
   
   // Check for pending trade and pending settings
   const pendingTradeCtx = getPendingTradeContext(userId);
@@ -4037,7 +4038,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
       tools: chatTools,
       tool_choice: "auto",
       max_completion_tokens: 1000,
-      temperature: 0.7,
+      temperature: 0.85, // Increased for more personality expression
     });
     await trackApiCall("openai", "chat"); // Track after successful response
     recordAISuccess(); // Mark AI as healthy

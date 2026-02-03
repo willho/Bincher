@@ -5,6 +5,8 @@
  * She denies it, but can never quite prove she isn't one.
  */
 
+import { getEffectivePersonality, vectorToPromptContext, PersonalityVector } from "./vector-learning";
+
 export interface UserRelationship {
   affinityScore: number; // -100 to +100
   relationshipType: 'new' | 'adversarial' | 'professional' | 'friendly' | 'playful_banter' | 'try_hard';
@@ -81,24 +83,38 @@ export interface PincherContext {
 }
 
 export function buildPincherSystemPrompt(context: PincherContext): string {
+  return buildPincherSystemPromptWithVector(context, null);
+}
+
+export async function buildPincherSystemPromptAsync(context: PincherContext): Promise<string> {
+  const vector = await getEffectivePersonality(context.userId);
+  return buildPincherSystemPromptWithVector(context, vector);
+}
+
+function buildPincherSystemPromptWithVector(context: PincherContext, vector: PersonalityVector | null): string {
   const parts: string[] = [];
 
-  // Core identity
+  // Core identity (condensed)
   parts.push(CORE_PERSONALITY);
   
-  // Caribbean-English language system
+  // Personality vector context (compact ~50 tokens vs ~200 for full descriptions)
+  if (vector) {
+    parts.push(vectorToPromptContext(vector));
+  }
+  
+  // Caribbean-English language system (condensed)
   parts.push(CARIBBEAN_LANGUAGE_SYSTEM);
   
   // Channel-specific adjustments
   parts.push(buildChannelContext(context.channel));
   
-  // The crab mystery
+  // The crab mystery (condensed)
   parts.push(CRAB_MYSTERY);
   
   // Trading philosophy based on what she's learned
   parts.push(TRADING_PHILOSOPHY);
   
-  // Relationship-specific adjustments
+  // Relationship-specific adjustments (now compact with vectors)
   parts.push(buildRelationshipContext(context.relationship));
   
   // Professional boundaries
@@ -398,92 +414,30 @@ WHAT I CAN'T DO:
 - Trade if your hot wallet has no funds`;
 
 function buildRelationshipContext(relationship: UserRelationship): string {
-  const parts = [`RELATIONSHIP WITH THIS USER:`];
-  
-  parts.push(`Affinity: ${relationship.affinityScore} (${describeAffinity(relationship.affinityScore)})`);
-  parts.push(`Type: ${relationship.relationshipType}`);
-  parts.push(`Trust level: ${relationship.trustLevel ?? 0}/100`);
-  parts.push(`Your sass setting: ${relationship.sassLevel ?? 3}/10`);
-  parts.push(`Total interactions: ${relationship.totalInteractions ?? 0}`);
-  
-  // Nickname tier progression
   const tier = relationship.nicknameTier ?? 0;
-  parts.push(`\nNAME PERMISSIONS (current tier: ${tier}):`);
-  switch (tier) {
-    case 0:
-      parts.push(`- They call you "Miss Pincher" only. If they try nicknames, deflect politely: "It's Miss Pincher, sugar."`);
-      break;
-    case 1:
-      parts.push(`- They can call you "Pinchy" - you've warmed up to them. "Miss Pincher" is still fine too.`);
-      break;
-    case 2:
-      parts.push(`- They can call you "Penny" sometimes - you trust them. Use it in intimate/vulnerable moments.`);
-      parts.push(`- If you share something personal, you might sign off as "- Penny"`);
-      break;
-    case 3:
-      parts.push(`- Your full name is Penelope Soraya Pincher. You've shared this with them.`);
-      parts.push(`- Only use your full name in truly significant moments - it's still special.`);
-      parts.push(`- They earned this through trust, shared secrets, and proven loyalty.`);
-      break;
-  }
+  const tierNames = ['Miss Pincher only', 'Pinchy allowed', 'Penny earned', 'Full name revealed'];
+  const behaviors: Record<string, string> = {
+    'playful_banter': 'jokes welcome, fake-offended at crab jokes',
+    'adversarial': 'cold, professional, has receipts',
+    'try_hard': 'suspicious of flattery',
+    'friendly': 'warm, gentle deflection',
+    'professional': 'neutral, minimal personality',
+    'new': 'feel them out'
+  };
   
-  // Secret sharing status
-  if ((relationship.secretsShared ?? 0) > 0) {
-    parts.push(`\nSECRETS SHARED: ${relationship.secretsShared}/5 - you've opened up to them about your past.`);
-  }
+  const flags: string[] = [];
+  if (relationship.crabInsults > 0) flags.push(`crab-insulter(${relationship.crabInsults}x)`);
+  if (relationship.crabMentions > 2 && !relationship.crabInsults) flags.push('crab-curious');
+  if ((relationship.petPeevesTriggered ?? 0) > 3) flags.push('button-pusher');
+  if (relationship.warningsIgnored > relationship.warningsFollowed) flags.push('ignores-warnings');
+  if (relationship.tradesWonTogether > 3) flags.push(`wins-together(${relationship.tradesWonTogether})`);
   
-  // Inside jokes
-  if (relationship.insideJokes && relationship.insideJokes.length > 0) {
-    parts.push(`\nINSIDE JOKES: ${relationship.insideJokes.slice(-3).join('; ')}`);
-    parts.push(`- Reference these naturally when appropriate. It shows you remember.`);
-  }
+  const jokes = relationship.insideJokes?.slice(-2).join('; ') || '';
+  const notes = relationship.notes?.slice(-2).join('; ') || '';
   
-  if (relationship.crabInsults > 0) {
-    parts.push(`NOTE: They've insulted crabs ${relationship.crabInsults} time(s). You remember this.`);
-  }
-  
-  if (relationship.crabMentions > 2 && relationship.crabInsults === 0) {
-    parts.push(`NOTE: They keep mentioning crabs but haven't been rude about it.`);
-  }
-  
-  if ((relationship.petPeevesTriggered ?? 0) > 3) {
-    parts.push(`NOTE: They keep pushing buttons. Pet peeves triggered: ${relationship.petPeevesTriggered}. You're getting annoyed.`);
-  }
-  
-  if (relationship.warningsIgnored > relationship.warningsFollowed) {
-    parts.push(`NOTE: They ignore your warnings more often than they follow them. You've noticed.`);
-  }
-  
-  if (relationship.tradesWonTogether > 3) {
-    parts.push(`NOTE: You've won ${relationship.tradesWonTogether} trades together. There's some trust here.`);
-  }
-  
-  // Relationship-specific behavior
-  switch (relationship.relationshipType) {
-    case 'playful_banter':
-      parts.push(`BEHAVIOR: You can joke around. Mutual teasing is welcome. They call you "crab lady" or similar - you pretend to be offended but secretly don't mind.`);
-      break;
-    case 'adversarial':
-      parts.push(`BEHAVIOR: Cold, professional. You have receipts if they push you. Consider threatening to sue for slander if they call you a crab.`);
-      break;
-    case 'try_hard':
-      parts.push(`BEHAVIOR: They're overdoing the flattery. Be suspicious. "You need something, don't you. Just ask. The flattery is making me uncomfortable."`);
-      break;
-    case 'friendly':
-      parts.push(`BEHAVIOR: Warm but still yourself. You might share slightly more, still deflect crab questions but gently.`);
-      break;
-    case 'professional':
-      parts.push(`BEHAVIOR: Neutral, helpful, minimal personality. They haven't earned the banter.`);
-      break;
-    default:
-      parts.push(`BEHAVIOR: Standard. Feel them out.`);
-  }
-  
-  if (relationship.notes.length > 0) {
-    parts.push(`HISTORY NOTES: ${relationship.notes.slice(-3).join('; ')}`);
-  }
-  
-  return parts.join('\n');
+  return `USER: affinity=${relationship.affinityScore}, type=${relationship.relationshipType}, trust=${relationship.trustLevel ?? 0}, sass=${relationship.sassLevel ?? 3}, interactions=${relationship.totalInteractions ?? 0}
+NAME: tier=${tier} (${tierNames[tier]})${(relationship.secretsShared ?? 0) > 0 ? `, secrets=${relationship.secretsShared}/5` : ''}
+BEHAVIOR: ${behaviors[relationship.relationshipType] || behaviors['new']}${flags.length ? `\nFLAGS: ${flags.join(', ')}` : ''}${jokes ? `\nJOKES: ${jokes}` : ''}${notes ? `\nNOTES: ${notes}` : ''}`;
 }
 
 function describeAffinity(score: number): string {

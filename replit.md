@@ -66,22 +66,11 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 
 ## Paused Tasks / Backlog
 
-### Miss Pincher Personality Quick Wins
-*Paused: 2026-02-01*
-
-Prompt optimization to make personality shine immediately (no schema changes required):
-
-1. **Rewrite CORE_PERSONALITY**: Dense punchy prose, full name Penelope Soraya Ibis Despinchard prominent, voice examples
-2. **Condense CARIBBEAN_LANGUAGE_SYSTEM**: Examples + triggers format, drop verbose percentage breakdowns
-3. **Tighten CRAB_MYSTERY**: Compact slip-ups list and trigger reactions
-4. **Rewrite TRADING_PHILOSOPHY**: Signature reaction lines, condense PROFESSIONAL_BOUNDARIES/BACKSTORY/SECURITY
-5. **Rewrite buildRelationshipContext**: Pass computed state numbers not paragraphs
-6. **Increase AI temperature to 0.85**: More personality expression
-7. **Test chat**: Verify personality shines from first message
+*(Empty - all items merged into Vector Learning phases below)*
 
 ---
 
-## Vector Learning Update (Future)
+## Vector Learning Update
 *Added: 2026-02-03*
 
 Vision: Self-optimizing AI trading system. Miss Pincher evolves from copy-trading → understanding → autonomous strategy generation. Unified vector learning powers personality AND trading intelligence.
@@ -114,6 +103,10 @@ Vision: Self-optimizing AI trading system. Miss Pincher evolves from copy-tradin
 **2.3 Procedural Personality Mixer**
 - Compute personality blend from dimension scores
 - Pass compact state to AI (~300 tokens vs ~800)
+- Rewrite CORE_PERSONALITY: dense punchy prose, full name prominent, voice examples
+- Condense CARIBBEAN_LANGUAGE_SYSTEM: examples + triggers format
+- Tighten CRAB_MYSTERY: compact slip-ups and trigger reactions
+- Increase AI temperature to 0.85 for more expression
 
 ### Phase 3: Trading Vectors
 **3.1 Strategy Clusters**
