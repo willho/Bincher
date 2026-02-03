@@ -66,59 +66,61 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 
 ## Paused Tasks / Backlog
 
-### Miss Pincher Procedural Personality Enhancement
+### Miss Pincher Personality Quick Wins
 *Paused: 2026-02-01*
 
-Goal: Create vibrant, procedural personality that shines from day 1. Multi-dimensional relationship system where personality emerges from dimension mix, not linear progression.
+Prompt optimization to make personality shine immediately (no schema changes required):
 
-1. **Expand user_relationships schema**: Add multi-dimensional scores (adversarial, friendly, playful, professional), chat-based affinity tracking, inside jokes array, memorable events
-2. **Build chat-based affinity system**: +1 per message, +2 compliments, +3 following advice - trades become secondary driver
-3. **Create procedural personality mixer**: Compute personality blend from dimension scores, pass compact state to AI
-4. **Rewrite CORE_PERSONALITY**: Dense punchy prose - full name Penelope Soraya Pincher prominent, voice examples
-5. **Condense CARIBBEAN_LANGUAGE_SYSTEM**: Examples + triggers format, drop verbose percentage breakdowns
-6. **Tighten CRAB_MYSTERY**: Compact slip-ups list and trigger reactions
-7. **Rewrite TRADING_PHILOSOPHY**: Signature reaction lines, condense PROFESSIONAL_BOUNDARIES/BACKSTORY/SECURITY
-8. **Rewrite buildRelationshipContext**: Pass computed state numbers not paragraphs
-9. **Increase AI temperature to 0.85**: More personality expression
-10. **Test chat**: Verify personality shines from first message, relationship affects intimacy not presence
+1. **Rewrite CORE_PERSONALITY**: Dense punchy prose, full name Penelope Soraya Ibis Despinchard prominent, voice examples
+2. **Condense CARIBBEAN_LANGUAGE_SYSTEM**: Examples + triggers format, drop verbose percentage breakdowns
+3. **Tighten CRAB_MYSTERY**: Compact slip-ups list and trigger reactions
+4. **Rewrite TRADING_PHILOSOPHY**: Signature reaction lines, condense PROFESSIONAL_BOUNDARIES/BACKSTORY/SECURITY
+5. **Rewrite buildRelationshipContext**: Pass computed state numbers not paragraphs
+6. **Increase AI temperature to 0.85**: More personality expression
+7. **Test chat**: Verify personality shines from first message
+
+---
 
 ## Vector Learning Update (Future)
 *Added: 2026-02-03*
 
-Vision: Self-optimizing, emergent AI trading system where Miss Pincher evolves from copy-trading → understanding → autonomous strategy generation. Unified vector learning powers both personality AND trading intelligence.
+Vision: Self-optimizing AI trading system. Miss Pincher evolves from copy-trading → understanding → autonomous strategy generation. Unified vector learning powers personality AND trading intelligence.
 
-### Phase 1: Foundation
-**1.1 Vector Storage Schema**
-- Expand `user_relationships` with multi-dimensional scores (adversarial, friendly, playful, professional)
-- Add `behavior_vectors` table for per-user personality axes
-- Add `memory_clusters` table for topic/pattern tracking
+### Phase 1: Foundation (Schema + Architecture)
+**1.1 Vector Storage**
+- Expand `user_relationships`: multi-dimensional scores (adversarial, friendly, playful, professional), inside jokes array, memorable events
+- Add `behavior_vectors` table: per-user personality axes
+- Add `memory_clusters` table: topic/pattern tracking
 - Consent-aware data storage
 
-**1.2 Baseline vs User-Level Architecture**
+**1.2 Baseline Architecture**
 - Global baseline personality vector (evolves from aggregated trends)
 - Per-user instance inherits baseline + local adjustments
 
 ### Phase 2: Personality Vectors
 **2.1 Six Behavior Axes**
-- Slang/idioms, Crab hints, Teasing, Proactivity, Cultural references, Trading behavior
+- Slang/idioms, Crab hints, Teasing, Proactivity, Cultural refs, Trading behavior
 - Numeric vectors with affinity-weighted updates
-- Dampening/pullback mechanics (reuse existing heat score math)
+- Dampening mechanics (reuse heat score math)
 
-**2.2 Chat-Based Affinity Tracking**
+**2.2 Chat-Based Affinity**
 - +1 per message, +2 compliments, +3 following advice
 - Decay for ignored advice, negative reactions
-- Trades become secondary driver of relationship
+- Trades become secondary relationship driver
+
+**2.3 Procedural Personality Mixer**
+- Compute personality blend from dimension scores
+- Pass compact state to AI (~300 tokens vs ~800)
 
 ### Phase 3: Trading Vectors
 **3.1 Strategy Clusters**
-- Extend signal wallet profiles with cluster tags (momentum, swing, Pump specialist)
-- Track outcomes per cluster for learning
-- Learn "why" wallets win, not just "what" they trade
+- Signal wallet profiles with cluster tags (momentum, swing, Pump specialist)
+- Track outcomes per cluster - learn "why" wallets win
 
 **3.2 Latency-Aware Learning**
 - Record execution delays, learn optimal timing
 - "When not to trade" learning from losses
-- Use speed limitations as feature (patience filters rugs)
+- Patience as feature (filters rugs)
 
 ### Phase 4: Self-Optimization
 **4.1 8-Hour Bucket Aggregation**
@@ -128,24 +130,23 @@ Vision: Self-optimizing, emergent AI trading system where Miss Pincher evolves f
 
 **4.2 Token Optimization**
 - Vector similarity triggers (LLM only when needed)
-- Compact personality state (~300 tokens vs ~800)
 - Eventual distillation to smaller/faster models
 
 ### Phase 5: Multi-Agent (Future)
 **5.1 Specialized Agents**
-- Momentum agent, Swing agent, Pump.fun specialist
-- Supervisor for capital allocation and risk management
+- Momentum, Swing, Pump.fun specialists
+- Supervisor for capital allocation + risk management
 - Ring-fenced capital for high-variance plays (5-10% max)
 
 **5.2 Self-Awareness**
 - Reflect on own performance
 - Suggest improvements to user
-- Emergent behavior from cross-agent learning
+- Emergent cross-agent learning
 
 ### Key Principles
-- Ethical execution: no frontrunning, no sniping
-- Learning from full cycle: wins + losses + "when not to trade"
-- Token-sparse LLM calls: trigger on key events only
+- Ethical: no frontrunning, no sniping
+- Full-cycle learning: wins + losses + "when not to trade"
+- Token-sparse LLM calls
 - Anti-overfitting: regime detection, forgetting mechanisms
 
 ### Identity Reference

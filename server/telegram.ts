@@ -140,10 +140,19 @@ async function telegramRequest(method: string, body?: any): Promise<any> {
   }
 }
 
-export async function sendMessage(chatId: string, text: string, options: { parseMode?: string } = {}): Promise<boolean> {
+// Escape Telegram markdown special characters to prevent parsing errors
+function escapeTelegramMarkdown(text: string): string {
+  // Escape: * _ ` [ ] ( ) ~ > # + - = | { } . !
+  // But preserve intentional formatting like *bold* or _italic_ pairs
+  // For AI responses, safest to escape all special chars
+  return text.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+export async function sendMessage(chatId: string, text: string, options: { parseMode?: string; escapeMarkdown?: boolean } = {}): Promise<boolean> {
+  const finalText = options.escapeMarkdown ? escapeTelegramMarkdown(text) : text;
   const result = await telegramRequest("sendMessage", {
     chat_id: chatId,
-    text,
+    text: finalText,
     parse_mode: options.parseMode || "Markdown",
   });
   return result !== null;
@@ -663,7 +672,7 @@ async function handleChatMessage(chatId: string, text: string, user: typeof user
     const intentResult = await handleMessage(user.id, text);
     
     if (intentResult.handled && intentResult.response) {
-      await sendMessage(chatId, intentResult.response);
+      await sendMessage(chatId, intentResult.response, { escapeMarkdown: true });
       return;
     }
     
@@ -674,7 +683,7 @@ async function handleChatMessage(chatId: string, text: string, user: typeof user
     }
     
     const response = await chatWithAI(user.id, text, 'telegram');
-    await sendMessage(chatId, response);
+    await sendMessage(chatId, response, { escapeMarkdown: true });
   } catch (e: any) {
     await log("telegram", "chat_ai", "error", {
       errorMessage: e.message,
@@ -699,7 +708,7 @@ async function handleUnlinkedChatMessage(chatId: string, text: string) {
     
     const { chatWithAIUnlinked } = await import("./ai");
     const response = await chatWithAIUnlinked(chatId, text);
-    await sendMessage(chatId, response);
+    await sendMessage(chatId, response, { escapeMarkdown: true });
   } catch (e: any) {
     await log("telegram", "chat_ai_unlinked", "error", {
       errorMessage: e.message,
