@@ -1859,3 +1859,29 @@ export const memoryClusters = pgTable("memory_clusters", {
 export const insertMemoryClusterSchema = createInsertSchema(memoryClusters).omit({ id: true });
 export type MemoryClusterRow = typeof memoryClusters.$inferSelect;
 export type InsertMemoryCluster = z.infer<typeof insertMemoryClusterSchema>;
+
+// Global baselines - stores the global personality vector that evolves from aggregated trends
+export const globalBaselines = pgTable("global_baselines", {
+  id: serial("id").primaryKey(),
+  baselineType: text("baseline_type").notNull().unique(), // "personality" for now, extensible
+  
+  // Six behavior axis baselines (same as behavior_vectors)
+  slangLevel: integer("slang_level").default(50),
+  crabHintLevel: integer("crab_hint_level").default(30),
+  teasingLevel: integer("teasing_level").default(40),
+  proactivityLevel: integer("proactivity_level").default(50),
+  culturalRefLevel: integer("cultural_ref_level").default(40),
+  tradingCautionLevel: integer("trading_caution_level").default(60),
+  
+  // Aggregation metadata
+  sampleCount: integer("sample_count").default(0), // how many users contributed
+  lastAggregation: integer("last_aggregation"), // timestamp of last update
+  version: integer("version").default(1), // for tracking evolution
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertGlobalBaselineSchema = createInsertSchema(globalBaselines).omit({ id: true });
+export type GlobalBaselineRow = typeof globalBaselines.$inferSelect;
+export type InsertGlobalBaseline = z.infer<typeof insertGlobalBaselineSchema>;
