@@ -5405,6 +5405,19 @@ export async function registerRoutes(
     }
   });
 
+  // Trigger opportunistic refresh (admin)
+  app.post("/api/pool/opportunistic-refresh", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runOpportunisticRefresh } = await import("./data-pool");
+      const maxCredits = parseInt(req.query.maxCredits as string) || 1000;
+      const result = await runOpportunisticRefresh(maxCredits);
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("Error running opportunistic refresh:", error);
+      res.status(500).json({ error: "Failed to run opportunistic refresh" });
+    }
+  });
+
   // Get data pool stats (admin)
   app.get("/api/pool/stats", requireAuth, async (req: Request, res: Response) => {
     try {

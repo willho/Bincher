@@ -342,7 +342,7 @@ export async function recalculateSurplusPool(): Promise<SurplusPoolEntry> {
 
   const contributingKeys = await db.query.userApiKeys.findMany({
     where: and(
-      eq(userApiKeys.isActive, true),
+      eq(userApiKeys.isValid, true),
       eq(userApiKeys.contributesToPool, true)
     ),
   });
@@ -394,6 +394,19 @@ export async function borrowFromPool(
   userId: number,
   credits: number,
   forDiscovery: boolean = false
+): Promise<{ borrowed: number; remaining: number }> {
+  return borrowFromPoolInternal(credits, forDiscovery);
+}
+
+export async function borrowDiscoverySurplus(
+  credits: number
+): Promise<{ borrowed: number; remaining: number }> {
+  return borrowFromPoolInternal(credits, true);
+}
+
+async function borrowFromPoolInternal(
+  credits: number,
+  forDiscovery: boolean
 ): Promise<{ borrowed: number; remaining: number }> {
   const pool = await recalculateSurplusPool();
   

@@ -491,3 +491,120 @@ export async function getDataPoolStats(): Promise<{
     pendingFetches: pendingFetches.length,
   };
 }
+
+export interface OpportunisticRefreshResult {
+  tokensRefreshed: number;
+  holdersRefreshed: number;
+  creditsUsed: number;
+  skippedNoSurplus: boolean;
+  skippedNotIdle: boolean;
+}
+
+let isRefreshRunning = false;
+let lastRefreshTime = 0;
+const REFRESH_COOLDOWN_SECONDS = 60;
+
+export async function runOpportunisticRefresh(
+  maxCreditsToUse: number = 1000
+): Promise<OpportunisticRefreshResult> {
+  const result: OpportunisticRefreshResult = {
+    tokensRefreshed: 0,
+    holdersRefreshed: 0,
+    creditsUsed: 0,
+    skippedNoSurplus: false,
+    skippedNotIdle: false,
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+  if (now - lastRefreshTime < REFRESH_COOLDOWN_SECONDS) {
+    result.skippedNotIdle = true;
+    return result;
+  }
+
+  if (isRefreshRunning) {
+    result.skippedNotIdle = true;
+    return result;
+  }
+
+  try {
+    isRefreshRunning = true;
+
+    const { getPoolSummary, borrowDiscoverySurplus } = await import("./budget-manager");
+    const surplusStats = await getPoolSummary();
+    
+    const availableDiscovery = surplusStats.discoveryAllocation - surplusStats.discoveryUsed;
+    if (availableDiscovery < 100) {
+      result.skippedNoSurplus = true;
+      return result;
+    }
+
+    const creditsToUse = Math.min(maxCreditsToUse, availableDiscovery);
+    
+    const staleTokens = await getStaleTokensForRefresh(5);
+    for (const tokenMint of staleTokens) {
+      if (result.creditsUsed >= creditsToUse) break;
+      
+      const borrowResult = await borrowDiscoverySurplus(100);
+      if (borrowResult.borrowed < 100) break;
+      
+      await addToFetchQueue('market_data', tokenMint, 5);
+      result.tokensRefreshed++;
+      result.creditsUsed += 100;
+    }
+
+    const staleHolders = await getStaleHoldersForRefresh(3);
+    for (const tokenMint of staleHolders) {
+      if (result.creditsUsed >= creditsToUse) break;
+      
+      const borrowResult = await borrowDiscoverySurplus(200);
+      if (borrowResult.borrowed < 200) break;
+      
+      await addToFetchQueue('holders', tokenMint, 5);
+      result.holdersRefreshed++;
+      result.creditsUsed += 200;
+    }
+
+    lastRefreshTime = now;
+    return result;
+
+  } finally {
+    isRefreshRunning = false;
+  }
+}
+
+export function isSystemIdle(): boolean {
+  return !isRefreshRunning;
+}
+
+export function getLastRefreshTime(): number {
+  return lastRefreshTime;
+}
+
+let opportunisticRefreshInterval: NodeJS.Timeout | null = null;
+
+export function startOpportunisticRefreshJob(intervalMinutes: number = 5): void {
+  if (opportunisticRefreshInterval) {
+    clearInterval(opportunisticRefreshInterval);
+  }
+
+  console.log(`[DataPool] Starting opportunistic refresh job (every ${intervalMinutes} minutes)`);
+  
+  opportunisticRefreshInterval = setInterval(async () => {
+    try {
+      const result = await runOpportunisticRefresh(500);
+      if (result.tokensRefreshed > 0 || result.holdersRefreshed > 0) {
+        console.log(`[DataPool] Opportunistic refresh: ${result.tokensRefreshed} tokens, ${result.holdersRefreshed} holders, ${result.creditsUsed} credits`);
+      }
+    } catch (error) {
+      console.error("[DataPool] Opportunistic refresh error:", error);
+    }
+  }, intervalMinutes * 60 * 1000);
+}
+
+export function stopOpportunisticRefreshJob(): void {
+  if (opportunisticRefreshInterval) {
+    clearInterval(opportunisticRefreshInterval);
+    opportunisticRefreshInterval = null;
+    console.log("[DataPool] Stopped opportunistic refresh job");
+  }
+}
