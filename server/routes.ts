@@ -5279,6 +5279,19 @@ export async function registerRoutes(
     }
   });
 
+  // Fetch token with fallback chain (DexScreener -> GeckoTerminal -> stale cache)
+  app.get("/api/pool/fetch/:mint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const maxAge = parseInt(req.query.maxAge as string) || 300;
+      const { fetchTokenWithFallback } = await import("./data-pool");
+      const data = await fetchTokenWithFallback(req.params.mint, maxAge);
+      res.json(data);
+    } catch (error) {
+      console.error("Error fetching token with fallback:", error);
+      res.status(500).json({ error: "Failed to fetch token data" });
+    }
+  });
+
   // Report token data from frontend (crowdsourced) - requires auth
   app.post("/api/pool/report", requireAuth, async (req: Request, res: Response) => {
     try {

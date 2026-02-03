@@ -608,3 +608,165 @@ export function stopOpportunisticRefreshJob(): void {
     console.log("[DataPool] Stopped opportunistic refresh job");
   }
 }
+
+export interface TokenDataWithSource {
+  tokenMint: string;
+  tokenSymbol?: string;
+  tokenName?: string;
+  priceUsd?: number;
+  marketCap?: number;
+  fdv?: number;
+  liquidity?: number;
+  volume24h?: number;
+  priceChange24h?: number;
+  source: 'cache' | 'dexscreener' | 'geckoterminal' | 'stale';
+  isStale: boolean;
+  fetchedAt?: number;
+}
+
+export async function fetchTokenWithFallback(
+  tokenMint: string,
+  maxCacheAgeSeconds: number = 300
+): Promise<TokenDataWithSource> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const cached = await getTokenData(tokenMint);
+
+  try {
+    const dexData = await fetchFromDexScreener(tokenMint);
+    if (dexData) {
+      await upsertTokenData(tokenMint, dexData, 'dexscreener');
+      return {
+        tokenMint,
+        ...dexData,
+        source: 'dexscreener',
+        isStale: false,
+        fetchedAt: now,
+      };
+    }
+  } catch (error) {
+    console.warn("[DataPool] DexScreener fetch failed:", error);
+  }
+
+  if (cached && cached.priceUpdatedAt && (now - cached.priceUpdatedAt < maxCacheAgeSeconds)) {
+    return {
+      tokenMint,
+      tokenSymbol: cached.tokenSymbol ?? undefined,
+      tokenName: cached.tokenName ?? undefined,
+      priceUsd: cached.priceUsd ?? undefined,
+      marketCap: cached.marketCap ?? undefined,
+      fdv: cached.fdv ?? undefined,
+      liquidity: cached.liquidity ?? undefined,
+      volume24h: cached.volume24h ?? undefined,
+      priceChange24h: cached.priceChange24h ?? undefined,
+      source: 'cache',
+      isStale: false,
+      fetchedAt: cached.priceUpdatedAt,
+    };
+  }
+
+  try {
+    const geckoData = await fetchFromGeckoTerminal(tokenMint);
+    if (geckoData) {
+      await upsertTokenData(tokenMint, geckoData, 'geckoterminal');
+      return {
+        tokenMint,
+        ...geckoData,
+        source: 'geckoterminal',
+        isStale: false,
+        fetchedAt: now,
+      };
+    }
+  } catch (error) {
+    console.warn("[DataPool] GeckoTerminal fetch failed:", error);
+  }
+
+  if (cached) {
+    return {
+      tokenMint,
+      tokenSymbol: cached.tokenSymbol ?? undefined,
+      tokenName: cached.tokenName ?? undefined,
+      priceUsd: cached.priceUsd ?? undefined,
+      marketCap: cached.marketCap ?? undefined,
+      fdv: cached.fdv ?? undefined,
+      liquidity: cached.liquidity ?? undefined,
+      volume24h: cached.volume24h ?? undefined,
+      priceChange24h: cached.priceChange24h ?? undefined,
+      source: 'stale',
+      isStale: true,
+      fetchedAt: cached.priceUpdatedAt ?? undefined,
+    };
+  }
+
+  return {
+    tokenMint,
+    source: 'stale',
+    isStale: true,
+  };
+}
+
+async function fetchFromDexScreener(tokenMint: string): Promise<{
+  tokenSymbol?: string;
+  tokenName?: string;
+  priceUsd?: number;
+  marketCap?: number;
+  fdv?: number;
+  liquidity?: number;
+  volume24h?: number;
+  priceChange24h?: number;
+  pairAddress?: string;
+  dexId?: string;
+} | null> {
+  const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json();
+  if (!data.pairs || data.pairs.length === 0) {
+    return null;
+  }
+
+  const pair = data.pairs[0];
+  return {
+    tokenSymbol: pair.baseToken?.symbol,
+    tokenName: pair.baseToken?.name,
+    priceUsd: pair.priceUsd ? parseFloat(pair.priceUsd) : undefined,
+    marketCap: pair.marketCap,
+    fdv: pair.fdv,
+    liquidity: pair.liquidity?.usd,
+    volume24h: pair.volume?.h24,
+    priceChange24h: pair.priceChange?.h24,
+    pairAddress: pair.pairAddress,
+    dexId: pair.dexId,
+  };
+}
+
+async function fetchFromGeckoTerminal(tokenMint: string): Promise<{
+  tokenSymbol?: string;
+  tokenName?: string;
+  priceUsd?: number;
+  marketCap?: number;
+  fdv?: number;
+  volume24h?: number;
+} | null> {
+  const response = await fetch(`https://api.geckoterminal.com/api/v2/networks/solana/tokens/${tokenMint}`);
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = await response.json();
+  if (!data.data || !data.data.attributes) {
+    return null;
+  }
+
+  const attrs = data.data.attributes;
+  return {
+    tokenSymbol: attrs.symbol,
+    tokenName: attrs.name,
+    priceUsd: attrs.price_usd ? parseFloat(attrs.price_usd) : undefined,
+    marketCap: attrs.market_cap_usd ? parseFloat(attrs.market_cap_usd) : undefined,
+    fdv: attrs.fdv_usd ? parseFloat(attrs.fdv_usd) : undefined,
+    volume24h: attrs.volume_usd?.h24 ? parseFloat(attrs.volume_usd.h24) : undefined,
+  };
+}
