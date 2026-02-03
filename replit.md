@@ -87,11 +87,11 @@ Prompt optimization to make personality shine immediately (no schema changes req
 Vision: Self-optimizing AI trading system. Miss Pincher evolves from copy-trading → understanding → autonomous strategy generation. Unified vector learning powers personality AND trading intelligence.
 
 ### Phase 1: Foundation (Schema + Architecture)
-**1.1 Vector Storage**
-- Expand `user_relationships`: multi-dimensional scores (adversarial, friendly, playful, professional), inside jokes array, memorable events
-- Add `behavior_vectors` table: per-user personality axes
-- Add `memory_clusters` table: topic/pattern tracking
-- Consent-aware data storage
+**1.1 Vector Storage** ✅ *Completed 2026-02-03*
+- ✅ Expanded `user_relationships`: multi-dimensional scores (adversarial, friendly, playful, professional), memorableEvents array
+- ✅ Added `behavior_vectors` table: 6 behavior axes with dampening factors
+- ✅ Added `memory_clusters` table: topic/pattern tracking with confidence/decay
+- Consent-aware data storage (future: UI toggle)
 
 **1.2 Baseline Architecture**
 - Global baseline personality vector (evolves from aggregated trends)
