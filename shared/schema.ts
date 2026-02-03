@@ -1762,6 +1762,12 @@ export const userRelationships = pgTable("user_relationships", {
   affinityScore: integer("affinity_score").default(0), // -100 to +100
   relationshipType: text("relationship_type").default("new"), // new, adversarial, professional, friendly, playful_banter, try_hard
   
+  // Multi-dimensional relationship scores (0-100 each, for vector learning)
+  adversarialScore: integer("adversarial_score").default(0), // competitive/confrontational energy
+  friendlyScore: integer("friendly_score").default(50), // warmth and approachability
+  playfulScore: integer("playful_score").default(30), // teasing and banter level
+  professionalScore: integer("professional_score").default(50), // business-like vs casual
+  
   // Nickname/trust progression
   nicknameTier: integer("nickname_tier").default(0), // 0=Miss Pincher, 1=Pinchy allowed, 2=Penny sometimes, 3=Full name revealed
   trustLevel: integer("trust_level").default(0), // 0-100, earned through consistent behavior
@@ -1784,6 +1790,7 @@ export const userRelationships = pgTable("user_relationships", {
   // Memory
   lastInteraction: integer("last_interaction"),
   insideJokes: jsonb("inside_jokes").$type<string[]>().default([]), // shared references
+  memorableEvents: jsonb("memorable_events").$type<string[]>().default([]), // significant moments to reference
   notes: jsonb("notes").default([]), // array of string notes
   
   createdAt: integer("created_at").notNull(),
@@ -1793,3 +1800,62 @@ export const userRelationships = pgTable("user_relationships", {
 export const insertUserRelationshipSchema = createInsertSchema(userRelationships).omit({ id: true });
 export type UserRelationshipRow = typeof userRelationships.$inferSelect;
 export type InsertUserRelationship = z.infer<typeof insertUserRelationshipSchema>;
+
+// Behavior vectors - per-user personality axis values for procedural personality mixing
+export const behaviorVectors = pgTable("behavior_vectors", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  
+  // Six behavior axes (0-100 scale, 50 = baseline)
+  slangLevel: integer("slang_level").default(50), // Caribbean idioms and slang usage
+  crabHintLevel: integer("crab_hint_level").default(30), // How often crab mystery slips through
+  teasingLevel: integer("teasing_level").default(40), // Playful teasing intensity
+  proactivityLevel: integer("proactivity_level").default(50), // Unsolicited advice/suggestions
+  culturalRefLevel: integer("cultural_ref_level").default(40), // Caribbean cultural references
+  tradingCautionLevel: integer("trading_caution_level").default(60), // Conservative vs aggressive advice
+  
+  // Dampening factors for stable learning
+  slangDampening: real("slang_dampening").default(1.0),
+  crabDampening: real("crab_dampening").default(1.0),
+  teasingDampening: real("teasing_dampening").default(1.0),
+  proactivityDampening: real("proactivity_dampening").default(1.0),
+  culturalDampening: real("cultural_dampening").default(1.0),
+  tradingDampening: real("trading_dampening").default(1.0),
+  
+  // Update tracking
+  lastVectorUpdate: integer("last_vector_update"),
+  totalUpdates: integer("total_updates").default(0),
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertBehaviorVectorSchema = createInsertSchema(behaviorVectors).omit({ id: true });
+export type BehaviorVectorRow = typeof behaviorVectors.$inferSelect;
+export type InsertBehaviorVector = z.infer<typeof insertBehaviorVectorSchema>;
+
+// Memory clusters - tracks conversation topics and patterns for learning
+export const memoryClusters = pgTable("memory_clusters", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  
+  // Cluster identification
+  clusterType: text("cluster_type").notNull(), // topic, pattern, preference, trigger
+  clusterKey: text("cluster_key").notNull(), // specific identifier (e.g., "tokens_discussed", "time_preference")
+  
+  // Cluster data
+  value: jsonb("value").$type<Record<string, any>>().default({}), // flexible storage for cluster data
+  frequency: integer("frequency").default(1), // how often this cluster appears
+  lastSeen: integer("last_seen"),
+  
+  // Learning metadata
+  confidence: real("confidence").default(0.5), // 0-1, how confident we are in this pattern
+  decayFactor: real("decay_factor").default(0.95), // for forgetting old patterns
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertMemoryClusterSchema = createInsertSchema(memoryClusters).omit({ id: true });
+export type MemoryClusterRow = typeof memoryClusters.$inferSelect;
+export type InsertMemoryCluster = z.infer<typeof insertMemoryClusterSchema>;
