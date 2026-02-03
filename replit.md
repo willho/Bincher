@@ -74,7 +74,87 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 
 ## Paused Tasks / Backlog
 
-*(Empty - all items merged into Vector Learning phases below)*
+### Budget & API Management System
+*Added: 2026-02-03*
+
+**Core Principles:**
+- Graceful degradation over failure (slow but working > stopped)
+- Only throttle users over budget, light users stay full speed
+- Project-to-end-of-month throttling (always make it to month end)
+- Surplus sharing: 50% throttled users, 50% discovery
+- 100 signal wallets per user per Helius API key
+
+---
+
+**Phase A: Budget Foundation** (Build first)
+1. Schema: user_api_keys, api_queue, budget_usage tables
+2. Encrypted Helius key storage, 100 wallet limit
+3. Per-user budget tracker with month-end projection
+4. Priority queue: copy trade > UI > background
+
+**Phase B: Data Pool** (Core infrastructure)
+1. Unified token data pool schema
+2. Holder cache with webhook updates (swaps + transfers)
+3. Frontend DexScreener fetch → report to pool
+4. Crowdsourced work queue for heavy loads
+5. Opportunistic refresh when idle + surplus
+
+**Phase C: Throttling** (Graceful degradation)
+1. Smooth throttle engine (spread evenly, never batch-wait)
+2. Surplus sharing: 50/50 throttled users / discovery
+3. Fallback chain: DexScreener → cache → GeckoTerminal → stale indicator
+
+**Phase D: Paper Trading** (Strategy testing)
+1. Schema: paper_positions, wallet_strategies, experiments
+2. Paper trading engine with webhook-based entry/exit
+3. Strategy versioning and comparison
+
+**Phase E: Vector Learning** (AI evolution)
+1. Update vectors from paper trade outcomes
+2. Strategy pattern clustering
+3. 8-hour bucket aggregation with dampening
+
+**Phase F: UI** (User-facing)
+1. Signal Wallet: "Show Pincher's Strategy" hidden panel
+2. Paper trading UI: SOL input, Start, P&L
+3. Strategy customization chat
+4. Admin dashboard with budget/queue/throttle status
+
+**Future Backlog:**
+- Discovery engine (uses Phase B + C)
+- Hourly AI optimization job
+- Miss Pincher strategy tools (parse_strategy, explain_strategy, propose_tweak)
+- Multi-agent specialists (Momentum, Swing, Pump.fun)
+
+---
+
+**Data Flow Design:**
+```
+Sources → Token Data Pool → Consumers
+├─ Webhooks (swaps + transfers) → Pool
+├─ Backend API (Helius) → Pool  
+├─ Frontend fetch (DexScreener) → report to Pool
+├─ Opportunistic refresh → Pool
+│
+Pool serves:
+├─ User UI (priority)
+├─ Paper trading engine
+├─ Discovery (surplus only)
+└─ AI analysis
+```
+
+**Throttling Math:**
+```
+remaining_credits = budget - used
+days_remaining = days_in_month - current_day
+target_daily_rate = remaining_credits / days_remaining
+if current_rate > target_rate: throttle to target
+```
+
+**DexScreener Limits (generous):**
+- 300 req/min for pairs/price data
+- Frontend calls = each user has own limit
+- Free forever, no key needed
 
 ---
 
