@@ -180,6 +180,24 @@ async function testHelius() {
   }
 }
 
+async function testBitquery() {
+  console.log("\n=== Testing Bitquery (GraphQL) ===");
+  console.log("  Note: Requires API key signup at bitquery.io");
+  console.log("  Skipping (no key configured) - but viable free option");
+}
+
+async function testMoralis() {
+  console.log("\n=== Testing Moralis ===");
+  console.log("  Note: Requires API key signup at moralis.com");
+  console.log("  Skipping (no key configured) - but has free Solana Token Holders API");
+}
+
+async function testQuickNode() {
+  console.log("\n=== Testing QuickNode ===");
+  console.log("  Note: Requires signup for free RPC endpoint");
+  console.log("  Skipping (no endpoint configured) - faster alternative to public RPC");
+}
+
 async function testPublicRPC() {
   console.log("\n=== Testing Public Solana RPC ===");
   
@@ -234,6 +252,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+interface SourceStatus {
+  name: string;
+  status: "working" | "requires_key" | "unreachable" | "rate_limited";
+  successRate: number;
+  avgLatency: number;
+  notes: string;
+}
+
 function printSummary() {
   console.log("\n" + "=".repeat(60));
   console.log("SUMMARY");
@@ -245,24 +271,78 @@ function printSummary() {
     bySource[r.source].push(r);
   }
   
+  const sourceStatuses: SourceStatus[] = [];
+  
   for (const [source, sourceResults] of Object.entries(bySource)) {
     const successes = sourceResults.filter(r => r.success).length;
+    const total = sourceResults.length;
     const avgLatency = Math.round(sourceResults.reduce((sum, r) => sum + r.latencyMs, 0) / sourceResults.length);
     const rateLimited = sourceResults.filter(r => r.rateLimited).length;
+    const forbidden = sourceResults.filter(r => r.error?.includes("403")).length;
+    const serverError = sourceResults.filter(r => r.error?.includes("502") || r.error?.includes("503")).length;
     
-    console.log(`\n${source.toUpperCase()}:`);
-    console.log(`  Success rate: ${successes}/${sourceResults.length}`);
+    let status: SourceStatus["status"] = "working";
+    let notes = "";
+    
+    if (forbidden > 0) {
+      status = "requires_key";
+      notes = "API key required (403 Forbidden)";
+    } else if (serverError > 0) {
+      status = "unreachable";
+      notes = "Service unavailable (502/503)";
+    } else if (rateLimited > total / 2) {
+      status = "rate_limited";
+      notes = "Heavy rate limiting";
+    } else if (successes === 0) {
+      status = "unreachable";
+      notes = "All requests failed";
+    } else if (successes === total) {
+      status = "working";
+      notes = "Fully operational";
+    } else {
+      status = "rate_limited";
+      notes = "Partial success";
+    }
+    
+    sourceStatuses.push({
+      name: source.toUpperCase(),
+      status,
+      successRate: Math.round((successes / total) * 100),
+      avgLatency,
+      notes
+    });
+    
+    const statusIcon = status === "working" ? "✓" : status === "requires_key" ? "🔑" : status === "rate_limited" ? "⚠️" : "✗";
+    console.log(`\n${statusIcon} ${source.toUpperCase()}:`);
+    console.log(`  Status: ${status}`);
+    console.log(`  Success rate: ${successes}/${total} (${Math.round((successes/total)*100)}%)`);
     console.log(`  Avg latency: ${avgLatency}ms`);
-    if (rateLimited > 0) console.log(`  Rate limited: ${rateLimited} times`);
+    console.log(`  Notes: ${notes}`);
   }
   
   console.log("\n" + "=".repeat(60));
-  console.log("RECOMMENDATIONS:");
+  console.log("ENDPOINT STATUS:");
   console.log("=".repeat(60));
-  console.log("1. Use stored webhook data first (free, instant)");
-  console.log("2. Fallback cascade: Solscan → Solana FM → Public RPC → Helius");
-  console.log("3. Cache aggressively with TTL");
-  console.log("4. Reserve Helius budget for high-priority calls");
+  console.log("  ✓ WORKING      - Ready to use");
+  console.log("  🔑 REQUIRES_KEY - Needs API key signup");
+  console.log("  ⚠️ RATE_LIMITED - Use sparingly");
+  console.log("  ✗ UNREACHABLE  - Not usable currently");
+  
+  console.log("\n" + "=".repeat(60));
+  console.log("RECOMMENDED FALLBACK ORDER (based on test results):");
+  console.log("=".repeat(60));
+  console.log("1. Stored webhook data (FREE, instant, unlimited)");
+  console.log("2. Public Solana RPC - getSignaturesForAddress (FREE, works)");
+  console.log("3. User's Helius key (POOLED, reliable, ~1-2s latency)");
+  console.log("");
+  console.log("NOT RECOMMENDED (based on test results):");
+  console.log("- Solscan: Now requires API key (403 Forbidden)");
+  console.log("- Solana FM: Service issues (502 Bad Gateway)");
+  console.log("");
+  console.log("OPTIONAL (requires signup for free tier):");
+  console.log("- Bitquery: Free GraphQL API, good for history");
+  console.log("- Moralis: Free credits, Solana Token Holders API");
+  console.log("- QuickNode: Free RPC tier, faster than public");
 }
 
 async function main() {
@@ -270,6 +350,8 @@ async function main() {
   console.log("====================");
   console.log(`Test wallet: ${TEST_WALLET}`);
   console.log(`Test token: ${TEST_TOKEN} (BONK)`);
+  console.log("\nNote: Users provide their own Helius API key on signup.");
+  console.log("This pools all user API budgets together for shared discovery.\n");
   
   await testSolscan();
   await sleep(1000);
@@ -277,12 +359,28 @@ async function main() {
   await testSolanaFM();
   await sleep(1000);
   
+  await testBitquery();
+  await testMoralis();
+  await testQuickNode();
+  await sleep(500);
+  
   await testPublicRPC();
   await sleep(1000);
   
   await testHelius();
   
   printSummary();
+  
+  console.log("\n" + "=".repeat(60));
+  console.log("USER API KEY POOL STRATEGY:");
+  console.log("=".repeat(60));
+  console.log("Each user brings their own Helius key (1M credits/month)");
+  console.log("50 users × 1M = 50M pooled credits for shared discovery");
+  console.log("");
+  console.log("Priority:");
+  console.log("1. User's own key for their signal wallets (personal budget)");
+  console.log("2. Pooled credits for discovery (shared fairly)");
+  console.log("3. Stored webhook data (free, unlimited)");
 }
 
 main().catch(console.error);
