@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff, Globe, AlertTriangle, Server } from "lucide-react";
+import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff, Globe, AlertTriangle, Server, Webhook, ArrowLeftRight } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
@@ -206,7 +206,7 @@ export function AdminDashboard() {
   const [newApiKeyLabel, setNewApiKeyLabel] = useState("");
   const [newApiKeyPriority, setNewApiKeyPriority] = useState("0");
   
-  const [logsFilter, setLogsFilter] = useState<"all" | "ai" | "error">("ai");
+  const [logsFilter, setLogsFilter] = useState<"ai" | "api" | "webhook" | "trade" | "error" | "all">("ai");
 
   const { data: stats, isLoading: statsLoading } = useQuery<AdminStats>({
     queryKey: ["/api/admin/stats"],
@@ -259,6 +259,43 @@ export function AdminDashboard() {
       return res.json();
     },
     refetchInterval: 30000,
+    enabled: logsFilter === "all" || logsFilter === "ai" || logsFilter === "error",
+  });
+
+  // Dedicated log queries
+  const { data: aiLogs, refetch: refetchAiLogs } = useQuery<{ logs: any[] }>({
+    queryKey: ["/api/admin/ai-logs"],
+    enabled: logsFilter === "ai",
+    refetchInterval: 30000,
+  });
+
+  const { data: apiLogsData, refetch: refetchApiLogs } = useQuery<{ logs: any[] }>({
+    queryKey: ["/api/admin/api-logs"],
+    enabled: logsFilter === "api",
+    refetchInterval: 30000,
+  });
+
+  const { data: webhookLogs, refetch: refetchWebhookLogs } = useQuery<{ logs: any[] }>({
+    queryKey: ["/api/admin/webhook-logs"],
+    enabled: logsFilter === "webhook",
+    refetchInterval: 30000,
+  });
+
+  const { data: tradeLogs, refetch: refetchTradeLogs } = useQuery<{ logs: any[] }>({
+    queryKey: ["/api/admin/trade-logs"],
+    enabled: logsFilter === "trade",
+    refetchInterval: 30000,
+  });
+
+  const { data: errorLogs, refetch: refetchErrorLogs } = useQuery<{ logs: any[] }>({
+    queryKey: ["/api/admin/error-logs"],
+    enabled: logsFilter === "error",
+    refetchInterval: 30000,
+  });
+
+  const { data: logSummary } = useQuery<{ ai: number; api: number; webhook: number; trade: number; error: number }>({
+    queryKey: ["/api/admin/log-summary"],
+    refetchInterval: 60000,
   });
 
   const { data: usageAnalytics, isLoading: analyticsLoading } = useQuery<UsageAnalyticsResponse>({
@@ -1315,6 +1352,17 @@ export function AdminDashboard() {
           <CardDescription>AI token usage, API calls, costs, and system events</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Log Summary Counts */}
+          {logSummary && (
+            <div className="flex gap-4 text-xs text-muted-foreground mb-2">
+              <span>AI: {logSummary.ai}</span>
+              <span>API: {logSummary.api}</span>
+              <span>Webhooks: {logSummary.webhook}</span>
+              <span>Trades: {logSummary.trade}</span>
+              <span className={logSummary.error > 0 ? "text-destructive font-medium" : ""}>Errors: {logSummary.error}</span>
+            </div>
+          )}
+
           {/* Filter Tabs */}
           <div className="flex gap-2 flex-wrap">
             <Button
@@ -1324,7 +1372,34 @@ export function AdminDashboard() {
               data-testid="button-logs-filter-ai"
             >
               <Brain className="h-3 w-3 mr-1" />
-              AI Usage
+              AI
+            </Button>
+            <Button
+              variant={logsFilter === "api" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLogsFilter("api")}
+              data-testid="button-logs-filter-api"
+            >
+              <Activity className="h-3 w-3 mr-1" />
+              API
+            </Button>
+            <Button
+              variant={logsFilter === "webhook" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLogsFilter("webhook")}
+              data-testid="button-logs-filter-webhook"
+            >
+              <Webhook className="h-3 w-3 mr-1" />
+              Webhooks
+            </Button>
+            <Button
+              variant={logsFilter === "trade" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLogsFilter("trade")}
+              data-testid="button-logs-filter-trade"
+            >
+              <ArrowLeftRight className="h-3 w-3 mr-1" />
+              Trades
             </Button>
             <Button
               variant={logsFilter === "error" ? "default" : "outline"}
@@ -1346,7 +1421,14 @@ export function AdminDashboard() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => refetchSystemLogs()}
+              onClick={() => {
+                refetchSystemLogs();
+                refetchAiLogs();
+                refetchApiLogs();
+                refetchWebhookLogs();
+                refetchTradeLogs();
+                refetchErrorLogs();
+              }}
               data-testid="button-refresh-logs"
             >
               <RefreshCw className="h-3 w-3" />
@@ -1478,50 +1560,146 @@ export function AdminDashboard() {
             </div>
           )}
 
-          {/* Logs List */}
-          {systemLogsLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
-          ) : systemLogs?.logs.length === 0 ? (
-            <p className="text-muted-foreground text-center py-4">No logs found</p>
-          ) : (
+          {/* AI Logs */}
+          {logsFilter === "ai" && aiLogs?.logs && (
             <div className="max-h-80 overflow-y-auto space-y-2">
-              {systemLogs?.logs.map((log) => (
-                <div
-                  key={log.id}
-                  className="flex items-start justify-between gap-2 p-2 rounded border text-sm"
-                  data-testid={`log-entry-${log.id}`}
-                >
+              {aiLogs.logs.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4">No AI logs found</p>
+              ) : aiLogs.logs.map((log: any) => (
+                <div key={log.id} className="flex items-start justify-between gap-2 p-2 rounded border text-sm" data-testid={`ai-log-${log.id}`}>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Badge variant={log.status === "error" ? "destructive" : log.status === "warning" ? "outline" : "secondary"} className="text-xs">
-                        {log.service}
-                      </Badge>
+                      <Badge variant="secondary" className="text-xs"><Brain className="h-2 w-2 mr-1" />AI</Badge>
                       <span className="font-medium truncate">{log.action}</span>
-                      {log.latencyMs && (
-                        <span className="text-xs text-muted-foreground">{log.latencyMs}ms</span>
-                      )}
+                      {log.latencyMs && <span className="text-xs text-muted-foreground">{log.latencyMs}ms</span>}
                     </div>
-                    {log.context && log.service === "ai" && (
-                      <div className="text-xs text-muted-foreground mt-1">
-                        {log.context.totalTokens?.toLocaleString()} tokens
-                        {log.context.estimatedCostUsd && ` • $${log.context.estimatedCostUsd.toFixed(6)}`}
-                        {log.context.model && ` • ${log.context.model}`}
-                      </div>
-                    )}
-                    {log.errorMessage && (
-                      <p className="text-xs text-destructive mt-1 truncate">{log.errorMessage}</p>
-                    )}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      {log.totalTokens?.toLocaleString()} tokens • ${log.estimatedCostUsd?.toFixed(6)} • {log.model}
+                    </div>
                   </div>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(log.createdAt).toLocaleTimeString()}
-                  </span>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(log.createdAt).toLocaleTimeString()}</span>
                 </div>
               ))}
             </div>
+          )}
+
+          {/* API Logs */}
+          {logsFilter === "api" && apiLogsData?.logs && (
+            <div className="max-h-80 overflow-y-auto space-y-2">
+              {apiLogsData.logs.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4">No API logs found</p>
+              ) : apiLogsData.logs.map((log: any) => (
+                <div key={log.id} className="flex items-start justify-between gap-2 p-2 rounded border text-sm" data-testid={`api-log-${log.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={log.success ? "secondary" : "destructive"} className="text-xs">{log.service}</Badge>
+                      <span className="font-medium truncate">{log.endpoint}</span>
+                      {log.latencyMs && <span className="text-xs text-muted-foreground">{log.latencyMs}ms</span>}
+                      {log.statusCode && <span className="text-xs text-muted-foreground">({log.statusCode})</span>}
+                    </div>
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(log.createdAt).toLocaleTimeString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Webhook Logs */}
+          {logsFilter === "webhook" && webhookLogs?.logs && (
+            <div className="max-h-80 overflow-y-auto space-y-2">
+              {webhookLogs.logs.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4">No webhook logs found</p>
+              ) : webhookLogs.logs.map((log: any) => (
+                <div key={log.id} className="flex items-start justify-between gap-2 p-2 rounded border text-sm" data-testid={`webhook-log-${log.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={log.status === "error" ? "destructive" : "secondary"} className="text-xs">{log.source}</Badge>
+                      <span className="font-medium truncate">{log.eventType}</span>
+                      <Badge variant="outline" className="text-xs">{log.status}</Badge>
+                      {log.processingTimeMs && <span className="text-xs text-muted-foreground">{log.processingTimeMs}ms</span>}
+                    </div>
+                    {log.walletAddress && <p className="text-xs text-muted-foreground mt-1 truncate">Wallet: {log.walletAddress}</p>}
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(log.createdAt).toLocaleTimeString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Trade Logs */}
+          {logsFilter === "trade" && tradeLogs?.logs && (
+            <div className="max-h-80 overflow-y-auto space-y-2">
+              {tradeLogs.logs.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4">No trade logs found</p>
+              ) : tradeLogs.logs.map((log: any) => (
+                <div key={log.id} className="flex items-start justify-between gap-2 p-2 rounded border text-sm" data-testid={`trade-log-${log.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={log.status === "success" ? "secondary" : log.status === "failed" ? "destructive" : "outline"} className="text-xs">
+                        {log.action}
+                      </Badge>
+                      <span className="font-medium truncate">{log.tokenSymbol || log.tokenMint?.slice(0, 8)}</span>
+                      <Badge variant="outline" className="text-xs">{log.status}</Badge>
+                      {log.amountSol && <span className="text-xs text-muted-foreground">{log.amountSol.toFixed(4)} SOL</span>}
+                    </div>
+                    {log.failureReason && <p className="text-xs text-destructive mt-1 truncate">{log.failureReason}</p>}
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(log.createdAt).toLocaleTimeString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Error Logs */}
+          {logsFilter === "error" && errorLogs?.logs && (
+            <div className="max-h-80 overflow-y-auto space-y-2">
+              {errorLogs.logs.length === 0 ? (
+                <p className="text-muted-foreground text-center py-4">No errors found</p>
+              ) : errorLogs.logs.map((log: any) => (
+                <div key={log.id} className="flex items-start justify-between gap-2 p-2 rounded border border-destructive/30 text-sm" data-testid={`error-log-${log.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant="destructive" className="text-xs">{log.service}</Badge>
+                      <span className="font-medium truncate">{log.action}</span>
+                      <Badge variant="outline" className="text-xs">{log.errorType}</Badge>
+                    </div>
+                    <p className="text-xs text-destructive mt-1">{log.errorMessage}</p>
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(log.createdAt).toLocaleTimeString()}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* All Logs (Legacy system logs) */}
+          {logsFilter === "all" && (
+            systemLogsLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
+              </div>
+            ) : systemLogs?.logs.length === 0 ? (
+              <p className="text-muted-foreground text-center py-4">No logs found</p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto space-y-2">
+                {systemLogs?.logs.map((log) => (
+                  <div key={log.id} className="flex items-start justify-between gap-2 p-2 rounded border text-sm" data-testid={`log-entry-${log.id}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant={log.status === "error" ? "destructive" : log.status === "warning" ? "outline" : "secondary"} className="text-xs">
+                          {log.service}
+                        </Badge>
+                        <span className="font-medium truncate">{log.action}</span>
+                        {log.latencyMs && <span className="text-xs text-muted-foreground">{log.latencyMs}ms</span>}
+                      </div>
+                      {log.errorMessage && <p className="text-xs text-destructive mt-1 truncate">{log.errorMessage}</p>}
+                    </div>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(log.createdAt).toLocaleTimeString()}</span>
+                  </div>
+                ))}
+              </div>
+            )
           )}
         </CardContent>
       </Card>

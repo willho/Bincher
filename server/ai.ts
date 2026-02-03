@@ -1813,6 +1813,57 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "query_error_logs",
+      description: "Query the dedicated error log table to quickly find all system failures. Use this when debugging issues - it shows errors from all services (AI, API, webhooks, trades) in one place.",
+      parameters: {
+        type: "object",
+        properties: {
+          service: {
+            type: "string",
+            description: "Filter by service type (e.g., 'ai', 'api', 'webhook', 'trade', 'system')"
+          },
+          hoursAgo: {
+            type: "number",
+            description: "Only show errors from the last N hours (default: 24)"
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of errors to return (default: 20, max: 100)"
+          }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "query_trade_logs",
+      description: "Query the dedicated trade log table to see copy trading activity, buy/sell executions, and trade failures. Use when debugging trade issues or checking execution history.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            enum: ["pending", "queued", "executing", "success", "failed", "skipped"],
+            description: "Filter by trade status"
+          },
+          hoursAgo: {
+            type: "number",
+            description: "Only show trades from the last N hours (default: 24)"
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of trades to return (default: 20, max: 50)"
+          }
+        },
+        required: []
+      }
+    }
   }
 ];
 
@@ -4263,6 +4314,58 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
                     summary += `   Context: ${ctxStr}\n`;
                   }
                 }
+                summary += `\n`;
+              }
+              toolResults.push(summary);
+            }
+          }
+          // Query dedicated error logs
+          else if (toolName === "query_error_logs") {
+            const { queryErrorLogs } = await import("./system-logger");
+            const logs = await queryErrorLogs({
+              service: args.service,
+              hoursAgo: args.hoursAgo || 24,
+              limit: Math.min(args.limit || 20, 100),
+            });
+            
+            if (logs.length === 0) {
+              toolResults.push("No errors found in the specified time range. Good news!");
+            } else {
+              let summary = `Found ${logs.length} errors:\n\n`;
+              for (const log of logs) {
+                const time = new Date(log.createdAt).toLocaleString();
+                summary += `❌ [${time}] ${log.service}/${log.action}\n`;
+                summary += `   Type: ${log.errorType}\n`;
+                summary += `   Message: ${log.errorMessage}\n`;
+                if (log.userId) summary += `   User: #${log.userId}\n`;
+                summary += `\n`;
+              }
+              toolResults.push(summary);
+            }
+          }
+          // Query dedicated trade logs
+          else if (toolName === "query_trade_logs") {
+            const { queryTradeLogs } = await import("./system-logger");
+            const logs = await queryTradeLogs({
+              status: args.status,
+              hoursAgo: args.hoursAgo || 24,
+              limit: Math.min(args.limit || 20, 50),
+              userId: userId,
+            });
+            
+            if (logs.length === 0) {
+              toolResults.push("No trade activity found in the specified time range.");
+            } else {
+              let summary = `Found ${logs.length} trade entries:\n\n`;
+              for (const log of logs) {
+                const time = new Date(log.createdAt).toLocaleString();
+                const emoji = log.status === "success" ? "✅" : log.status === "failed" ? "❌" : "⏳";
+                summary += `${emoji} [${time}] ${log.action} ${log.tokenSymbol || log.tokenMint?.slice(0, 8)}\n`;
+                summary += `   Status: ${log.status}`;
+                if (log.amountSol) summary += ` | ${log.amountSol.toFixed(4)} SOL`;
+                if (log.latencyMs) summary += ` | ${log.latencyMs}ms`;
+                summary += `\n`;
+                if (log.failureReason) summary += `   Reason: ${log.failureReason}\n`;
                 summary += `\n`;
               }
               toolResults.push(summary);

@@ -1778,6 +1778,134 @@ export async function registerRoutes(
     }
   });
 
+  // Admin: Get dedicated AI logs
+  app.get("/api/admin/ai-logs", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { queryAiLogs } = await import("./system-logger");
+      const { userId, limit, hoursAgo } = req.query;
+      
+      const logs = await queryAiLogs({
+        userId: userId ? parseInt(userId as string) : undefined,
+        limit: limit ? parseInt(limit as string) : 50,
+        hoursAgo: hoursAgo ? parseInt(hoursAgo as string) : undefined,
+      });
+
+      res.json({ logs });
+    } catch (error) {
+      console.error("Error getting AI logs:", error);
+      res.status(500).json({ error: "Failed to get AI logs" });
+    }
+  });
+
+  // Admin: Get dedicated API logs
+  app.get("/api/admin/api-logs", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { queryApiLogs } = await import("./system-logger");
+      const { service, limit, hoursAgo } = req.query;
+      
+      const logs = await queryApiLogs({
+        service: service as any,
+        limit: limit ? parseInt(limit as string) : 50,
+        hoursAgo: hoursAgo ? parseInt(hoursAgo as string) : undefined,
+      });
+
+      res.json({ logs });
+    } catch (error) {
+      console.error("Error getting API logs:", error);
+      res.status(500).json({ error: "Failed to get API logs" });
+    }
+  });
+
+  // Admin: Get dedicated webhook logs
+  app.get("/api/admin/webhook-logs", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { queryWebhookLogs } = await import("./system-logger");
+      const { status, limit, hoursAgo } = req.query;
+      
+      const logs = await queryWebhookLogs({
+        status: status as string,
+        limit: limit ? parseInt(limit as string) : 50,
+        hoursAgo: hoursAgo ? parseInt(hoursAgo as string) : undefined,
+      });
+
+      res.json({ logs });
+    } catch (error) {
+      console.error("Error getting webhook logs:", error);
+      res.status(500).json({ error: "Failed to get webhook logs" });
+    }
+  });
+
+  // Admin: Get dedicated trade logs
+  app.get("/api/admin/trade-logs", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { queryTradeLogs } = await import("./system-logger");
+      const { userId, status, limit, hoursAgo } = req.query;
+      
+      const logs = await queryTradeLogs({
+        userId: userId ? parseInt(userId as string) : undefined,
+        status: status as string,
+        limit: limit ? parseInt(limit as string) : 50,
+        hoursAgo: hoursAgo ? parseInt(hoursAgo as string) : undefined,
+      });
+
+      res.json({ logs });
+    } catch (error) {
+      console.error("Error getting trade logs:", error);
+      res.status(500).json({ error: "Failed to get trade logs" });
+    }
+  });
+
+  // Admin: Get dedicated error logs
+  app.get("/api/admin/error-logs", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { queryErrorLogs } = await import("./system-logger");
+      const { service, resolved, limit, hoursAgo } = req.query;
+      
+      const logs = await queryErrorLogs({
+        service: service as string,
+        resolved: resolved === "true" ? true : resolved === "false" ? false : undefined,
+        limit: limit ? parseInt(limit as string) : 100,
+        hoursAgo: hoursAgo ? parseInt(hoursAgo as string) : undefined,
+      });
+
+      res.json({ logs });
+    } catch (error) {
+      console.error("Error getting error logs:", error);
+      res.status(500).json({ error: "Failed to get error logs" });
+    }
+  });
+
+  // Admin: Get log summary (counts for all types)
+  app.get("/api/admin/log-summary", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { getLogSummary } = await import("./system-logger");
+      const summary = await getLogSummary();
+
+      res.json(summary);
+    } catch (error) {
+      console.error("Error getting log summary:", error);
+      res.status(500).json({ error: "Failed to get log summary" });
+    }
+  });
+
   // ==================== Monitored Wallets Routes ====================
 
   // Sync webhook with all monitored wallets

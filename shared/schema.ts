@@ -1317,6 +1317,101 @@ export const insertSystemLogSchema = createInsertSchema(systemLogs).omit({ id: t
 export type SystemLog = typeof systemLogs.$inferSelect;
 export type InsertSystemLog = z.infer<typeof insertSystemLogSchema>;
 
+// ============ Separate Log Tables ============
+
+// AI Logs - Miss Pincher AI calls tracking
+export const aiLogs = pgTable("ai_logs", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  action: text("action").notNull(), // chat, analyze_token, create_filter, etc.
+  inputTokens: integer("input_tokens").notNull(),
+  outputTokens: integer("output_tokens").notNull(),
+  totalTokens: integer("total_tokens").notNull(),
+  estimatedCostUsd: real("estimated_cost_usd").notNull(),
+  latencyMs: integer("latency_ms"),
+  model: text("model").default("gpt-4o-mini"),
+  context: jsonb("context").$type<Record<string, any>>(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertAiLogSchema = createInsertSchema(aiLogs).omit({ id: true });
+export type AiLog = typeof aiLogs.$inferSelect;
+export type InsertAiLog = z.infer<typeof insertAiLogSchema>;
+
+// API Logs - External API calls (Jupiter, DexScreener, GeckoTerminal, etc.)
+export const apiLogs = pgTable("api_logs", {
+  id: serial("id").primaryKey(),
+  service: text("service").notNull(), // jupiter, dexscreener, geckoterminal, binance
+  endpoint: text("endpoint").notNull(), // getQuote, fetchTokenMetadata, etc.
+  success: boolean("success").notNull(),
+  latencyMs: integer("latency_ms"),
+  statusCode: integer("status_code"),
+  context: jsonb("context").$type<Record<string, any>>(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertApiLogSchema = createInsertSchema(apiLogs).omit({ id: true });
+export type ApiLog = typeof apiLogs.$inferSelect;
+export type InsertApiLog = z.infer<typeof insertApiLogSchema>;
+
+// Webhook Logs - Helius swap notifications
+export const webhookLogs = pgTable("webhook_logs", {
+  id: serial("id").primaryKey(),
+  source: text("source").notNull(), // helius
+  eventType: text("event_type").notNull(), // swap_detected, token_transfer, etc.
+  walletAddress: text("wallet_address"),
+  tokenMint: text("token_mint"),
+  status: text("status").notNull(), // received, processed, ignored, error
+  processingTimeMs: integer("processing_time_ms"),
+  context: jsonb("context").$type<Record<string, any>>(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertWebhookLogSchema = createInsertSchema(webhookLogs).omit({ id: true });
+export type WebhookLog = typeof webhookLogs.$inferSelect;
+export type InsertWebhookLog = z.infer<typeof insertWebhookLogSchema>;
+
+// Trade Logs - Copy trade executions
+export const tradeLogs = pgTable("trade_logs", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  signalWalletId: integer("signal_wallet_id"),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  action: text("action").notNull(), // buy, sell, mirror_buy, mirror_sell
+  status: text("status").notNull(), // pending, queued, executing, success, failed, skipped
+  amountSol: real("amount_sol"),
+  amountUsd: real("amount_usd"),
+  priceAtExecution: real("price_at_execution"),
+  txSignature: text("tx_signature"),
+  failureReason: text("failure_reason"),
+  latencyMs: integer("latency_ms"),
+  context: jsonb("context").$type<Record<string, any>>(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertTradeLogSchema = createInsertSchema(tradeLogs).omit({ id: true });
+export type TradeLog = typeof tradeLogs.$inferSelect;
+export type InsertTradeLog = z.infer<typeof insertTradeLogSchema>;
+
+// Error Logs - All failures across the system
+export const errorLogs = pgTable("error_logs", {
+  id: serial("id").primaryKey(),
+  service: text("service").notNull(), // ai, api, webhook, trade, system
+  action: text("action").notNull(), // what was being attempted
+  errorType: text("error_type").notNull(), // timeout, validation, network, auth, etc.
+  errorMessage: text("error_message").notNull(),
+  errorStack: text("error_stack"),
+  userId: integer("user_id"),
+  context: jsonb("context").$type<Record<string, any>>(),
+  resolved: boolean("resolved").default(false),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertErrorLogSchema = createInsertSchema(errorLogs).omit({ id: true });
+export type ErrorLog = typeof errorLogs.$inferSelect;
+export type InsertErrorLog = z.infer<typeof insertErrorLogSchema>;
+
 // Link tokens for Telegram deep link account linking (10-minute expiry)
 export const linkTokens = pgTable("link_tokens", {
   id: serial("id").primaryKey(),
