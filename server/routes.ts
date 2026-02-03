@@ -48,7 +48,7 @@ import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signal
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
-import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess } from "./system-logger";
+import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs } from "./system-logger";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions, logTokenEvent, generateAndCacheAlert, reviewTradingRules } from "./ai";
 import { 
   isWalletInTop100, 
@@ -1687,6 +1687,49 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error setting Telegram webhook:", error);
       res.status(500).json({ error: "Failed to set webhook" });
+    }
+  });
+
+  // Admin: Get system logs (AI usage, errors, etc.)
+  app.get("/api/admin/system-logs", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) {
+        return res.status(403).json({ error: "Admin only" });
+      }
+
+      const { service, status, limit, hoursAgo, search } = req.query;
+      
+      const logs = await querySystemLogs({
+        service: service as any,
+        status: status as any,
+        limit: limit ? parseInt(limit as string) : 50,
+        hoursAgo: hoursAgo ? parseInt(hoursAgo as string) : undefined,
+        search: search as string,
+      });
+
+      // Calculate AI usage summary if filtering by AI service
+      let aiSummary = null;
+      if (!service || service === "ai") {
+        const aiLogs = logs.filter(l => l.service === "ai");
+        const totalTokens = aiLogs.reduce((sum, l) => sum + ((l.context as any)?.totalTokens || 0), 0);
+        const totalCost = aiLogs.reduce((sum, l) => sum + ((l.context as any)?.estimatedCostUsd || 0), 0);
+        const avgLatency = aiLogs.length > 0 
+          ? aiLogs.reduce((sum, l) => sum + (l.latencyMs || 0), 0) / aiLogs.length 
+          : 0;
+        
+        aiSummary = {
+          callCount: aiLogs.length,
+          totalTokens,
+          estimatedCostUsd: Math.round(totalCost * 1_000_000) / 1_000_000,
+          avgLatencyMs: Math.round(avgLatency),
+        };
+      }
+
+      res.json({ logs, aiSummary });
+    } catch (error) {
+      console.error("Error getting system logs:", error);
+      res.status(500).json({ error: "Failed to get logs" });
     }
   });
 

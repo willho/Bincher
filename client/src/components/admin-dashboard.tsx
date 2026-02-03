@@ -128,6 +128,35 @@ interface SyncWebhooksResult {
   };
 }
 
+interface SystemLog {
+  id: number;
+  service: string;
+  action: string;
+  status: string;
+  errorMessage: string | null;
+  latencyMs: number | null;
+  userId: number | null;
+  context: {
+    model?: string;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    estimatedCostUsd?: number;
+    [key: string]: unknown;
+  } | null;
+  createdAt: number;
+}
+
+interface SystemLogsResponse {
+  logs: SystemLog[];
+  aiSummary: {
+    callCount: number;
+    totalTokens: number;
+    estimatedCostUsd: number;
+    avgLatencyMs: number;
+  } | null;
+}
+
 export function AdminDashboard() {
   const { toast } = useToast();
   const [messageTitle, setMessageTitle] = useState("");
@@ -140,6 +169,8 @@ export function AdminDashboard() {
   const [newApiKey, setNewApiKey] = useState("");
   const [newApiKeyLabel, setNewApiKeyLabel] = useState("");
   const [newApiKeyPriority, setNewApiKeyPriority] = useState("0");
+  
+  const [logsFilter, setLogsFilter] = useState<"all" | "ai" | "error">("ai");
 
   const { data: stats, isLoading: statsLoading } = useQuery<AdminStats>({
     queryKey: ["/api/admin/stats"],
@@ -179,6 +210,19 @@ export function AdminDashboard() {
 
   const { data: networkMode, isLoading: networkModeLoading } = useQuery<{ mode: "mainnet" | "devnet"; faucetUrl: string | null }>({
     queryKey: ["/api/network-mode"],
+  });
+
+  const systemLogsParams = new URLSearchParams({ limit: "50" });
+  if (logsFilter === "ai") systemLogsParams.set("service", "ai");
+  if (logsFilter === "error") systemLogsParams.set("status", "error");
+  
+  const { data: systemLogs, isLoading: systemLogsLoading, refetch: refetchSystemLogs } = useQuery<SystemLogsResponse>({
+    queryKey: ["/api/admin/system-logs", logsFilter],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/admin/system-logs?${systemLogsParams}`);
+      return res.json();
+    },
+    refetchInterval: 30000,
   });
 
   const setNetworkModeMutation = useMutation({
@@ -1216,6 +1260,124 @@ export function AdminDashboard() {
             </>
           ) : (
             <p className="text-muted-foreground text-center py-4">Failed to load production status</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* System Logs - AI Usage & Errors */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5" />
+            System Logs
+          </CardTitle>
+          <CardDescription>AI token usage, costs, and system events</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Filter Tabs */}
+          <div className="flex gap-2">
+            <Button
+              variant={logsFilter === "ai" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLogsFilter("ai")}
+              data-testid="button-logs-filter-ai"
+            >
+              <Brain className="h-3 w-3 mr-1" />
+              AI Usage
+            </Button>
+            <Button
+              variant={logsFilter === "error" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLogsFilter("error")}
+              data-testid="button-logs-filter-errors"
+            >
+              <XCircle className="h-3 w-3 mr-1" />
+              Errors
+            </Button>
+            <Button
+              variant={logsFilter === "all" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLogsFilter("all")}
+              data-testid="button-logs-filter-all"
+            >
+              All
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => refetchSystemLogs()}
+              data-testid="button-refresh-logs"
+            >
+              <RefreshCw className="h-3 w-3" />
+            </Button>
+          </div>
+
+          {/* AI Summary */}
+          {systemLogs?.aiSummary && logsFilter === "ai" && (
+            <div className="grid grid-cols-2 gap-3 p-3 bg-muted/50 rounded-lg">
+              <div>
+                <p className="text-xs text-muted-foreground">API Calls</p>
+                <p className="text-lg font-semibold">{systemLogs.aiSummary.callCount}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Total Tokens</p>
+                <p className="text-lg font-semibold">{systemLogs.aiSummary.totalTokens.toLocaleString()}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Est. Cost (USD)</p>
+                <p className="text-lg font-semibold">${systemLogs.aiSummary.estimatedCostUsd.toFixed(6)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Avg Latency</p>
+                <p className="text-lg font-semibold">{systemLogs.aiSummary.avgLatencyMs}ms</p>
+              </div>
+            </div>
+          )}
+
+          {/* Logs List */}
+          {systemLogsLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : systemLogs?.logs.length === 0 ? (
+            <p className="text-muted-foreground text-center py-4">No logs found</p>
+          ) : (
+            <div className="max-h-80 overflow-y-auto space-y-2">
+              {systemLogs?.logs.map((log) => (
+                <div
+                  key={log.id}
+                  className="flex items-start justify-between gap-2 p-2 rounded border text-sm"
+                  data-testid={`log-entry-${log.id}`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Badge variant={log.status === "error" ? "destructive" : log.status === "warning" ? "outline" : "secondary"} className="text-xs">
+                        {log.service}
+                      </Badge>
+                      <span className="font-medium truncate">{log.action}</span>
+                      {log.latencyMs && (
+                        <span className="text-xs text-muted-foreground">{log.latencyMs}ms</span>
+                      )}
+                    </div>
+                    {log.context && log.service === "ai" && (
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {log.context.totalTokens?.toLocaleString()} tokens
+                        {log.context.estimatedCostUsd && ` • $${log.context.estimatedCostUsd.toFixed(6)}`}
+                        {log.context.model && ` • ${log.context.model}`}
+                      </div>
+                    )}
+                    {log.errorMessage && (
+                      <p className="text-xs text-destructive mt-1 truncate">{log.errorMessage}</p>
+                    )}
+                  </div>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">
+                    {new Date(log.createdAt).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>

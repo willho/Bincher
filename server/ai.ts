@@ -6,6 +6,7 @@ import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferenc
 import { eq, desc, and, isNotNull, gte, inArray, sql } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
 import { recordAISuccess, recordAIFailure, isAIAvailable, getFallbackMessage } from "./ai-health";
+import { logAiUsage } from "./system-logger";
 import { getHoldersCached } from "./price-aggregator";
 import { fetchTokenMetadata } from "./helius";
 import { buyToken, sellToken, getTokenPrice } from "./jupiter";
@@ -4032,6 +4033,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
   }
 
   try {
+    const startTime = Date.now();
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages,
@@ -4040,8 +4042,13 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
       max_completion_tokens: 1000,
       temperature: 0.85, // Increased for more personality expression
     });
+    const latencyMs = Date.now() - startTime;
     await trackApiCall("openai", "chat"); // Track after successful response
     recordAISuccess(); // Mark AI as healthy
+    
+    // Log AI usage for admin visibility (fire-and-forget with error logging)
+    logAiUsage("chat", response.usage, "gpt-4o-mini", latencyMs, userId, { action: "main_chat" })
+      .catch(err => console.error("[AI] Failed to log usage:", err));
 
     const message = response.choices[0]?.message;
     
@@ -4292,6 +4299,7 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
         return assistantMessage;
       }
       
+      const followUpStart = Date.now();
       const followUp = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: followUpMessages,
@@ -4299,6 +4307,8 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
         temperature: 0.7,
       });
       await trackApiCall("openai", "chat_followup"); // Track after successful response
+      logAiUsage("chat_followup", followUp.usage, "gpt-4o-mini", Date.now() - followUpStart, userId, { action: "tool_followup" })
+        .catch(err => console.error("[AI] Failed to log usage:", err));
       
       const assistantMessage = followUp.choices[0]?.message?.content || toolResults.join("\n");
       

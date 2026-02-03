@@ -3,7 +3,47 @@ import { systemLogs, type InsertSystemLog } from "@shared/schema";
 import { desc, sql } from "drizzle-orm";
 
 type LogStatus = "success" | "error" | "warning" | "info";
-type LogService = "copy_trade" | "alert" | "webhook" | "swap" | "sell" | "system" | "telegram" | "helius" | "jupiter";
+type LogService = "copy_trade" | "alert" | "webhook" | "swap" | "sell" | "system" | "telegram" | "helius" | "jupiter" | "ai";
+
+// GPT-4o-mini pricing (as of 2024): $0.15/1M input, $0.60/1M output
+const AI_PRICING = {
+  "gpt-4o-mini": { input: 0.15 / 1_000_000, output: 0.60 / 1_000_000 },
+  "gpt-4o": { input: 2.50 / 1_000_000, output: 10.00 / 1_000_000 },
+} as const;
+
+export interface AiUsage {
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  estimatedCostUsd: number;
+  latencyMs: number;
+}
+
+export function logAiUsage(
+  action: string,
+  usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined,
+  model: string,
+  latencyMs: number,
+  userId?: number,
+  context?: Record<string, unknown>
+): Promise<void> {
+  const promptTokens = usage?.prompt_tokens || 0;
+  const completionTokens = usage?.completion_tokens || 0;
+  const totalTokens = usage?.total_tokens || promptTokens + completionTokens;
+  
+  const pricing = AI_PRICING[model as keyof typeof AI_PRICING] || AI_PRICING["gpt-4o-mini"];
+  const estimatedCostUsd = (promptTokens * pricing.input) + (completionTokens * pricing.output);
+  
+  return logSystemEvent("ai", action, "success", {
+    ...context,
+    model,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    estimatedCostUsd: Math.round(estimatedCostUsd * 1_000_000) / 1_000_000, // 6 decimal places
+  }, { userId, latencyMs });
+}
 
 const MAX_LOGS = 100;
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
