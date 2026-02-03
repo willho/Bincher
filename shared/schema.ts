@@ -1757,7 +1757,7 @@ export const insertApiBudgetConfigSchema = createInsertSchema(apiBudgetConfig).o
 export type ApiBudgetConfig = typeof apiBudgetConfig.$inferSelect;
 export type InsertApiBudgetConfig = z.infer<typeof insertApiBudgetConfigSchema>;
 
-// User-supplied API keys - users can add their own keys to increase wallet limits
+// User-supplied API keys - users can add their own keys for budget/wallet limits
 export const userApiKeys = pgTable("user_api_keys", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
@@ -1766,7 +1766,17 @@ export const userApiKeys = pgTable("user_api_keys", {
   keyLabel: text("key_label"), // optional label like "My Helius Key"
   isValid: boolean("is_valid").default(true), // set to false if key fails validation
   lastValidatedAt: integer("last_validated_at"),
+  
+  // Budget tracking for Helius keys
+  monthlyBudget: integer("monthly_budget").default(1000000), // 1M credits default (Helius free tier)
+  walletLimit: integer("wallet_limit").default(100), // 100 signal wallets per key
+  currentWalletCount: integer("current_wallet_count").default(0), // tracked wallet count
+  
+  // Pool participation
+  contributesToPool: boolean("contributes_to_pool").default(true), // surplus shared with pool
+  
   createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
 });
 
 export const insertUserApiKeySchema = createInsertSchema(userApiKeys).omit({ id: true });
@@ -1980,3 +1990,225 @@ export const globalBaselines = pgTable("global_baselines", {
 export const insertGlobalBaselineSchema = createInsertSchema(globalBaselines).omit({ id: true });
 export type GlobalBaselineRow = typeof globalBaselines.$inferSelect;
 export type InsertGlobalBaseline = z.infer<typeof insertGlobalBaselineSchema>;
+
+// ============ Budget & API Management System ============
+
+// Per-user monthly budget tracking - tracks usage against projected end-of-month budget
+export const userBudgetUsage = pgTable("user_budget_usage", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  apiKeyId: integer("api_key_id"), // references user_api_keys.id (null = admin key)
+  month: text("month").notNull(), // YYYY-MM format
+  
+  // Credits tracking
+  monthlyBudget: integer("monthly_budget").notNull().default(1000000), // 1M credits default
+  creditsUsed: integer("credits_used").notNull().default(0),
+  creditsRemaining: integer("credits_remaining").notNull().default(1000000),
+  
+  // Projection math
+  daysInMonth: integer("days_in_month").notNull().default(30),
+  currentDay: integer("current_day").notNull().default(1),
+  targetDailyRate: integer("target_daily_rate"), // credits/day to hit month end
+  actualDailyRate: integer("actual_daily_rate"), // current usage rate
+  
+  // Throttle status
+  isThrottled: boolean("is_throttled").default(false),
+  throttleFactor: real("throttle_factor").default(1.0), // 1.0 = normal, 0.5 = 50% speed
+  surplusCredits: integer("surplus_credits").default(0), // credits ahead of pace
+  
+  // Timestamps
+  lastCalculatedAt: integer("last_calculated_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertUserBudgetUsageSchema = createInsertSchema(userBudgetUsage).omit({ id: true });
+export type UserBudgetUsage = typeof userBudgetUsage.$inferSelect;
+export type InsertUserBudgetUsage = z.infer<typeof insertUserBudgetUsageSchema>;
+
+// API request queue - priority-ordered queue for API calls
+export const apiQueue = pgTable("api_queue", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"), // null = system/discovery request
+  
+  // Request details
+  requestType: text("request_type").notNull(), // copy_trade, ui_request, background, discovery
+  service: text("service").notNull(), // helius, dexscreener
+  endpoint: text("endpoint").notNull(), // specific API endpoint
+  payload: jsonb("payload").$type<Record<string, any>>(), // request data
+  
+  // Priority (higher = first)
+  priority: integer("priority").notNull().default(50), // 100=copy_trade, 75=ui_active, 50=ui, 25=background, 10=discovery
+  isUiActive: boolean("is_ui_active").default(false), // user is viewing relevant page
+  
+  // Status
+  status: text("status").notNull().default("pending"), // pending, processing, completed, failed, cancelled
+  scheduledFor: integer("scheduled_for"), // delay execution until this timestamp
+  
+  // Result
+  result: jsonb("result").$type<Record<string, any>>(),
+  errorMessage: text("error_message"),
+  creditsUsed: integer("credits_used"),
+  
+  // Timing
+  createdAt: integer("created_at").notNull(),
+  startedAt: integer("started_at"),
+  completedAt: integer("completed_at"),
+});
+
+export const insertApiQueueSchema = createInsertSchema(apiQueue).omit({ id: true });
+export type ApiQueueItem = typeof apiQueue.$inferSelect;
+export type InsertApiQueueItem = z.infer<typeof insertApiQueueSchema>;
+
+// Holder cache - shared holder lists with webhook-based updates
+export const holderCache = pgTable("holder_cache", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull().unique(),
+  
+  // Holder data
+  holders: jsonb("holders").$type<{ address: string; amount: number; percent: number; rank: number }[]>().default([]),
+  totalHolders: integer("total_holders").default(0),
+  top10Concentration: real("top_10_concentration"), // % held by top 10
+  
+  // Source tracking
+  fetchedVia: text("fetched_via").default("api"), // api, webhook_derived
+  fetchedByUserId: integer("fetched_by_user_id"), // who paid for the fetch
+  
+  // TTL and freshness
+  fetchedAt: integer("fetched_at").notNull(),
+  expiresAt: integer("expires_at").notNull(), // stale after this
+  lastWebhookUpdate: integer("last_webhook_update"), // last holder change from webhook
+  webhookUpdateCount: integer("webhook_update_count").default(0), // updates since last fetch
+  
+  // Refresh priority
+  isActive: boolean("is_active").default(true), // token still being monitored
+  refreshPriority: integer("refresh_priority").default(50), // for opportunistic refresh ordering
+});
+
+export const insertHolderCacheSchema = createInsertSchema(holderCache).omit({ id: true });
+export type HolderCacheEntry = typeof holderCache.$inferSelect;
+export type InsertHolderCacheEntry = z.infer<typeof insertHolderCacheSchema>;
+
+// Token data pool - unified cache for all token data
+export const tokenDataPool = pgTable("token_data_pool", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull().unique(),
+  tokenSymbol: text("token_symbol"),
+  tokenName: text("token_name"),
+  
+  // Price data
+  priceUsd: real("price_usd"),
+  priceUpdatedAt: integer("price_updated_at"),
+  priceSource: text("price_source"), // webhook, dexscreener, geckoterminal, cache
+  
+  // Market data
+  marketCap: real("market_cap"),
+  fdv: real("fdv"),
+  liquidity: real("liquidity"),
+  volume24h: real("volume_24h"),
+  priceChange24h: real("price_change_24h"),
+  marketDataUpdatedAt: integer("market_data_updated_at"),
+  
+  // Metadata
+  pairAddress: text("pair_address"),
+  dexId: text("dex_id"),
+  pairCreatedAt: integer("pair_created_at"),
+  
+  // Source tracking
+  lastFetchedBy: integer("last_fetched_by"), // userId who fetched
+  lastFetchSource: text("last_fetch_source"), // frontend, backend, webhook
+  
+  // Freshness
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+  
+  // Activity tracking
+  isActive: boolean("is_active").default(true),
+  lastAccessedAt: integer("last_accessed_at"),
+  accessCount: integer("access_count").default(0),
+});
+
+export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
+export type TokenDataPoolEntry = typeof tokenDataPool.$inferSelect;
+export type InsertTokenDataPoolEntry = z.infer<typeof insertTokenDataPoolSchema>;
+
+// Price history cache - OHLCV data from DexScreener
+export const priceHistoryCache = pgTable("price_history_cache", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  
+  // Candle data
+  timeframe: text("timeframe").notNull(), // 1m, 5m, 15m, 1h, 4h, 1d
+  timestamp: integer("timestamp").notNull(), // candle open time
+  open: real("open").notNull(),
+  high: real("high").notNull(),
+  low: real("low").notNull(),
+  close: real("close").notNull(),
+  volume: real("volume"),
+  
+  // Source
+  source: text("source").default("dexscreener"), // dexscreener, geckoterminal, webhook_derived
+  fetchedAt: integer("fetched_at").notNull(),
+});
+
+export const insertPriceHistoryCacheSchema = createInsertSchema(priceHistoryCache).omit({ id: true });
+export type PriceHistoryCacheEntry = typeof priceHistoryCache.$inferSelect;
+export type InsertPriceHistoryCacheEntry = z.infer<typeof insertPriceHistoryCacheSchema>;
+
+// Work queue for crowdsourced frontend fetching
+export const fetchWorkQueue = pgTable("fetch_work_queue", {
+  id: serial("id").primaryKey(),
+  
+  // What to fetch
+  resourceType: text("resource_type").notNull(), // price_history, token_metadata
+  tokenMint: text("token_mint").notNull(),
+  
+  // Request details
+  priority: integer("priority").default(50), // higher = more urgent
+  requestedBy: integer("requested_by"), // userId who triggered the need
+  
+  // Status
+  status: text("status").notNull().default("pending"), // pending, claimed, completed, failed
+  claimedBy: integer("claimed_by"), // userId who is fetching
+  claimedAt: integer("claimed_at"),
+  
+  // Result
+  completedAt: integer("completed_at"),
+  errorMessage: text("error_message"),
+  
+  // Timing
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at"), // auto-cancel if not claimed
+});
+
+export const insertFetchWorkQueueSchema = createInsertSchema(fetchWorkQueue).omit({ id: true });
+export type FetchWorkQueueItem = typeof fetchWorkQueue.$inferSelect;
+export type InsertFetchWorkQueueItem = z.infer<typeof insertFetchWorkQueueSchema>;
+
+// Surplus pool - tracks pooled surplus credits for sharing
+export const surplusPool = pgTable("surplus_pool", {
+  id: serial("id").primaryKey(),
+  month: text("month").notNull().unique(), // YYYY-MM format
+  
+  // Pool totals
+  totalSurplus: integer("total_surplus").default(0), // sum of all user surpluses
+  throttledUserAllocation: integer("throttled_user_allocation").default(0), // 50% for throttled users
+  discoveryAllocation: integer("discovery_allocation").default(0), // 50% for discovery
+  
+  // Usage tracking
+  throttledUsed: integer("throttled_used").default(0),
+  discoveryUsed: integer("discovery_used").default(0),
+  
+  // Contributing users
+  contributorCount: integer("contributor_count").default(0),
+  borrowerCount: integer("borrower_count").default(0),
+  
+  // Timestamps
+  lastCalculatedAt: integer("last_calculated_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertSurplusPoolSchema = createInsertSchema(surplusPool).omit({ id: true });
+export type SurplusPoolEntry = typeof surplusPool.$inferSelect;
+export type InsertSurplusPoolEntry = z.infer<typeof insertSurplusPoolSchema>;
