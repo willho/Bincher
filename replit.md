@@ -89,24 +89,24 @@ Vision: Self-optimizing AI trading system. Miss Pincher evolves from copy-tradin
   - `getEffectivePersonality()`: blends baseline + user adjustments
   - `vectorToPromptContext()`: converts vector to compact AI context string
 
-### Phase 2: Personality Vectors
-**2.1 Six Behavior Axes**
-- Slang/idioms, Crab hints, Teasing, Proactivity, Cultural refs, Trading behavior
-- Numeric vectors with affinity-weighted updates
-- Dampening mechanics (reuse heat score math)
+### Phase 2: Personality Vectors ✅ *Completed 2026-02-03*
+**2.1 Six Behavior Axes** ✅
+- ✅ 12 BehaviorSignal types for interaction tracking
+- ✅ updateBehaviorVector() with dampening mechanics
+- ✅ Affinity-weighted updates (higher affinity = stronger learning)
 
-**2.2 Chat-Based Affinity**
-- +1 per message, +2 compliments, +3 following advice
-- Decay for ignored advice, negative reactions
-- Trades become secondary relationship driver
+**2.2 Chat-Based Affinity** ✅
+- ✅ 11 AFFINITY_SCORES for interaction types (+1 message, +2 compliments, +3 advice followed, etc.)
+- ✅ updateChatAffinity() updates affinity + dimension scores, auto-creates relationships for new users
+- ✅ recalculateRelationshipType() based on dimension scores
+- ✅ memorableEvents tracking for significant interactions
 
-**2.3 Procedural Personality Mixer**
-- Compute personality blend from dimension scores
-- Pass compact state to AI (~300 tokens vs ~800)
-- Rewrite CORE_PERSONALITY: dense punchy prose, full name prominent, voice examples
-- Condense CARIBBEAN_LANGUAGE_SYSTEM: examples + triggers format
-- Tighten CRAB_MYSTERY: compact slip-ups and trigger reactions
-- Increase AI temperature to 0.85 for more expression
+**2.3 Procedural Personality Mixer** ✅
+- ✅ buildPincherSystemPromptAsync() fetches personality vector
+- ✅ vectorToPromptContext() integrated into prompts
+- ✅ buildRelationshipContext() condensed (~80 lines → ~25 lines)
+- ✅ AI temperature increased to 0.85 for more expression
+- Future: Further condense CORE_PERSONALITY, CARIBBEAN_LANGUAGE_SYSTEM, CRAB_MYSTERY
 
 ### Phase 3: Trading Vectors
 **3.1 Strategy Clusters**
