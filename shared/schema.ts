@@ -2695,3 +2695,117 @@ export const apiHealthMetrics = pgTable("api_health_metrics", {
 });
 
 export type ApiHealthMetric = typeof apiHealthMetrics.$inferSelect;
+
+// ============ Vector Routing System ============
+
+// Route intents - self-optimizing intent vectors for chat routing cascade
+export const routeIntents = pgTable("route_intents", {
+  id: serial("id").primaryKey(),
+  intent: text("intent").notNull().unique(), // casual, safety, wallet, strategy, trading
+  
+  // Intent vector (embedding that evolves)
+  vector: jsonb("vector").$type<number[]>().default([]), // 384-dim or similar
+  vectorDimension: integer("vector_dimension").default(384),
+  
+  // What vectors to load when this intent matches
+  vectorNeeds: jsonb("vector_needs").$type<string[]>().default([]), // ["safety", "behavior"] etc
+  
+  // Tier 1: Exact keyword cache (fastest, no API)
+  tier1Keywords: jsonb("tier_1_keywords").$type<string[]>().default([]), // ["safe", "rug", "honeypot"]
+  
+  // Learning metrics
+  hitCount: integer("hit_count").default(0),
+  confidence: real("confidence").default(0.5), // 0-1
+  lastMatchScore: real("last_match_score"), // most recent cosine similarity
+  
+  // Dampening for stability
+  dampingFactor: real("damping_factor").default(0.95), // high usage = stable
+  learningRate: real("learning_rate").default(0.1),
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertRouteIntentSchema = createInsertSchema(routeIntents).omit({ id: true });
+export type RouteIntent = typeof routeIntents.$inferSelect;
+export type InsertRouteIntent = z.infer<typeof insertRouteIntentSchema>;
+
+// Strategy clusters - groups of signal wallets with similar trading patterns
+export const strategyClusters = pgTable("strategy_clusters", {
+  id: serial("id").primaryKey(),
+  clusterId: text("cluster_id").notNull().unique(), // unique cluster identifier
+  
+  // Pattern identification
+  pattern: text("pattern").notNull(), // momentum, swing, pump_specialist, sniper, whale_follower
+  patternDescription: text("pattern_description"), // human-readable description
+  
+  // Wallet membership
+  walletAddresses: jsonb("wallet_addresses").$type<string[]>().default([]),
+  walletCount: integer("wallet_count").default(0),
+  
+  // Cluster vector (for similarity matching new wallets)
+  vector: jsonb("vector").$type<number[]>().default([]),
+  vectorDimension: integer("vector_dimension").default(384),
+  
+  // Outcomes tracking
+  outcomes: jsonb("outcomes").$type<{
+    totalTrades: number;
+    wins: number;
+    losses: number;
+    avgPnlPercent: number;
+    totalPnlSol: number;
+    winRate: number;
+    bestTrade: { token: string; pnlPercent: number; timestamp: number } | null;
+    worstTrade: { token: string; pnlPercent: number; timestamp: number } | null;
+  }>().default({
+    totalTrades: 0, wins: 0, losses: 0, avgPnlPercent: 0,
+    totalPnlSol: 0, winRate: 0, bestTrade: null, worstTrade: null
+  }),
+  
+  // Learning metrics
+  confidence: real("confidence").default(0.5),
+  stabilityScore: real("stability_score"), // how consistent are outcomes
+  sampleSize: integer("sample_size").default(0),
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertStrategyClusterSchema = createInsertSchema(strategyClusters).omit({ id: true });
+export type StrategyCluster = typeof strategyClusters.$inferSelect;
+export type InsertStrategyCluster = z.infer<typeof insertStrategyClusterSchema>;
+
+// Vector updates - 8-hour bucket aggregation for batch vector updates
+export const vectorUpdates = pgTable("vector_updates", {
+  id: serial("id").primaryKey(),
+  
+  // Target identification
+  vectorType: text("vector_type").notNull(), // route_intent, behavior, strategy, memory
+  targetId: text("target_id").notNull(), // intent name, userId, clusterId, etc
+  
+  // Signal data
+  signalType: text("signal_type").notNull(), // route_success, route_fail, trade_win, trade_loss, chat_interaction
+  signalData: jsonb("signal_data").$type<Record<string, any>>(), // raw signal payload
+  
+  // Embedding (if applicable)
+  embedding: jsonb("embedding").$type<number[]>(), // message embedding for route updates
+  
+  // Weight factors
+  weight: real("weight").default(1.0), // engagement weight (trade=3, chat=1, passive=0.5)
+  
+  // Bucket assignment
+  bucketId: text("bucket_id").notNull(), // YYYY-MM-DD-HH (8-hour buckets: 00, 08, 16)
+  
+  // Processing status
+  processed: boolean("processed").default(false),
+  processedAt: integer("processed_at"),
+  
+  // Timestamp
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertVectorUpdateSchema = createInsertSchema(vectorUpdates).omit({ id: true });
+export type VectorUpdate = typeof vectorUpdates.$inferSelect;
+export type InsertVectorUpdate = z.infer<typeof insertVectorUpdateSchema>;
