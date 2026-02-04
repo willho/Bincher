@@ -5950,7 +5950,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid request", details: parsed.error.errors });
       }
       const { openPaperPosition } = await import("./paper-trading");
-      const position = await openPaperPosition({ userId: req.user!.id, ...parsed.data });
+      const position = await openPaperPosition({ userId: req.userId!, ...parsed.data });
       res.json(position);
     } catch (error: any) {
       console.error("Error opening paper position:", error);
@@ -5961,7 +5961,7 @@ export async function registerRoutes(
   app.get("/api/paper/positions", requireAuth, async (req: Request, res: Response) => {
     try {
       const { getOpenPositions } = await import("./paper-trading");
-      const positions = await getOpenPositions(req.user!.id);
+      const positions = await getOpenPositions(req.userId!);
       res.json(positions);
     } catch (error) {
       console.error("Error fetching paper positions:", error);
@@ -5973,7 +5973,7 @@ export async function registerRoutes(
     try {
       const limit = parseInt(req.query.limit as string) || 50;
       const { getPositionHistory } = await import("./paper-trading");
-      const positions = await getPositionHistory(req.user!.id, limit);
+      const positions = await getPositionHistory(req.userId!, limit);
       res.json(positions);
     } catch (error) {
       console.error("Error fetching position history:", error);
@@ -5986,7 +5986,7 @@ export async function registerRoutes(
       const positionId = parseInt(req.params.id);
       const { reason } = req.body;
       const { closePaperPosition } = await import("./paper-trading");
-      const position = await closePaperPosition(positionId, reason || "manual", req.user!.id);
+      const position = await closePaperPosition(positionId, reason || "manual", req.userId!);
       if (!position) {
         return res.status(404).json({ error: "Position not found or already closed" });
       }
@@ -6000,7 +6000,7 @@ export async function registerRoutes(
   app.get("/api/paper/stats", requireAuth, async (req: Request, res: Response) => {
     try {
       const { getPaperTradingStats } = await import("./paper-trading");
-      const stats = await getPaperTradingStats(req.user!.id);
+      const stats = await getPaperTradingStats(req.userId!);
       res.json(stats);
     } catch (error) {
       console.error("Error fetching paper trading stats:", error);
@@ -6011,7 +6011,7 @@ export async function registerRoutes(
   app.get("/api/paper/strategies/:wallet", requireAuth, async (req: Request, res: Response) => {
     try {
       const { getWalletStrategy } = await import("./paper-trading");
-      const strategy = await getWalletStrategy(req.params.wallet, req.user!.id);
+      const strategy = await getWalletStrategy(req.params.wallet, req.userId!);
       res.json(strategy || { walletAddress: req.params.wallet, sampleSize: 0 });
     } catch (error) {
       console.error("Error fetching wallet strategy:", error);
@@ -6021,15 +6021,15 @@ export async function registerRoutes(
 
   app.post("/api/paper/strategies/:wallet/analyze", requireAuth, async (req: Request, res: Response) => {
     try {
-      console.log(`[StrategyAnalyze] Starting analysis for wallet: ${req.params.wallet}, userId: ${req.user!.id}`);
+      console.log(`[StrategyAnalyze] Starting analysis for wallet: ${req.params.wallet}, userId: ${req.userId!}`);
       const { analyzeWalletStrategy, saveWalletStrategy } = await import("./paper-trading");
       
       console.log(`[StrategyAnalyze] Running analyzeWalletStrategy...`);
-      const analysis = await analyzeWalletStrategy(req.params.wallet, req.user!.id);
+      const analysis = await analyzeWalletStrategy(req.params.wallet, req.userId!);
       console.log(`[StrategyAnalyze] Analysis complete, sampleSize: ${analysis.sampleSize}`);
       
       console.log(`[StrategyAnalyze] Saving strategy...`);
-      const saved = await saveWalletStrategy(req.params.wallet, req.user!.id, analysis);
+      const saved = await saveWalletStrategy(req.params.wallet, req.userId!, analysis);
       console.log(`[StrategyAnalyze] Strategy saved successfully`);
       
       res.json({ analysis, saved });
@@ -6058,7 +6058,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid request", details: parsed.error.errors });
       }
       const { createExperiment } = await import("./paper-trading");
-      const experiment = await createExperiment({ userId: req.user!.id, ...parsed.data });
+      const experiment = await createExperiment({ userId: req.userId!, ...parsed.data });
       res.json(experiment);
     } catch (error) {
       console.error("Error creating experiment:", error);
@@ -6069,7 +6069,7 @@ export async function registerRoutes(
   app.get("/api/paper/experiments", requireAuth, async (req: Request, res: Response) => {
     try {
       const { getActiveExperiments } = await import("./paper-trading");
-      const experiments = await getActiveExperiments(req.user!.id);
+      const experiments = await getActiveExperiments(req.userId!);
       res.json(experiments);
     } catch (error) {
       console.error("Error fetching experiments:", error);
@@ -6080,7 +6080,7 @@ export async function registerRoutes(
   app.post("/api/paper/experiments/:id/complete", requireAuth, async (req: Request, res: Response) => {
     try {
       const { completeExperiment } = await import("./paper-trading");
-      const experiment = await completeExperiment(parseInt(req.params.id), req.user!.id);
+      const experiment = await completeExperiment(parseInt(req.params.id), req.userId!);
       if (!experiment) {
         return res.status(404).json({ error: "Experiment not found" });
       }
