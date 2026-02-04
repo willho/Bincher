@@ -4105,6 +4105,7 @@ export async function chatWithAI(
     }
   }
   
+  console.log(`[ChatWithAI] Saving user message for userId: ${userId}`);
   await db.insert(aiChatMessages).values({
     userId,
     role: "user",
@@ -4112,10 +4113,13 @@ export async function chatWithAI(
     channel,
     createdAt: now,
   });
+  console.log(`[ChatWithAI] User message saved`);
 
   // Route message to determine what vectors to load (token-efficient routing)
+  console.log(`[ChatWithAI] Routing message...`);
   const { routeMessage, recordRouteFeedback } = await import("./vector-router");
   const routeResult = await routeMessage(userMessage);
+  console.log(`[ChatWithAI] Route result: ${routeResult.intent}`);
   
   // Extract token/wallet from message for context loading
   const tokenMintMatch = userMessage.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
@@ -4124,12 +4128,16 @@ export async function chatWithAI(
   const walletAddress = walletMatch ? walletMatch[0] : undefined;
   
   // Load vectors dynamically based on route
+  console.log(`[ChatWithAI] Loading vectors...`);
   const { loadVectorsForRoute, vectorsToPromptContext } = await import("./vector-loader");
   const loadedVectors = await loadVectorsForRoute(routeResult, userId, tokenMint, walletAddress);
   const vectorContext = vectorsToPromptContext(loadedVectors);
+  console.log(`[ChatWithAI] Vectors loaded, context length: ${vectorContext?.length || 0}`);
 
   // Get cross-channel history to maintain context across web and telegram
+  console.log(`[ChatWithAI] Getting cross-channel history...`);
   const crossChannelHistory = await getCrossChannelHistory(userId, 20);
+  console.log(`[ChatWithAI] Got ${crossChannelHistory.length} history messages`);
   
   // Filter to get only messages for building the conversation history
   const history = crossChannelHistory.map(m => ({
@@ -4141,15 +4149,19 @@ export async function chatWithAI(
     createdAt: m.createdAt,
   }));
 
+  console.log(`[ChatWithAI] Loading snapshots...`);
   const snapshots = await getAllSnapshots();
   const snapshotsWithOutcomes = await getSnapshotsWithOutcomes();
+  console.log(`[ChatWithAI] Loaded ${snapshots.length} snapshots, ${snapshotsWithOutcomes.length} with outcomes`);
   
   const userPrefs = await getUserPreferences(userId);
   const summaryFocus = userPrefs?.summaryFocus || "";
   
   // Build the comprehensive Pincher context with channel awareness and community insights
+  console.log(`[ChatWithAI] Building Pincher context...`);
   const adminInstructions = await getAdminInstructions();
   const pincherContext = await buildPincherContext(userId, channel, adminInstructions, userMessage);
+  console.log(`[ChatWithAI] Context built`);
   
   // Add cross-channel awareness to context
   const recentOtherChannel = crossChannelHistory.filter(m => m.channel !== channel).slice(-3);
@@ -4279,16 +4291,30 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
   }
 
   try {
+    console.log(`[ChatWithAI] Starting OpenAI call for userId: ${userId}, channel: ${channel}`);
+    console.log(`[ChatWithAI] Messages count: ${messages.length}, systemPrompt length: ${systemPrompt.length}`);
+    
     const startTime = Date.now();
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages,
-      tools: chatTools,
-      tool_choice: "auto",
-      max_completion_tokens: 1000,
-      temperature: 0.85, // Increased for more personality expression
+    
+    // Create promise with timeout
+    const timeoutMs = 60000; // 60 second timeout
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`OpenAI request timed out after ${timeoutMs}ms`)), timeoutMs);
     });
+    
+    const response = await Promise.race([
+      openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages,
+        tools: chatTools,
+        tool_choice: "auto",
+        max_completion_tokens: 1000,
+        temperature: 0.85, // Increased for more personality expression
+      }),
+      timeoutPromise,
+    ]);
     const latencyMs = Date.now() - startTime;
+    console.log(`[ChatWithAI] OpenAI response received in ${latencyMs}ms`);
     await trackApiCall("openai", "chat"); // Track after successful response
     recordAISuccess(); // Mark AI as healthy
     
@@ -4868,9 +4894,32 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
 
     return assistantMessage;
   } catch (error: any) {
-    console.error("AI chat failed:", error);
+    console.error("[ChatWithAI] AI chat failed:", error?.message || error);
+    console.error("[ChatWithAI] Full error:", JSON.stringify({
+      name: error?.name,
+      message: error?.message,
+      status: error?.status,
+      code: error?.code,
+      stack: error?.stack?.split('\n').slice(0, 5).join('\n'),
+    }));
     recordAIFailure(error?.message || "Unknown error");
-    return "Sorry, I'm having trouble connecting to the AI service right now. Use the Trading page for manual controls - all features still work!";
+    
+    const errorResponse = "Sorry, I'm having trouble connecting to the AI service right now. Use the Trading page for manual controls - all features still work!";
+    
+    // Save error response to chat history so user sees it in the UI
+    try {
+      await db.insert(aiChatMessages).values({
+        userId,
+        role: "assistant",
+        content: errorResponse,
+        channel,
+        createdAt: Math.floor(Date.now() / 1000),
+      });
+    } catch (dbErr) {
+      console.error("[ChatWithAI] Failed to save error response to DB:", dbErr);
+    }
+    
+    return errorResponse;
   }
 }
 

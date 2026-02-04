@@ -4754,32 +4754,46 @@ export async function registerRoutes(
   // Chat with AI
   app.post("/api/ai/chat", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
+      console.log(`[AIChat] Request from userId: ${req.userId}`);
       const { message } = req.body;
       if (!message || typeof message !== 'string') {
+        console.log(`[AIChat] Invalid message format`);
         return res.status(400).json({ error: "Message is required" });
       }
+      
+      console.log(`[AIChat] Processing message: "${message.slice(0, 50)}..."`);
       
       const { handleMessage } = await import("./intent-parser");
       const { isAIAvailable, getFallbackMessage } = await import("./ai-health");
       
+      console.log(`[AIChat] Checking intent parser...`);
       const intentResult = await handleMessage(req.userId!, message);
       
       if (intentResult.handled && intentResult.response) {
+        console.log(`[AIChat] Intent handled directly`);
         res.json({ response: intentResult.response });
         return;
       }
       
+      console.log(`[AIChat] Checking AI availability...`);
       if (!isAIAvailable()) {
+        console.log(`[AIChat] AI unavailable`);
         const fallbackMsg = getFallbackMessage() + " Use the Trading page for full manual control.";
         res.json({ response: fallbackMsg, aiUnavailable: true });
         return;
       }
       
+      console.log(`[AIChat] Calling chatWithAI...`);
+      const startTime = Date.now();
       const response = await chatWithAI(req.userId!, message, 'web');
+      const latency = Date.now() - startTime;
+      console.log(`[AIChat] Response received in ${latency}ms`);
+      
       res.json({ response });
-    } catch (error) {
-      console.error("Error in AI chat:", error);
-      res.status(500).json({ error: "Failed to get AI response" });
+    } catch (error: any) {
+      console.error("[AIChat] Error:", error?.message || error);
+      console.error("[AIChat] Stack:", error?.stack);
+      res.status(500).json({ error: "Failed to get AI response", details: error?.message });
     }
   });
 

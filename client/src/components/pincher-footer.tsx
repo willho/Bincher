@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Shell, Send, X, Minus, Loader2, Trash2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
 interface ChatMessage {
@@ -67,6 +68,7 @@ export function PincherFooter() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const lastPageRef = useRef<string>("");
+  const { toast } = useToast();
 
   const pageContext = getPageContext(location);
   const pageKey = pageContext.startsWith("token:") ? "token" : pageContext;
@@ -109,6 +111,14 @@ export function PincherFooter() {
       queryClient.invalidateQueries({ queryKey: ["/api/trade-filters"] });
       queryClient.invalidateQueries({ queryKey: ["/api/user/settings"] });
       setInput("");
+    },
+    onError: (error: any) => {
+      console.error("[PincherChat] Send failed:", error);
+      toast({
+        title: "Miss Pincher is having trouble",
+        description: "The AI couldn't process your message. Try again in a moment.",
+        variant: "destructive",
+      });
     },
   });
 
