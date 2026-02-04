@@ -9,7 +9,14 @@ import {
 import { eq, and, sql, lt, inArray } from "drizzle-orm";
 import OpenAI from "openai";
 
-const openai = new OpenAI();
+let openaiClient: OpenAI | null = null;
+
+function getOpenAI(): OpenAI {
+  if (!openaiClient) {
+    openaiClient = new OpenAI();
+  }
+  return openaiClient;
+}
 
 const WEIGHTS = {
   trade_win: 3.0,
@@ -42,7 +49,7 @@ function nudgeVector(
 
 async function getEmbedding(text: string): Promise<number[] | null> {
   try {
-    const response = await openai.embeddings.create({
+    const response = await getOpenAI().embeddings.create({
       model: "text-embedding-3-small",
       input: text,
       dimensions: 384

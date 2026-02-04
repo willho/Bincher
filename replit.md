@@ -1,7 +1,7 @@
 # Penny Pincher
 
 ## Overview
-Penny Pincher is an automated Solana trading platform offering copy trading from signal wallets, manual trading, and autonomous AI-driven trading. Its primary purpose is to provide a comprehensive, intelligent, and secure solution on the Solana blockchain, incorporating automated risk management, adaptive AI learning, and pattern-based swing trading. The platform aims to enhance user profitability and experience in decentralized finance through features like the AI assistant, Miss Pincher, which autonomously trades based on user-defined rules and evolving scoring models.
+Penny Pincher is an automated Solana trading platform providing copy trading from signal wallets, manual trading, and AI-driven trading. Its core purpose is to offer a comprehensive, intelligent, and secure solution on the Solana blockchain, featuring automated risk management, adaptive AI learning, and pattern-based swing trading to enhance user profitability and experience in decentralized finance.
 
 ## User Preferences
 - I prefer simple language.
@@ -16,10 +16,10 @@ Penny Pincher is an automated Solana trading platform offering copy trading from
 ## System Architecture
 
 ### High-Level Design
-The application utilizes a client-server architecture with a React frontend, an Express.js backend, and a PostgreSQL database. Real-time communication is handled via WebSockets, and Helius webhooks are used for push-based swap detection. User data is strictly isolated.
+The application uses a client-server architecture with a React frontend, an Express.js backend, and a PostgreSQL database. Real-time communication is handled via WebSockets, and Helius webhooks are used for push-based swap detection. User data is strictly isolated.
 
 ### Frontend
-The UI, built with React and Vite, features a dark theme with crypto-themed green accents. It includes a Dashboard, Watchlist, Trading (with Token sub-page), Settings, and an omnipresent AI chat component (Pincher Footer). Navigation is dashboard-centric, using panels as the primary navigation mechanism, eliminating sidebars and bottom navigation.
+The UI, built with React and Vite, features a dark theme with crypto-themed green accents. It includes a Dashboard, Watchlist, Trading (with Token sub-page), Settings, and an omnipresent AI chat component (Pincher Footer). Navigation is dashboard-centric, using panels as the primary navigation mechanism.
 
 ### Backend
 The Express backend manages user authentication (session-based), Solana service integrations, and business logic. It processes Helius webhooks, uses Resend for email, and integrates Jupiter for token swaps. A WebSocket server broadcasts real-time updates.
@@ -30,7 +30,7 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 ### Key Features & Design Patterns
 - **Real-time Swap Monitoring**: Leverages Helius webhooks.
 - **Automated Copy Trading**: Includes a hot wallet system with AES-256-GCM encryption, dynamic priority fees, split buy systems, progressive take-profit strategies, unique disposable token wallets for each buy, and backup gas funding. Configurable initial buy modes, budget controls, mirror buy limits, mirror sell modes, and enhanced deduplication options are available.
-- **AI Token Analysis (Miss Pincher)**: A GPT-4o-mini powered AI provides dynamic token heat scoring and qualitative analysis via a chat interface for natural language interaction and action triggers, requiring explicit user confirmation for trades and copy trading configuration changes.
+- **AI Token Analysis (Miss Pincher)**: A GPT-4o-mini powered AI provides dynamic token heat scoring and qualitative analysis via a chat interface, requiring explicit user confirmation for trades and copy trading configuration changes.
 - **Security**: Features robust authentication (PBKDF2, secure sessions), encrypted data storage, PIN protection, daily spend limits, withdrawal address whitelisting, and Telegram confirmation for large transfers.
 - **Scalability**: Achieved through user isolation and webhook-driven event processing.
 - **API Management**: Tracks API calls with limits and uses an admin API key pool for load balancing.
@@ -38,7 +38,6 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **Whale Detection**: Caches top-100 holder lists and broadcasts whale activity events.
 - **Enhanced Heat Scoring**: Token heat scores incorporate whale activity, recent buys, price volatility, user attention, and recency.
 - **Telegram Integration**: Two-way webhook-based bot for alerts and routing non-command messages to Miss Pincher AI.
-- **Notifications Architecture**: Multi-provider email support with Telegram as priority.
 - **AI Filter Creation**: Natural language filter creation via Miss Pincher chat.
 - **USD Conversions**: Live SOL-to-USD conversion using cached price data.
 - **AI Budget System**: Manages AI interactions with throttling and heat-gated analysis.
@@ -47,28 +46,14 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **Risk Management**: Configurable take-profit, stop-loss, auto-mirroring, and trading budget limits.
 - **Adaptive AI with Dampening**: Dual learning systems with adaptive dampening for weight shifts based on data confidence.
 - **Familiar Whale Tracking**: Tracks whales across tokens and builds success profiles.
-- **Tiered Event Buckets**: Position snapshots store journey data in compressed tiers (15min detailed → hourly summaries → daily).
+- **Tiered Event Buckets**: Position snapshots store journey data in compressed tiers.
 - **Stop-Loss Mode**: Per-position `stopLossMode` setting: "auto" (immediate sell) or "alert" (notify and wait for user confirmation).
 - **Signal Wallet Detail Page**: Displays individual wallet activity, trade history, hit rate, P&L, trading style analysis, and timeframe filters, with real-time WebSocket updates.
 - **AI-Controlled Blacklist**: Miss Pincher can add, remove, and list blacklisted tokens via natural language commands.
 - **AI Relationship System**: Tracks user affinity, relationship type, trades won, and warnings followed/ignored, with auto-adjustment of relationship type.
-- **Production System Logging**: Separated logging architecture with dedicated tables for faster queries and independent retention:
-  - `ai_logs` (500 entries): AI/LLM interactions with token/cost tracking
-  - `api_logs` (500 entries): External API calls (DexScreener, Jupiter)
-  - `webhook_logs` (200 entries): Helius webhook processing
-  - `trade_logs` (500 entries): Trade execution (buy/sell success/failure)
-  - `error_logs` (1000 entries): Errors across all services (longest retention for debugging)
-  - Legacy `system_logs` (100 entries): General logging, hourly cleanup
-  - Miss Pincher tools: `query_system_logs`, `query_error_logs`, `query_trade_logs` for production diagnosis
-  - Admin dashboard: Tabbed interface for each log category with real-time counts
-- **Budget & API Management System** (Added 2026-02-04):
-  - Unified priority queue: shared across price/safety/holder systems with UI display support
-  - Safety checker: RugCheck + GoPlus parallel fetch, rate limiting, background processing, WebSocket broadcasts
-  - Behavioral analysis: bot detection, leader/follower classification, copytrade window (~9min taper curve), synchronized buying
-  - Wallet fingerprinting: time-in-market, size discipline, partial sell patterns, entry timing, playbook consistency
-  - Discovery engine: DexScreener sources (new tokens, gainers, random sampling), crowding risk, alpha decay
-  - Cluster learning: whale_clusters table with addresses, P&L tracking, 30-day retention (3+ events minimum)
-  - Miss Pincher tools: `analyze_token_behavior`, `get_wallet_fingerprint`, `get_copytrade_window`, `check_token_safety`, `classify_wallet_behavior`
+- **Production System Logging**: Separated logging architecture with dedicated tables for faster queries and independent retention for AI, API, webhook, trade, and error logs.
+- **Budget & API Management System**: Features a unified priority queue, safety checker (RugCheck + GoPlus), behavioral analysis (bot detection, leader/follower classification), wallet fingerprinting, discovery engine, and cluster learning.
+- **Vector Learning**: Incorporates multi-dimensional personality and trading vectors, strategy clustering, unified vector routing, and 8-hour bucket aggregation for self-optimization.
 
 ## External Dependencies
 
@@ -79,169 +64,3 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **DexScreener**: Primary source for token metadata (price, market cap, liquidity, FDV, volume).
 - **GeckoTerminal**: Fallback token metadata provider.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
-
-## Paused Tasks / Backlog
-
-### Budget & API Management System
-*Added: 2026-02-03*
-
-**Core Principles:**
-- Graceful degradation over failure (slow but working > stopped)
-- Only throttle users over budget, light users stay full speed
-- Project-to-end-of-month throttling (always make it to month end)
-- Surplus sharing: 50% throttled users, 50% discovery
-- 100 signal wallets per user per Helius API key
-
----
-
-**Phase A: Budget Foundation** (Build first)
-1. Schema: user_api_keys, api_queue, budget_usage tables
-2. Encrypted Helius key storage, 100 wallet limit
-3. Per-user budget tracker with month-end projection
-4. Priority queue: copy trade > UI > background
-
-**Phase B: Data Pool** (Core infrastructure)
-1. Unified token data pool schema
-2. Holder cache with webhook updates (swaps + transfers)
-3. Frontend DexScreener fetch → report to pool
-4. Crowdsourced work queue for heavy loads
-5. Opportunistic refresh when idle + surplus
-
-**Phase C: Throttling** (Graceful degradation)
-1. Smooth throttle engine (spread evenly, never batch-wait)
-2. Surplus sharing: 50/50 throttled users / discovery
-3. Fallback chain: DexScreener → cache → GeckoTerminal → stale indicator
-
-**Phase D: Paper Trading** (Strategy testing)
-1. Schema: paper_positions, wallet_strategies, experiments
-2. Paper trading engine with webhook-based entry/exit
-3. Strategy versioning and comparison
-
-**Phase E: Vector Learning** (AI evolution)
-1. Update vectors from paper trade outcomes
-2. Strategy pattern clustering
-3. 8-hour bucket aggregation with dampening
-
-**Phase F: UI** (User-facing)
-1. Signal Wallet: "Show Pincher's Strategy" hidden panel
-2. Paper trading UI: SOL input, Start, P&L
-3. Strategy customization chat
-4. Admin dashboard with budget/queue/throttle status
-
-**Future Backlog:**
-- Discovery engine (uses Phase B + C)
-- Hourly AI optimization job
-- Miss Pincher strategy tools (parse_strategy, explain_strategy, propose_tweak)
-- Multi-agent specialists (Momentum, Swing, Pump.fun)
-
----
-
-**Data Flow Design:**
-```
-Sources → Token Data Pool → Consumers
-├─ Webhooks (swaps + transfers) → Pool
-├─ Backend API (Helius) → Pool  
-├─ Frontend fetch (DexScreener) → report to Pool
-├─ Opportunistic refresh → Pool
-│
-Pool serves:
-├─ User UI (priority)
-├─ Paper trading engine
-├─ Discovery (surplus only)
-└─ AI analysis
-```
-
-**Throttling Math:**
-```
-remaining_credits = budget - used
-days_remaining = days_in_month - current_day
-target_daily_rate = remaining_credits / days_remaining
-if current_rate > target_rate: throttle to target
-```
-
-**DexScreener Limits (generous):**
-- 300 req/min for pairs/price data
-- Frontend calls = each user has own limit
-- Free forever, no key needed
-
----
-
-## Vector Learning Update
-*Added: 2026-02-03*
-
-Vision: Self-optimizing AI trading system. Miss Pincher evolves from copy-trading → understanding → autonomous strategy generation. Unified vector learning powers personality AND trading intelligence.
-
-### Phase 1: Foundation (Schema + Architecture)
-**1.1 Vector Storage** ✅ *Completed 2026-02-03*
-- ✅ Expanded `user_relationships`: multi-dimensional scores (adversarial, friendly, playful, professional), memorableEvents array
-- ✅ Added `behavior_vectors` table: 6 behavior axes with dampening factors
-- ✅ Added `memory_clusters` table: topic/pattern tracking with confidence/decay
-- Consent-aware data storage (future: UI toggle)
-
-**1.2 Baseline Architecture** ✅ *Completed 2026-02-03*
-- ✅ `global_baselines` table: stores evolving global personality vector with aggregation metadata
-- ✅ `server/vector-learning.ts`: helper functions for baseline/user vector management
-  - `getOrCreateGlobalBaseline()`, `getUserBehaviorVector()`, `initializeUserVector()`
-  - `getEffectivePersonality()`: blends baseline + user adjustments
-  - `vectorToPromptContext()`: converts vector to compact AI context string
-
-### Phase 2: Personality Vectors ✅ *Completed 2026-02-03*
-**2.1 Six Behavior Axes** ✅
-- ✅ 12 BehaviorSignal types for interaction tracking
-- ✅ updateBehaviorVector() with dampening mechanics
-- ✅ Affinity-weighted updates (higher affinity = stronger learning)
-
-**2.2 Chat-Based Affinity** ✅
-- ✅ 11 AFFINITY_SCORES for interaction types (+1 message, +2 compliments, +3 advice followed, etc.)
-- ✅ updateChatAffinity() updates affinity + dimension scores, auto-creates relationships for new users
-- ✅ recalculateRelationshipType() based on dimension scores
-- ✅ memorableEvents tracking for significant interactions
-
-**2.3 Procedural Personality Mixer** ✅
-- ✅ buildPincherSystemPromptAsync() fetches personality vector
-- ✅ vectorToPromptContext() integrated into prompts
-- ✅ buildRelationshipContext() condensed (~80 lines → ~25 lines)
-- ✅ AI temperature increased to 0.85 for more expression
-- Future: Further condense CORE_PERSONALITY, CARIBBEAN_LANGUAGE_SYSTEM, CRAB_MYSTERY
-
-### Phase 3: Trading Vectors
-**3.1 Strategy Clusters**
-- Signal wallet profiles with cluster tags (momentum, swing, Pump specialist)
-- Track outcomes per cluster - learn "why" wallets win
-
-**3.2 Latency-Aware Learning**
-- Record execution delays, learn optimal timing
-- "When not to trade" learning from losses
-- Patience as feature (filters rugs)
-
-### Phase 4: Self-Optimization
-**4.1 8-Hour Bucket Aggregation**
-- Collect signals, calculate engagement-weighted deltas
-- Update baseline vectors incrementally
-- Dampening prevents oscillation
-
-**4.2 Token Optimization**
-- Vector similarity triggers (LLM only when needed)
-- Eventual distillation to smaller/faster models
-
-### Phase 5: Multi-Agent (Future)
-**5.1 Specialized Agents**
-- Momentum, Swing, Pump.fun specialists
-- Supervisor for capital allocation + risk management
-- Ring-fenced capital for high-variance plays (5-10% max)
-
-**5.2 Self-Awareness**
-- Reflect on own performance
-- Suggest improvements to user
-- Emergent cross-agent learning
-
-### Key Principles
-- Ethical: no frontrunning, no sniping
-- Full-cycle learning: wins + losses + "when not to trade"
-- Token-sparse LLM calls
-- Anti-overfitting: regime detection, forgetting mechanisms
-
-### Identity Reference
-- Full legal name: Penelope Soraya Ibis Despinchard
-- Professional: Miss Pincher
-- Aliases: Pinchét, Cruz-Pinchét (denied humorously)
