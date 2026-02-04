@@ -404,6 +404,16 @@ export async function run8HourAggregation(): Promise<{
     processBehaviorVectorUpdates(bucketId)
   ]);
   
+  let discoveryUpdates = 0;
+  try {
+    const { processDiscoverySourceUpdates, adjustExploreRatio, pruneUnderperformingVectors } = await import("./discovery-engine");
+    discoveryUpdates = await processDiscoverySourceUpdates(bucketId);
+    await adjustExploreRatio();
+    await pruneUnderperformingVectors();
+  } catch (err) {
+    console.error("[VectorAggregation] Discovery processing failed:", err);
+  }
+  
   await updateGlobalBaseline();
   
   const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 3600);
@@ -413,7 +423,7 @@ export async function run8HourAggregation(): Promise<{
       lt(vectorUpdates.createdAt, sevenDaysAgo)
     ));
   
-  console.log(`[VectorAggregation] Processed: routes=${routeUpdates}, strategies=${strategyUpdates}, behavior=${behaviorUpdates}`);
+  console.log(`[VectorAggregation] Processed: routes=${routeUpdates}, strategies=${strategyUpdates}, behavior=${behaviorUpdates}, discovery=${discoveryUpdates}`);
   
   return {
     routeUpdates,

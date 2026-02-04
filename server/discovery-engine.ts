@@ -3,6 +3,8 @@ import {
   discoveryTriggers, discoveryEvents, discoveryMetrics, 
   marketRegimes, discoveryJobRuns,
   tokenDataPool, swaps, holderCache,
+  discoverySources, discoveryExperiments, discoveryConfig,
+  emergentPatterns, vectorUpdates,
   DiscoveryTrigger, DiscoveryEvent
 } from "@shared/schema";
 import { eq, and, desc, gte, lte, sql, gt, lt, isNull } from "drizzle-orm";
@@ -1235,4 +1237,484 @@ export async function getDiverseDiscoveryStats(): Promise<{
     lastDiscovery: getLastDiscoveryTimes(),
     sourceBreakdown,
   };
+}
+
+// =====================
+// EXPLORE/EXPLOIT SOURCE-BASED DISCOVERY
+// Self-optimizing discovery with dynamic ratio adjustment
+// =====================
+
+export async function getOrCreateDiscoveryConfig(): Promise<{
+  exploreRatio: number;
+  exploreRatioMin: number;
+  exploreRatioMax: number;
+  vectorCreationThreshold: number;
+  vectorPruneThreshold: number;
+}> {
+  const existing = await db.select()
+    .from(discoveryConfig)
+    .where(eq(discoveryConfig.configKey, "global"))
+    .limit(1);
+  
+  if (existing[0]) {
+    return {
+      exploreRatio: existing[0].exploreRatio || 0.1,
+      exploreRatioMin: existing[0].exploreRatioMin || 0.1,
+      exploreRatioMax: existing[0].exploreRatioMax || 0.5,
+      vectorCreationThreshold: existing[0].vectorCreationThreshold || 0.7,
+      vectorPruneThreshold: existing[0].vectorPruneThreshold || 0.2
+    };
+  }
+  
+  const now = Math.floor(Date.now() / 1000);
+  await db.insert(discoveryConfig).values({
+    configKey: "global",
+    exploreRatio: 0.1,
+    exploreRatioMin: 0.1,
+    exploreRatioMax: 0.5,
+    vectorCreationThreshold: 0.7,
+    vectorPruneThreshold: 0.2,
+    adjustmentHistory: [],
+    createdAt: now
+  });
+  
+  return {
+    exploreRatio: 0.1,
+    exploreRatioMin: 0.1,
+    exploreRatioMax: 0.5,
+    vectorCreationThreshold: 0.7,
+    vectorPruneThreshold: 0.2
+  };
+}
+
+export async function selectDiscoverySources(): Promise<{
+  primarySource: { sourceId: string; sourceType: string } | null;
+  experimentSource: { sourceId: string; sourceType: string } | null;
+  primaryAllocation: number;
+  experimentAllocation: number;
+}> {
+  const config = await getOrCreateDiscoveryConfig();
+  
+  const sources = await db.select()
+    .from(discoverySources)
+    .where(eq(discoverySources.isActive, true))
+    .orderBy(desc(discoverySources.priority));
+  
+  if (sources.length === 0) {
+    return {
+      primarySource: null,
+      experimentSource: null,
+      primaryAllocation: 1,
+      experimentAllocation: 0
+    };
+  }
+  
+  const primarySource = sources[0];
+  
+  const exploitAllocation = 1 - config.exploreRatio;
+  const exploreAllocation = config.exploreRatio;
+  
+  let experimentSource = null;
+  if (sources.length > 1 && Math.random() < exploreAllocation) {
+    const otherSources = sources.slice(1);
+    const totalWeight = otherSources.reduce((sum, s) => sum + (s.priority || 50), 0);
+    let random = Math.random() * totalWeight;
+    
+    for (const source of otherSources) {
+      random -= source.priority || 50;
+      if (random <= 0) {
+        experimentSource = source;
+        break;
+      }
+    }
+    experimentSource = experimentSource || otherSources[0];
+  }
+  
+  return {
+    primarySource: { sourceId: primarySource.sourceId, sourceType: primarySource.sourceType },
+    experimentSource: experimentSource ? { sourceId: experimentSource.sourceId, sourceType: experimentSource.sourceType } : null,
+    primaryAllocation: exploitAllocation,
+    experimentAllocation: experimentSource ? exploreAllocation : 0
+  };
+}
+
+function getVectorBucketId(): string {
+  const now = new Date();
+  const hour = now.getUTCHours();
+  const bucket = hour < 8 ? "00" : hour < 16 ? "08" : "16";
+  return `${now.toISOString().slice(0, 10)}-${bucket}`;
+}
+
+export async function recordDiscoverySourceOutcome(
+  tokenMint: string,
+  sourceId: string,
+  outcome: {
+    executed: boolean;
+    pnlPercent: number | null;
+    holdTimeMinutes: number | null;
+    isWin: boolean;
+  }
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const source = await db.select()
+    .from(discoverySources)
+    .where(eq(discoverySources.sourceId, sourceId))
+    .limit(1);
+  
+  if (!source[0]) return;
+  
+  const currentSample = source[0].sampleCount || 0;
+  const currentSuccessRate = source[0].successRate || 0;
+  const currentAvgPnl = source[0].avgPnlPercent || 0;
+  
+  const newSample = currentSample + 1;
+  const newSuccessRate = (currentSuccessRate * currentSample + (outcome.isWin ? 1 : 0)) / newSample;
+  const newAvgPnl = outcome.pnlPercent !== null 
+    ? (currentAvgPnl * currentSample + outcome.pnlPercent) / newSample 
+    : currentAvgPnl;
+  
+  const newPriority = Math.min(100, Math.max(1, 
+    50 + (newSuccessRate - 0.5) * 50 + (newAvgPnl / 10)
+  ));
+  
+  await db.update(discoverySources)
+    .set({
+      sampleCount: newSample,
+      successRate: newSuccessRate,
+      avgPnlPercent: newAvgPnl,
+      priority: Math.round(newPriority),
+      updatedAt: now
+    })
+    .where(eq(discoverySources.sourceId, sourceId));
+  
+  const bucketId = getVectorBucketId();
+  await db.insert(vectorUpdates).values({
+    vectorType: "discovery_source",
+    targetId: sourceId,
+    signalType: outcome.isWin ? "discovery_win" : "discovery_loss",
+    signalData: {
+      tokenMint,
+      pnlPercent: outcome.pnlPercent,
+      holdTimeMinutes: outcome.holdTimeMinutes
+    },
+    weight: outcome.isWin ? 2.0 : 1.5,
+    bucketId,
+    processed: false,
+    createdAt: now
+  });
+}
+
+export async function adjustExploreRatio(): Promise<{
+  oldRatio: number;
+  newRatio: number;
+  reason: string;
+}> {
+  const config = await getOrCreateDiscoveryConfig();
+  const now = Math.floor(Date.now() / 1000);
+  const weekAgo = now - 7 * 24 * 60 * 60;
+  
+  const experiments = await db.select()
+    .from(discoveryExperiments)
+    .where(and(
+      eq(discoveryExperiments.status, "completed"),
+      gt(discoveryExperiments.completedAt, weekAgo)
+    ));
+  
+  if (experiments.length < 10) {
+    return {
+      oldRatio: config.exploreRatio,
+      newRatio: config.exploreRatio,
+      reason: "Not enough experiments to adjust ratio"
+    };
+  }
+  
+  let exploitWins = 0;
+  let exploitTotal = 0;
+  let exploreWins = 0;
+  let exploreTotal = 0;
+  
+  for (const exp of experiments) {
+    if (exp.primaryOutcome) {
+      const primary = exp.primaryOutcome as { pnlPercent: number | null };
+      if (primary.pnlPercent !== null) {
+        exploitTotal++;
+        if (primary.pnlPercent > 0) exploitWins++;
+      }
+    }
+    if (exp.experimentOutcome) {
+      const experiment = exp.experimentOutcome as { pnlPercent: number | null };
+      if (experiment.pnlPercent !== null) {
+        exploreTotal++;
+        if (experiment.pnlPercent > 0) exploreWins++;
+      }
+    }
+  }
+  
+  const exploitWinRate = exploitTotal > 0 ? exploitWins / exploitTotal : 0.5;
+  const exploreWinRate = exploreTotal > 0 ? exploreWins / exploreTotal : 0.5;
+  
+  let newRatio = config.exploreRatio;
+  let reason = "No change needed";
+  
+  if (exploreWinRate > exploitWinRate + 0.1) {
+    newRatio = Math.min(config.exploreRatioMax, config.exploreRatio + 0.05);
+    reason = `Experiments outperforming (${(exploreWinRate * 100).toFixed(0)}% vs ${(exploitWinRate * 100).toFixed(0)}%)`;
+  } else if (exploitWinRate > exploreWinRate + 0.1) {
+    newRatio = Math.max(config.exploreRatioMin, config.exploreRatio - 0.05);
+    reason = `Best strategy outperforming (${(exploitWinRate * 100).toFixed(0)}% vs ${(exploreWinRate * 100).toFixed(0)}%)`;
+  } else if (exploitWinRate < 0.4 && exploreWinRate < 0.4) {
+    newRatio = Math.min(config.exploreRatioMax, config.exploreRatio + 0.1);
+    reason = `Both struggling, increasing exploration`;
+  }
+  
+  if (newRatio !== config.exploreRatio) {
+    const history = await db.select()
+      .from(discoveryConfig)
+      .where(eq(discoveryConfig.configKey, "global"))
+      .limit(1);
+    
+    const currentHistory = (history[0]?.adjustmentHistory as any[]) || [];
+    currentHistory.push({
+      timestamp: now,
+      oldRatio: config.exploreRatio,
+      newRatio,
+      reason,
+      outcomeImproved: null
+    });
+    
+    if (currentHistory.length > 20) {
+      currentHistory.splice(0, currentHistory.length - 20);
+    }
+    
+    await db.update(discoveryConfig)
+      .set({
+        exploreRatio: newRatio,
+        exploitWinRate,
+        exploreWinRate,
+        adjustmentHistory: currentHistory,
+        updatedAt: now
+      })
+      .where(eq(discoveryConfig.configKey, "global"));
+  }
+  
+  return {
+    oldRatio: config.exploreRatio,
+    newRatio,
+    reason
+  };
+}
+
+export async function detectEmergentPattern(
+  patternType: "discovery_source" | "strategy" | "route_intent",
+  signature: Record<string, any>,
+  example: { tokenMint?: string; message?: string; outcome?: any }
+): Promise<{ patternId: string; confidence: number; promoted: boolean }> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const signatureKey = JSON.stringify(signature);
+  const patternId = `${patternType}_${Buffer.from(signatureKey).toString('base64').slice(0, 16)}`;
+  
+  const existing = await db.select()
+    .from(emergentPatterns)
+    .where(eq(emergentPatterns.patternId, patternId))
+    .limit(1);
+  
+  if (existing[0]) {
+    const pattern = existing[0];
+    const examples = (pattern.examples as any[]) || [];
+    examples.push(example);
+    if (examples.length > 20) examples.splice(0, examples.length - 20);
+    
+    const newCount = (pattern.occurrenceCount || 1) + 1;
+    const newConfidence = Math.min(1, (pattern.confidence || 0) + 0.05);
+    
+    await db.update(emergentPatterns)
+      .set({
+        occurrenceCount: newCount,
+        examples,
+        confidence: newConfidence,
+        lastSeenAt: now
+      })
+      .where(eq(emergentPatterns.patternId, patternId));
+    
+    const config = await getOrCreateDiscoveryConfig();
+    if (newConfidence >= config.vectorCreationThreshold && pattern.status === "tracking") {
+      await promoteEmergentPattern(patternId, patternType, signature);
+      return { patternId, confidence: newConfidence, promoted: true };
+    }
+    
+    return { patternId, confidence: newConfidence, promoted: false };
+  }
+  
+  await db.insert(emergentPatterns).values({
+    patternId,
+    patternType,
+    patternSignature: signature,
+    occurrenceCount: 1,
+    examples: [example],
+    confidence: 0.1,
+    confidenceThreshold: 0.7,
+    status: "tracking",
+    createdAt: now,
+    lastSeenAt: now
+  });
+  
+  return { patternId, confidence: 0.1, promoted: false };
+}
+
+async function promoteEmergentPattern(
+  patternId: string,
+  patternType: string,
+  signature: Record<string, any>
+): Promise<string | null> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  try {
+    let promotedToId: string | null = null;
+    
+    if (patternType === "discovery_source") {
+      promotedToId = `system_${patternId}`;
+      await db.insert(discoverySources).values({
+        sourceId: promotedToId,
+        sourceType: signature.sourceType || "emergent",
+        sourceConfig: signature,
+        vector: [],
+        createdBy: "system",
+        priority: 40,
+        createdAt: now
+      });
+    }
+    
+    if (promotedToId) {
+      await db.update(emergentPatterns)
+        .set({
+          status: "promoted",
+          promotedToId
+        })
+        .where(eq(emergentPatterns.patternId, patternId));
+      
+      console.log(`[DiscoveryEngine] Promoted emergent pattern ${patternId} to ${promotedToId}`);
+    }
+    
+    return promotedToId;
+  } catch (err) {
+    console.error("[DiscoveryEngine] Failed to promote pattern:", err);
+    return null;
+  }
+}
+
+export async function pruneUnderperformingVectors(): Promise<number> {
+  const config = await getOrCreateDiscoveryConfig();
+  const now = Math.floor(Date.now() / 1000);
+  
+  const systemSources = await db.select()
+    .from(discoverySources)
+    .where(and(
+      eq(discoverySources.createdBy, "system"),
+      lt(discoverySources.successRate, config.vectorPruneThreshold),
+      gt(discoverySources.sampleCount, 10)
+    ));
+  
+  let pruned = 0;
+  for (const source of systemSources) {
+    await db.update(discoverySources)
+      .set({ isActive: false, updatedAt: now })
+      .where(eq(discoverySources.sourceId, source.sourceId));
+    
+    console.log(`[DiscoveryEngine] Pruned underperforming source: ${source.sourceId}`);
+    pruned++;
+  }
+  
+  return pruned;
+}
+
+export async function seedDefaultDiscoverySources(): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const existing = await db.select()
+    .from(discoverySources)
+    .limit(1);
+  
+  if (existing.length > 0) return 0;
+  
+  const defaultSources = [
+    { sourceId: "dexscreener_new", sourceType: "dexscreener_new", priority: 60 },
+    { sourceId: "dexscreener_gainers", sourceType: "dexscreener_gainers", priority: 55 },
+    { sourceId: "whale_follows", sourceType: "whale_follows", priority: 70 },
+    { sourceId: "signal_wallet_overlap", sourceType: "signal_wallet_overlap", priority: 65 },
+  ];
+  
+  for (const source of defaultSources) {
+    await db.insert(discoverySources).values({
+      ...source,
+      sourceConfig: {},
+      vector: [],
+      createdBy: "manual",
+      createdAt: now
+    });
+  }
+  
+  console.log(`[DiscoveryEngine] Seeded ${defaultSources.length} default discovery sources`);
+  return defaultSources.length;
+}
+
+export async function processDiscoverySourceUpdates(bucketId: string): Promise<number> {
+  const updates = await db.select()
+    .from(vectorUpdates)
+    .where(and(
+      eq(vectorUpdates.vectorType, "discovery_source"),
+      eq(vectorUpdates.bucketId, bucketId),
+      eq(vectorUpdates.processed, false)
+    ));
+  
+  if (updates.length === 0) return 0;
+  
+  const sourceUpdates = new Map<string, { wins: number; losses: number; totalWeight: number }>();
+  
+  for (const update of updates) {
+    const sourceId = update.targetId;
+    const current = sourceUpdates.get(sourceId) || { wins: 0, losses: 0, totalWeight: 0 };
+    
+    if (update.signalType === "discovery_win") {
+      current.wins += update.weight || 1;
+    } else {
+      current.losses += update.weight || 1;
+    }
+    current.totalWeight += update.weight || 1;
+    
+    sourceUpdates.set(sourceId, current);
+  }
+  
+  const now = Math.floor(Date.now() / 1000);
+  
+  for (const [sourceId, data] of Array.from(sourceUpdates.entries())) {
+    const source = await db.select()
+      .from(discoverySources)
+      .where(eq(discoverySources.sourceId, sourceId))
+      .limit(1);
+    
+    if (!source[0]) continue;
+    
+    const dampening = 1 / (1 + Math.log10(Math.max(1, source[0].sampleCount || 1)));
+    const recentWinRate = data.wins / (data.wins + data.losses);
+    const currentConfidence = source[0].confidence || 0.5;
+    const newConfidence = currentConfidence + dampening * (recentWinRate - currentConfidence) * 0.1;
+    
+    await db.update(discoverySources)
+      .set({
+        confidence: Math.max(0, Math.min(1, newConfidence)),
+        updatedAt: now
+      })
+      .where(eq(discoverySources.sourceId, sourceId));
+  }
+  
+  await db.update(vectorUpdates)
+    .set({ processed: true, processedAt: now })
+    .where(and(
+      eq(vectorUpdates.vectorType, "discovery_source"),
+      eq(vectorUpdates.bucketId, bucketId)
+    ));
+  
+  return sourceUpdates.size;
 }

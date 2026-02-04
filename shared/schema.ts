@@ -2722,6 +2722,9 @@ export const routeIntents = pgTable("route_intents", {
   dampingFactor: real("damping_factor").default(0.95), // high usage = stable
   learningRate: real("learning_rate").default(0.1),
   
+  // Origin tracking
+  createdBy: text("created_by").default("manual"), // "manual" | "system"
+  
   // Timestamps
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at"),
@@ -2768,6 +2771,9 @@ export const strategyClusters = pgTable("strategy_clusters", {
   stabilityScore: real("stability_score"), // how consistent are outcomes
   sampleSize: integer("sample_size").default(0),
   
+  // Origin tracking
+  createdBy: text("created_by").default("manual"), // "manual" | "system"
+  
   // Timestamps
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at"),
@@ -2809,3 +2815,155 @@ export const vectorUpdates = pgTable("vector_updates", {
 export const insertVectorUpdateSchema = createInsertSchema(vectorUpdates).omit({ id: true });
 export type VectorUpdate = typeof vectorUpdates.$inferSelect;
 export type InsertVectorUpdate = z.infer<typeof insertVectorUpdateSchema>;
+
+// Discovery sources - self-optimizing discovery channels
+export const discoverySources = pgTable("discovery_sources", {
+  id: serial("id").primaryKey(),
+  sourceId: text("source_id").notNull().unique(),
+  
+  // Source type and details
+  sourceType: text("source_type").notNull(), // dexscreener_new, dexscreener_gainers, twitter, telegram, whale_follows
+  sourceConfig: jsonb("source_config").$type<Record<string, any>>(), // specific source params
+  
+  // Intent vector (embedding for similarity matching)
+  vector: jsonb("vector").$type<number[]>().default([]),
+  vectorDimension: integer("vector_dimension").default(384),
+  
+  // Performance metrics
+  successRate: real("success_rate").default(0), // wins / total discoveries
+  sampleCount: integer("sample_count").default(0),
+  avgPnlPercent: real("avg_pnl_percent").default(0),
+  bestDiscovery: jsonb("best_discovery").$type<{ tokenMint: string; pnl: number; date: number }>(),
+  
+  // Learning metrics
+  confidence: real("confidence").default(0.5),
+  dampingFactor: real("damping_factor").default(0.95),
+  learningRate: real("learning_rate").default(0.1),
+  
+  // Status
+  isActive: boolean("is_active").default(true),
+  priority: integer("priority").default(50), // 1-100, higher = more likely to be selected
+  
+  // Origin tracking
+  createdBy: text("created_by").default("manual"), // "manual" | "system"
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertDiscoverySourceSchema = createInsertSchema(discoverySources).omit({ id: true });
+export type DiscoverySource = typeof discoverySources.$inferSelect;
+export type InsertDiscoverySource = z.infer<typeof insertDiscoverySourceSchema>;
+
+// Discovery experiments - tracks primary vs experiment outcomes
+export const discoveryExperiments = pgTable("discovery_experiments", {
+  id: serial("id").primaryKey(),
+  experimentId: text("experiment_id").notNull().unique(),
+  
+  // Token discovered
+  tokenMint: text("token_mint").notNull(),
+  
+  // Sources compared
+  primarySourceId: text("primary_source_id").notNull(), // best strategy source
+  experimentSourceId: text("experiment_source_id"), // experiment source (if any)
+  
+  // Allocation
+  primaryAllocation: real("primary_allocation").notNull(), // e.g., 0.9 for 90%
+  experimentAllocation: real("experiment_allocation"), // e.g., 0.1 for 10%
+  
+  // Outcomes
+  primaryOutcome: jsonb("primary_outcome").$type<{
+    executed: boolean;
+    pnlPercent: number | null;
+    holdTimeMinutes: number | null;
+  }>(),
+  experimentOutcome: jsonb("experiment_outcome").$type<{
+    executed: boolean;
+    pnlPercent: number | null;
+    holdTimeMinutes: number | null;
+  }>(),
+  
+  // Which performed better
+  winner: text("winner"), // "primary" | "experiment" | "both" | "neither"
+  
+  // Status
+  status: text("status").default("pending"), // pending, active, completed
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  completedAt: integer("completed_at"),
+});
+
+export const insertDiscoveryExperimentSchema = createInsertSchema(discoveryExperiments).omit({ id: true });
+export type DiscoveryExperiment = typeof discoveryExperiments.$inferSelect;
+export type InsertDiscoveryExperiment = z.infer<typeof insertDiscoveryExperimentSchema>;
+
+// Discovery config - global discovery settings with self-optimizing ratio
+export const discoveryConfig = pgTable("discovery_config", {
+  id: serial("id").primaryKey(),
+  configKey: text("config_key").notNull().unique(), // "global" or user-specific
+  
+  // Explore/exploit ratio (self-optimizing within bounds)
+  exploreRatio: real("explore_ratio").default(0.1), // current ratio
+  exploreRatioMin: real("explore_ratio_min").default(0.1), // floor: 10%
+  exploreRatioMax: real("explore_ratio_max").default(0.5), // ceiling: 50%
+  
+  // Adjustment signals
+  exploitWinRate: real("exploit_win_rate").default(0), // recent exploit performance
+  exploreWinRate: real("explore_win_rate").default(0), // recent explore performance
+  
+  // Vector creation threshold
+  vectorCreationThreshold: real("vector_creation_threshold").default(0.7), // confidence needed to spawn new vector
+  vectorPruneThreshold: real("vector_prune_threshold").default(0.2), // below this, system vectors get pruned
+  
+  // Adjustment history (for learning from ratio changes)
+  adjustmentHistory: jsonb("adjustment_history").$type<Array<{
+    timestamp: number;
+    oldRatio: number;
+    newRatio: number;
+    reason: string;
+    outcomeImproved: boolean | null;
+  }>>().default([]),
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertDiscoveryConfigSchema = createInsertSchema(discoveryConfig).omit({ id: true });
+export type DiscoveryConfig = typeof discoveryConfig.$inferSelect;
+export type InsertDiscoveryConfig = z.infer<typeof insertDiscoveryConfigSchema>;
+
+// Emergent patterns - tracks patterns that don't match existing vectors
+export const emergentPatterns = pgTable("emergent_patterns", {
+  id: serial("id").primaryKey(),
+  patternId: text("pattern_id").notNull().unique(),
+  
+  // Pattern type
+  patternType: text("pattern_type").notNull(), // discovery_source, strategy, route_intent
+  
+  // Pattern characteristics
+  patternSignature: jsonb("pattern_signature").$type<Record<string, any>>(), // distinguishing features
+  embedding: jsonb("embedding").$type<number[]>(), // vector representation
+  
+  // Evidence
+  occurrenceCount: integer("occurrence_count").default(1),
+  examples: jsonb("examples").$type<Array<{ tokenMint?: string; message?: string; outcome?: any }>>().default([]),
+  
+  // Confidence (when reaches threshold, spawns new vector)
+  confidence: real("confidence").default(0),
+  confidenceThreshold: real("confidence_threshold").default(0.7),
+  
+  // Status
+  status: text("status").default("tracking"), // tracking, promoted, rejected
+  promotedToId: text("promoted_to_id"), // ID of created vector if promoted
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  lastSeenAt: integer("last_seen_at"),
+});
+
+export const insertEmergentPatternSchema = createInsertSchema(emergentPatterns).omit({ id: true });
+export type EmergentPattern = typeof emergentPatterns.$inferSelect;
+export type InsertEmergentPattern = z.infer<typeof insertEmergentPatternSchema>;
