@@ -21,6 +21,7 @@ import {
   toggleAdminApiKey,
   maskApiKey,
   getUserResendApiKey,
+  getNextAdminApiKey,
 } from "./api-keys";
 import { notificationSettingsSchema, tradeConfigSchema, insertWalletRuleDefaultsSchema } from "@shared/schema";
 import { z } from "zod";
@@ -453,8 +454,14 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Password must be at least 8 characters" });
       }
 
-      if (!heliusApiKey) {
-        return res.status(400).json({ error: "Helius API key is required" });
+      // Helius API key is now optional - will fall back to admin pool if not provided
+      const useAdminPool = !heliusApiKey;
+      if (useAdminPool) {
+        // Check if admin pool has a Helius key available
+        const adminKey = await getNextAdminApiKey("helius");
+        if (!adminKey && !process.env.HELIUS_API_KEY) {
+          return res.status(400).json({ error: "Helius API key is required (no admin pool available)" });
+        }
       }
 
       // Validate Solana wallet address if provided
@@ -487,8 +494,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: result.error });
       }
 
-      // Store the Helius API key for the new user
-      if (result.userId) {
+      // Store the Helius API key for the new user (if provided, otherwise uses admin pool)
+      if (result.userId && heliusApiKey) {
         try {
           await addUserApiKey(result.userId, "helius", heliusApiKey, "Helius API Key");
         } catch (keyError) {
@@ -497,7 +504,7 @@ export async function registerRoutes(
         }
       }
 
-      res.json({ success: true, isAdmin: grantAdmin, showWizard: grantAdmin });
+      res.json({ success: true, isAdmin: grantAdmin, showWizard: grantAdmin, usingAdminPool: useAdminPool });
     } catch (error) {
       console.error("Registration error:", error);
       res.status(500).json({ error: "Registration failed" });

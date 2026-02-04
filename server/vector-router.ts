@@ -3,7 +3,10 @@ import { routeIntents, vectorUpdates, type RouteIntent } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import OpenAI from "openai";
 
-const openai = new OpenAI();
+const openai = new OpenAI({
+  apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || "dummy-key",
+  baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || "https://api.openai.com/v1",
+});
 
 export type IntentType = "casual" | "safety" | "wallet" | "strategy" | "trading";
 
