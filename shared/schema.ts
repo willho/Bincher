@@ -1830,6 +1830,10 @@ export const familiarWhales = pgTable("familiar_whales", {
   successRate: real("success_rate").default(0), // profitableExits / totalExits
   reliabilityScore: real("reliability_score").default(50), // 0-100 composite score
   label: text("label"), // user-assigned or auto-generated label
+  
+  // Cluster membership
+  clusterId: integer("cluster_id"), // References whale_clusters.id
+  clusterAssignedAt: integer("cluster_assigned_at"),
 });
 
 export const insertFamiliarWhaleSchema = createInsertSchema(familiarWhales).omit({ id: true });
@@ -2126,6 +2130,20 @@ export const tokenDataPool = pgTable("token_data_pool", {
   isActive: boolean("is_active").default(true),
   lastAccessedAt: integer("last_accessed_at"),
   accessCount: integer("access_count").default(0),
+  
+  // Safety data (RugCheck + GoPlus)
+  rugcheckData: jsonb("rugcheck_data"), // Raw RugCheck API response
+  rugcheckCheckedAt: integer("rugcheck_checked_at"),
+  goplusData: jsonb("goplus_data"), // Raw GoPlus API response
+  goplusCheckedAt: integer("goplus_checked_at"),
+  safetySource: text("safety_source"), // rugcheck, goplus, both
+  
+  // Pump.fun tracking
+  isPumpfun: boolean("is_pumpfun"),
+  pumpfunGraduated: boolean("pumpfun_graduated"),
+  pumpfunGraduationTime: integer("pumpfun_graduation_time"),
+  pumpfunAgeAtGraduation: integer("pumpfun_age_at_graduation"), // seconds from creation to graduation
+  pumpfunBondingCurveProgress: real("pumpfun_bonding_curve_progress"), // 0-100%
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
@@ -2536,3 +2554,144 @@ export const discoveryJobRuns = pgTable("discovery_job_runs", {
   status: text("status").notNull().default("running"), // running, completed, failed
   error: text("error"),
 });
+
+// Whale clusters - groups of wallets that trade together
+export const whaleClusters = pgTable("whale_clusters", {
+  id: serial("id").primaryKey(),
+  
+  // Cluster membership - stored as array of wallet addresses
+  memberAddresses: jsonb("member_addresses").$type<string[]>().notNull(),
+  memberCount: integer("member_count").notNull().default(0),
+  
+  // Formation tracking
+  firstSeenTogether: integer("first_seen_together").notNull(),
+  lastSeenTogether: integer("last_seen_together").notNull(),
+  coordinatedEventCount: integer("coordinated_event_count").default(0),
+  
+  // Behavioral classification
+  clusterType: text("cluster_type"), // bot_ring, copytrade_group, whale_pod, organic_herd
+  typeConfidence: real("type_confidence"), // 0-1 confidence in classification
+  
+  // Performance tracking
+  totalTokensTraded: integer("total_tokens_traded").default(0),
+  profitableTokens: integer("profitable_tokens").default(0),
+  avgExitMultiplier: real("avg_exit_multiplier"),
+  
+  // Derived metrics
+  clusterSuccessRate: real("cluster_success_rate"), // profitableTokens / totalTokensTraded
+  reliabilityScore: real("reliability_score").default(50), // 0-100 composite
+  
+  // Status
+  isActive: boolean("is_active").default(true),
+  lastActivityAt: integer("last_activity_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertWhaleClusterSchema = createInsertSchema(whaleClusters).omit({ id: true });
+export type WhaleCluster = typeof whaleClusters.$inferSelect;
+export type InsertWhaleCluster = z.infer<typeof insertWhaleClusterSchema>;
+
+// Cluster outcomes - P&L tracking per cluster per token
+export const clusterOutcomes = pgTable("cluster_outcomes", {
+  id: serial("id").primaryKey(),
+  clusterId: integer("cluster_id").notNull(), // References whale_clusters.id
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  
+  // Entry data
+  entryTimestamp: integer("entry_timestamp").notNull(),
+  entryPriceUsd: real("entry_price_usd"),
+  entryMarketCap: real("entry_market_cap"),
+  membersEntered: integer("members_entered").default(0),
+  
+  // Exit data
+  exitTimestamp: integer("exit_timestamp"),
+  exitPriceUsd: real("exit_price_usd"),
+  avgExitMultiplier: real("avg_exit_multiplier"),
+  membersExited: integer("members_exited").default(0),
+  
+  // Outcome
+  outcome: text("outcome"), // win, loss, partial, still_holding
+  peakMultiplier: real("peak_multiplier"),
+  
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertClusterOutcomeSchema = createInsertSchema(clusterOutcomes).omit({ id: true });
+export type ClusterOutcome = typeof clusterOutcomes.$inferSelect;
+export type InsertClusterOutcome = z.infer<typeof insertClusterOutcomeSchema>;
+
+// Wallet fingerprints - behavioral signatures for signal wallets
+export const walletFingerprints = pgTable("wallet_fingerprints", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull().unique(),
+  
+  // Time in market behavior
+  avgHoldDurationMinutes: integer("avg_hold_duration_minutes"),
+  holdDurationStdDev: real("hold_duration_std_dev"), // Consistency measure
+  shortestHold: integer("shortest_hold"), // minutes
+  longestHold: integer("longest_hold"), // minutes
+  
+  // Size discipline
+  avgEntrySizeUsd: real("avg_entry_size_usd"),
+  entrySizeStdDev: real("entry_size_std_dev"), // Consistency measure
+  avgEntryPercent: real("avg_entry_percent"), // Percent of wallet used per trade
+  
+  // Sell patterns
+  partialSellRate: real("partial_sell_rate"), // % of trades with partial sells
+  avgSellTiers: real("avg_sell_tiers"), // Average number of sell tranches
+  rageExitRate: real("rage_exit_rate"), // % of positions sold all at once at loss
+  
+  // Timing signals
+  preVolumeBuyRate: real("pre_volume_buy_rate"), // % of buys before volume spikes
+  avgEntryToVolumeSpike: integer("avg_entry_to_volume_spike"), // seconds before spike
+  
+  // Playbook consistency
+  playbookScore: real("playbook_score"), // 0-100, how consistent is behavior
+  regimeAdaptation: real("regime_adaptation"), // Changes behavior in different markets?
+  
+  // Chaos avoidance
+  tradesInChaos: integer("trades_in_chaos").default(0), // Trades during high volatility
+  totalTrades: integer("total_trades").default(0),
+  chaosAvoidanceScore: real("chaos_avoidance_score"), // Higher = avoids chaos
+  
+  // Crowding risk
+  copyingUsersCount: integer("copying_users_count").default(0),
+  alphaDecayFactor: real("alpha_decay_factor"), // How fast alpha decays when copied
+  
+  // Metadata
+  firstAnalyzedAt: integer("first_analyzed_at").notNull(),
+  lastUpdatedAt: integer("last_updated_at").notNull(),
+  sampleSize: integer("sample_size").default(0), // Number of trades analyzed
+});
+
+export const insertWalletFingerprintSchema = createInsertSchema(walletFingerprints).omit({ id: true });
+export type WalletFingerprint = typeof walletFingerprints.$inferSelect;
+export type InsertWalletFingerprint = z.infer<typeof insertWalletFingerprintSchema>;
+
+// API health tracking - per-source reliability metrics
+export const apiHealthMetrics = pgTable("api_health_metrics", {
+  id: serial("id").primaryKey(),
+  source: text("source").notNull().unique(), // rugcheck, goplus, dexscreener, helius
+  
+  // Response metrics (rolling 1hr)
+  avgResponseTimeMs: integer("avg_response_time_ms"),
+  successRate: real("success_rate"), // 0-1
+  errorCount: integer("error_count").default(0),
+  requestCount: integer("request_count").default(0),
+  
+  // Rate limit tracking
+  rateLimitHits: integer("rate_limit_hits").default(0),
+  lastRateLimitAt: integer("last_rate_limit_at"),
+  
+  // Fallback priority (auto-adjusted)
+  fallbackPriority: integer("fallback_priority").default(1), // Lower = preferred
+  
+  // Timestamps
+  lastSuccessAt: integer("last_success_at"),
+  lastErrorAt: integer("last_error_at"),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export type ApiHealthMetric = typeof apiHealthMetrics.$inferSelect;

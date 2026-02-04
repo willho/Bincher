@@ -940,3 +940,213 @@ function isDataStale(data: TokenDataPoolEntry): boolean {
   const staleTTL = 3600;
   return !data.priceUpdatedAt || (now - data.priceUpdatedAt) > staleTTL;
 }
+
+// Safety data TTL (1 hour, but can be re-checked if budget allows)
+const SAFETY_DATA_TTL_SECONDS = 3600;
+
+export async function updateTokenSafety(
+  tokenMint: string,
+  data: {
+    rugcheckData?: Record<string, unknown>;
+    goplusData?: Record<string, unknown>;
+  },
+  source: 'rugcheck' | 'goplus' | 'both'
+): Promise<TokenDataPoolEntry | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const existing = await getTokenData(tokenMint);
+  
+  const updateData: Record<string, unknown> = {
+    updatedAt: now,
+  };
+  
+  if (data.rugcheckData) {
+    updateData.rugcheckData = data.rugcheckData;
+    updateData.rugcheckCheckedAt = now;
+  }
+  
+  if (data.goplusData) {
+    updateData.goplusData = data.goplusData;
+    updateData.goplusCheckedAt = now;
+  }
+  
+  // Determine source based on what we have
+  if (data.rugcheckData && data.goplusData) {
+    updateData.safetySource = 'both';
+  } else if (data.rugcheckData) {
+    updateData.safetySource = 'rugcheck';
+  } else if (data.goplusData) {
+    updateData.safetySource = 'goplus';
+  }
+  
+  if (existing) {
+    const [updated] = await db.update(tokenDataPool)
+      .set(updateData)
+      .where(eq(tokenDataPool.id, existing.id))
+      .returning();
+    return updated;
+  }
+  
+  // Create new entry if doesn't exist
+  const [inserted] = await db.insert(tokenDataPool).values({
+    tokenMint,
+    createdAt: now,
+    updatedAt: now,
+    lastAccessedAt: now,
+    accessCount: 1,
+    isActive: true,
+    ...updateData,
+  }).returning();
+  
+  return inserted;
+}
+
+export async function updatePumpfunStatus(
+  tokenMint: string,
+  data: {
+    isPumpfun?: boolean;
+    graduated?: boolean;
+    graduationTime?: number;
+    ageAtGraduation?: number;
+    bondingCurveProgress?: number;
+  }
+): Promise<TokenDataPoolEntry | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const existing = await getTokenData(tokenMint);
+  
+  const updateData: Record<string, unknown> = {
+    updatedAt: now,
+  };
+  
+  if (data.isPumpfun !== undefined) updateData.isPumpfun = data.isPumpfun;
+  if (data.graduated !== undefined) updateData.pumpfunGraduated = data.graduated;
+  if (data.graduationTime !== undefined) updateData.pumpfunGraduationTime = data.graduationTime;
+  if (data.ageAtGraduation !== undefined) updateData.pumpfunAgeAtGraduation = data.ageAtGraduation;
+  if (data.bondingCurveProgress !== undefined) updateData.pumpfunBondingCurveProgress = data.bondingCurveProgress;
+  
+  if (existing) {
+    const [updated] = await db.update(tokenDataPool)
+      .set(updateData)
+      .where(eq(tokenDataPool.id, existing.id))
+      .returning();
+    return updated;
+  }
+  
+  const [inserted] = await db.insert(tokenDataPool).values({
+    tokenMint,
+    createdAt: now,
+    updatedAt: now,
+    lastAccessedAt: now,
+    accessCount: 1,
+    isActive: true,
+    ...updateData,
+  }).returning();
+  
+  return inserted;
+}
+
+export async function isSafetyDataStale(tokenMint: string): Promise<boolean> {
+  const entry = await getTokenData(tokenMint);
+  if (!entry) return true;
+  
+  const now = Math.floor(Date.now() / 1000);
+  
+  // If we have both sources, check if either is stale
+  const rugcheckStale = !entry.rugcheckCheckedAt || (now - entry.rugcheckCheckedAt) > SAFETY_DATA_TTL_SECONDS;
+  const goplusStale = !entry.goplusCheckedAt || (now - entry.goplusCheckedAt) > SAFETY_DATA_TTL_SECONDS;
+  
+  // Stale if we have neither, or both are stale
+  if (!entry.rugcheckCheckedAt && !entry.goplusCheckedAt) return true;
+  
+  return rugcheckStale && goplusStale;
+}
+
+export async function getTokensNeedingSafetyCheck(limit: number = 50): Promise<TokenDataPoolEntry[]> {
+  const now = Math.floor(Date.now() / 1000);
+  const staleThreshold = now - SAFETY_DATA_TTL_SECONDS;
+  
+  // Get tokens that are active but have stale or missing safety data
+  return await db.query.tokenDataPool.findMany({
+    where: and(
+      eq(tokenDataPool.isActive, true),
+      sql`(
+        ${tokenDataPool.rugcheckCheckedAt} IS NULL OR ${tokenDataPool.rugcheckCheckedAt} < ${staleThreshold}
+      ) AND (
+        ${tokenDataPool.goplusCheckedAt} IS NULL OR ${tokenDataPool.goplusCheckedAt} < ${staleThreshold}
+      )`
+    ),
+    orderBy: [desc(tokenDataPool.accessCount), desc(tokenDataPool.lastAccessedAt)],
+    limit,
+  });
+}
+
+// Priority levels for unified queue
+export type PriorityLevel = 'ui_displayed' | 'paper_position' | 'copy_trade' | 'discovery' | 'background';
+
+const PRIORITY_WEIGHTS: Record<PriorityLevel, number> = {
+  'ui_displayed': 100,
+  'paper_position': 90,
+  'copy_trade': 80,
+  'discovery': 50,
+  'background': 10,
+};
+
+// In-memory priority tracker for tokens
+const tokenPriorityMap = new Map<string, { level: PriorityLevel; bumpedAt: number }>();
+
+export function bumpTokenPriority(tokenMint: string, level: PriorityLevel): void {
+  const current = tokenPriorityMap.get(tokenMint);
+  const now = Math.floor(Date.now() / 1000);
+  
+  // Only bump if new priority is higher or current is expired (5 min)
+  if (!current || PRIORITY_WEIGHTS[level] > PRIORITY_WEIGHTS[current.level] || (now - current.bumpedAt) > 300) {
+    tokenPriorityMap.set(tokenMint, { level, bumpedAt: now });
+  }
+}
+
+export function getTokenPriority(tokenMint: string): PriorityLevel {
+  const entry = tokenPriorityMap.get(tokenMint);
+  const now = Math.floor(Date.now() / 1000);
+  
+  if (!entry || (now - entry.bumpedAt) > 300) {
+    return 'background';
+  }
+  
+  return entry.level;
+}
+
+export function getHighPriorityTokens(): string[] {
+  const now = Math.floor(Date.now() / 1000);
+  const result: { mint: string; weight: number }[] = [];
+  
+  const entries = Array.from(tokenPriorityMap.entries());
+  for (const [mint, entry] of entries) {
+    if ((now - entry.bumpedAt) <= 300) {
+      result.push({ mint, weight: PRIORITY_WEIGHTS[entry.level] });
+    }
+  }
+  
+  result.sort((a, b) => b.weight - a.weight);
+  return result.map(r => r.mint);
+}
+
+export function clearExpiredPriorities(): number {
+  const now = Math.floor(Date.now() / 1000);
+  let cleared = 0;
+  
+  const entries = Array.from(tokenPriorityMap.entries());
+  for (const [mint, entry] of entries) {
+    if ((now - entry.bumpedAt) > 300) {
+      tokenPriorityMap.delete(mint);
+      cleared++;
+    }
+  }
+  
+  return cleared;
+}
+
+// Batch bump for UI views (e.g., signal wallet holdings)
+export function bumpTokensBatch(tokenMints: string[], level: PriorityLevel): void {
+  for (const mint of tokenMints) {
+    bumpTokenPriority(mint, level);
+  }
+}

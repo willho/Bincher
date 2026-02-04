@@ -5577,6 +5577,124 @@ export async function registerRoutes(
     }
   });
 
+  // === TOKEN SAFETY ROUTES ===
+
+  app.get("/api/tokens/:mint/safety", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getTokenData, bumpTokenPriority } = await import("./data-pool");
+      const data = await getTokenData(req.params.mint);
+      
+      bumpTokenPriority(req.params.mint, 'ui_displayed');
+      
+      if (!data) {
+        return res.status(404).json({ error: "Token not found" });
+      }
+      
+      res.json({
+        tokenMint: data.tokenMint,
+        rugcheckData: data.rugcheckData,
+        rugcheckCheckedAt: data.rugcheckCheckedAt,
+        goplusData: data.goplusData,
+        goplusCheckedAt: data.goplusCheckedAt,
+        safetySource: data.safetySource,
+        isPumpfun: data.isPumpfun,
+        pumpfunGraduated: data.pumpfunGraduated,
+        pumpfunGraduationTime: data.pumpfunGraduationTime,
+        pumpfunAgeAtGraduation: data.pumpfunAgeAtGraduation,
+        pumpfunBondingCurveProgress: data.pumpfunBondingCurveProgress,
+      });
+    } catch (error) {
+      console.error("Error fetching token safety:", error);
+      res.status(500).json({ error: "Failed to fetch token safety" });
+    }
+  });
+
+  app.post("/api/tokens/:mint/check-safety", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { checkTokenSafety } = await import("./safety-checker");
+      const { bumpTokenPriority } = await import("./data-pool");
+      
+      bumpTokenPriority(req.params.mint, 'ui_displayed');
+      
+      const result = await checkTokenSafety(req.params.mint);
+      res.json(result);
+    } catch (error) {
+      console.error("Error checking token safety:", error);
+      res.status(500).json({ error: "Failed to check token safety" });
+    }
+  });
+
+  const reportSafetySchema = z.object({
+    rugcheckData: z.record(z.unknown()).optional(),
+    goplusData: z.record(z.unknown()).optional(),
+  });
+
+  app.post("/api/tokens/report-safety", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const tokenMint = req.body.tokenMint;
+      if (!tokenMint || typeof tokenMint !== 'string') {
+        return res.status(400).json({ error: "tokenMint required" });
+      }
+      
+      const parsed = reportSafetySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid request", details: parsed.error.errors });
+      }
+      
+      const { reportSafetyFromFrontend } = await import("./safety-checker");
+      const success = await reportSafetyFromFrontend(tokenMint, parsed.data, req.userId);
+      
+      if (success) {
+        const wss = (req as any).wss;
+        if (wss) {
+          const message = JSON.stringify({
+            type: 'SAFETY_UPDATE',
+            tokenMint,
+            source: 'frontend',
+          });
+          wss.clients.forEach((client: any) => {
+            if (client.readyState === 1) {
+              client.send(message);
+            }
+          });
+        }
+      }
+      
+      res.json({ success });
+    } catch (error) {
+      console.error("Error reporting safety data:", error);
+      res.status(500).json({ error: "Failed to report safety data" });
+    }
+  });
+
+  app.get("/api/safety/api-health", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getApiHealthStats } = await import("./safety-checker");
+      const stats = await getApiHealthStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching API health:", error);
+      res.status(500).json({ error: "Failed to fetch API health" });
+    }
+  });
+
+  app.post("/api/tokens/bump-priority", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { tokenMints, level } = req.body;
+      if (!Array.isArray(tokenMints)) {
+        return res.status(400).json({ error: "tokenMints must be array" });
+      }
+      
+      const { bumpTokensBatch } = await import("./data-pool");
+      bumpTokensBatch(tokenMints, level || 'ui_displayed');
+      
+      res.json({ success: true, count: tokenMints.length });
+    } catch (error) {
+      console.error("Error bumping priority:", error);
+      res.status(500).json({ error: "Failed to bump priority" });
+    }
+  });
+
   // === PAPER TRADING ROUTES ===
 
   const openPaperPositionSchema = z.object({
