@@ -502,78 +502,136 @@ export async function processHeatFactorUpdates(bucketId: string): Promise<number
     allWeights[factorId] = weight;
   }
   
-  // Bounded normalization: normalize to 1.0 while respecting min/max bounds
-  // Uses iterative approach: clamp fixed factors, redistribute remainder
+  // Merge config bounds with standard defaults (config overrides defaults)
+  const configBounds = config[0].weightBounds as Record<string, { min: number; max: number }> || {};
+  const mergedBounds: Record<string, { min: number; max: number }> = { ...standardBounds };
+  for (const [key, val] of Object.entries(configBounds)) {
+    if (val && typeof val.min === 'number' && typeof val.max === 'number') {
+      mergedBounds[key] = val;
+    }
+  }
+  
+  // Bounded simplex projection: normalize to sum=1.0 while respecting min/max bounds
+  // Uses iterative clamp-and-redistribute until convergence
+  // Returns null if normalization fails (weights should not be updated)
   const normalizeWithBounds = (
     weights: Record<string, number>, 
     bounds: Record<string, { min: number; max: number }>
-  ): Record<string, number> => {
+  ): Record<string, number> | null => {
     const result = { ...weights };
     const factors = Object.keys(result);
+    const fixed = new Set<string>();
     
-    // Iterative bounded normalization (max 10 iterations to prevent infinite loops)
-    for (let iter = 0; iter < 10; iter++) {
-      const total = Object.values(result).reduce((sum, w) => sum + w, 0);
-      if (Math.abs(total - 1.0) < 0.001) break; // Already normalized
+    // Check feasibility: sum(mins) <= 1 <= sum(maxs)
+    const sumMins = factors.reduce((sum, k) => sum + (bounds[k]?.min || 0.05), 0);
+    const sumMaxs = factors.reduce((sum, k) => sum + (bounds[k]?.max || 0.35), 0);
+    
+    if (sumMins > 1.0 || sumMaxs < 1.0) {
+      // Infeasible bounds - cannot achieve sum=1.0, abort update
+      console.warn(`[HeatFactor] Infeasible bounds: sumMins=${sumMins.toFixed(4)}, sumMaxs=${sumMaxs.toFixed(4)}. Aborting weight update.`);
+      return null;
+    }
+    
+    // Iterative bounded simplex projection
+    for (let iter = 0; iter < 50; iter++) {
+      // Get unfixed factors
+      const unfixed = factors.filter(k => !fixed.has(k));
+      if (unfixed.length === 0) break;
       
-      const scale = 1.0 / total;
-      let fixed = new Set<string>();
-      let remaining = 1.0;
+      // Calculate target sum for unfixed factors
+      const fixedSum = factors.filter(k => fixed.has(k)).reduce((sum, k) => sum + result[k], 0);
+      const targetSum = 1.0 - fixedSum;
+      const unfixedSum = unfixed.reduce((sum, k) => sum + result[k], 0);
       
-      // First pass: scale and identify clamped factors
-      for (const key of factors) {
+      if (Math.abs(unfixedSum - targetSum) < 0.0001) break; // Converged
+      
+      // Scale unfixed factors proportionally
+      const scale = unfixedSum > 0 ? targetSum / unfixedSum : 1;
+      let newlyFixed = false;
+      
+      for (const key of unfixed) {
         const scaled = result[key] * scale;
         const b = bounds[key] || { min: 0.05, max: 0.35 };
         
         if (scaled < b.min) {
           result[key] = b.min;
           fixed.add(key);
-          remaining -= b.min;
+          newlyFixed = true;
         } else if (scaled > b.max) {
           result[key] = b.max;
           fixed.add(key);
-          remaining -= b.max;
+          newlyFixed = true;
+        } else {
+          result[key] = scaled;
         }
       }
       
-      // Second pass: distribute remaining budget among unfixed factors
-      const unfixed = factors.filter(k => !fixed.has(k));
-      if (unfixed.length === 0) break;
+      // If no factors were newly fixed, we've converged
+      if (!newlyFixed) break;
+    }
+    
+    // Final exact correction with bounds enforcement
+    // Continue iterating until sum=1.0 and all within bounds
+    for (let finalIter = 0; finalIter < 20; finalIter++) {
+      const unfixedFinal = factors.filter(k => !fixed.has(k));
+      if (unfixedFinal.length === 0) break;
       
-      const unfixedTotal = unfixed.reduce((sum, k) => sum + result[k], 0);
-      if (unfixedTotal > 0) {
-        const redistScale = remaining / unfixedTotal;
-        for (const key of unfixed) {
-          result[key] *= redistScale;
+      const fixedSumFinal = factors.filter(k => fixed.has(k)).reduce((sum, k) => sum + result[k], 0);
+      const targetSumFinal = 1.0 - fixedSumFinal;
+      const unfixedSumFinal = unfixedFinal.reduce((sum, k) => sum + result[k], 0);
+      
+      if (Math.abs(unfixedSumFinal - targetSumFinal) < 0.0001) break; // Converged
+      
+      // Scale unfixed factors
+      const scaleFinal = unfixedSumFinal > 0 ? targetSumFinal / unfixedSumFinal : 1;
+      let newlyFixedFinal = false;
+      
+      for (const key of unfixedFinal) {
+        const scaled = result[key] * scaleFinal;
+        const b = bounds[key] || { min: 0.05, max: 0.35 };
+        
+        if (scaled < b.min) {
+          result[key] = b.min;
+          fixed.add(key);
+          newlyFixedFinal = true;
+        } else if (scaled > b.max) {
+          result[key] = b.max;
+          fixed.add(key);
+          newlyFixedFinal = true;
+        } else {
+          result[key] = scaled;
         }
+      }
+      
+      if (!newlyFixedFinal) break;
+    }
+    
+    // Final validation: verify sum=1.0 and all within bounds
+    const finalSum = Object.values(result).reduce((sum, w) => sum + w, 0);
+    let allWithinBounds = true;
+    for (const key of factors) {
+      const b = bounds[key] || { min: 0.05, max: 0.35 };
+      if (result[key] < b.min - 0.0001 || result[key] > b.max + 0.0001) {
+        allWithinBounds = false;
+        break;
       }
     }
     
-    // Final validation: if sum still not 1.0, adjust smallest unfixed factor
-    // This ensures we don't violate bounds by uniform scaling
-    const finalTotal = Object.values(result).reduce((sum, w) => sum + w, 0);
-    if (Math.abs(finalTotal - 1.0) > 0.0001) {
-      const diff = 1.0 - finalTotal;
-      // Find factor with most room to absorb the difference
-      let bestKey: string | null = null;
-      let bestRoom = 0;
-      for (const key of factors) {
-        const b = bounds[key] || { min: 0.05, max: 0.35 };
-        const room = diff > 0 ? (b.max - result[key]) : (result[key] - b.min);
-        if (room > bestRoom) {
-          bestRoom = room;
-          bestKey = key;
-        }
-      }
-      if (bestKey && bestRoom >= Math.abs(diff)) {
-        result[bestKey] += diff;
-      }
+    if (Math.abs(finalSum - 1.0) > 0.001 || !allWithinBounds) {
+      console.warn(`[HeatFactor] Normalization failed: sum=${finalSum.toFixed(4)}, withinBounds=${allWithinBounds}. Aborting weight update.`);
+      // Return null to signal update should be aborted
+      return null;
     }
     
     return result;
   };
   
-  const normalizedWeights = normalizeWithBounds(allWeights, standardBounds);
+  const normalizedWeights = normalizeWithBounds(allWeights, mergedBounds);
+  if (!normalizedWeights) {
+    // Normalization failed - abort weight update, keep current weights
+    console.log(`[HeatFactor] Weight update aborted due to normalization failure`);
+    return 0;
+  }
   Object.assign(allWeights, normalizedWeights);
   
   // Update config with normalized weights
