@@ -1010,27 +1010,54 @@ export async function fetchWalletTokenHoldings(walletAddress: string): Promise<W
 
     // Batch fetch prices (uses getBatchTokenPrices which batches in groups of 30)
     const { getBatchTokenPrices } = await import("./jupiter");
+    const { getTokenData, queueEnrichment } = await import("./data-pool");
     const mints = holdings.map(h => h.mint);
     const batchPrices = await getBatchTokenPrices(mints);
 
-    // Enrich holdings with batch price data and cached metadata for symbol/name
-    // No individual API calls here - rely only on batch prices and existing cache
+    // Check data pool for all token symbols/names (parallel lookups)
+    const poolDataMap = new Map<string, { symbol?: string; name?: string; priceUsd?: number; marketCap?: number; priceChange24h?: number }>();
+    const poolDataPromises = mints.map(async (mint) => {
+      const poolData = await getTokenData(mint);
+      if (poolData?.tokenSymbol) {
+        poolDataMap.set(mint, {
+          symbol: poolData.tokenSymbol,
+          name: poolData.tokenName ?? undefined,
+          priceUsd: poolData.priceUsd ?? undefined,
+          marketCap: poolData.marketCap ?? undefined,
+          priceChange24h: poolData.priceChange24h ?? undefined,
+        });
+      }
+    });
+    await Promise.all(poolDataPromises);
+
+    // Enrich holdings with batch price data, data pool, and cached metadata
+    // Queue high-priority fetches for tokens missing symbol/name
     const enrichedHoldings: WalletTokenHolding[] = holdings.map(holding => {
       const priceData = batchPrices.get(holding.mint);
+      const poolData = poolDataMap.get(holding.mint);
       
       // Check metadata cache for symbol/name (5-min TTL, no API call)
       const cached = tokenMetadataCache.get(holding.mint);
       const cachedMeta = cached && (Date.now() - cached.timestamp < METADATA_CACHE_TTL) ? cached.data : undefined;
 
-      const priceUsd = priceData?.price || cachedMeta?.priceUsd;
+      // Prefer data pool (most up-to-date) > cached metadata
+      const symbol = poolData?.symbol || cachedMeta?.symbol;
+      const name = poolData?.name || cachedMeta?.name;
+      
+      // Queue high-priority fetch for tokens missing symbol/name (for next refresh)
+      if (!symbol) {
+        queueEnrichment(holding.mint, 'high', ['tokenSymbol', 'tokenName']);
+      }
+
+      const priceUsd = priceData?.price || poolData?.priceUsd || cachedMeta?.priceUsd;
       return {
         ...holding,
-        symbol: cachedMeta?.symbol,
-        name: cachedMeta?.name,
+        symbol,
+        name,
         priceUsd: priceUsd || undefined,
         valueUsd: priceUsd ? holding.amount * priceUsd : undefined,
-        marketCap: priceData?.marketCap || cachedMeta?.marketCap,
-        priceChange24h: priceData?.priceChange24h || cachedMeta?.priceChange24h,
+        marketCap: priceData?.marketCap || poolData?.marketCap || cachedMeta?.marketCap,
+        priceChange24h: priceData?.priceChange24h || poolData?.priceChange24h || cachedMeta?.priceChange24h,
       };
     });
 
