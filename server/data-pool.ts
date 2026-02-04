@@ -770,3 +770,173 @@ async function fetchFromGeckoTerminal(tokenMint: string): Promise<{
     volume24h: attrs.volume_usd?.h24 ? parseFloat(attrs.volume_usd.h24) : undefined,
   };
 }
+
+// =====================
+// ENRICHMENT QUEUE - FREE SOURCES FIRST, HELIUS ONLY IF NEEDED
+// =====================
+
+interface EnrichmentRequest {
+  tokenMint: string;
+  priority: 'high' | 'normal' | 'low';
+  requiredFields: string[];
+  requestedAt: number;
+  source?: string;
+}
+
+const ENRICHMENT_QUEUE: EnrichmentRequest[] = [];
+let isEnrichmentRunning = false;
+
+export function queueEnrichment(
+  tokenMint: string,
+  priority: 'high' | 'normal' | 'low' = 'normal',
+  requiredFields: string[] = ['priceUsd']
+): void {
+  const existing = ENRICHMENT_QUEUE.find(r => r.tokenMint === tokenMint);
+  if (existing) {
+    if (priority === 'high' && existing.priority !== 'high') {
+      existing.priority = 'high';
+    }
+    for (const field of requiredFields) {
+      if (!existing.requiredFields.includes(field)) {
+        existing.requiredFields.push(field);
+      }
+    }
+    return;
+  }
+  
+  ENRICHMENT_QUEUE.push({
+    tokenMint,
+    priority,
+    requiredFields,
+    requestedAt: Date.now(),
+  });
+  
+  if (!isEnrichmentRunning) {
+    processEnrichmentQueue();
+  }
+}
+
+async function processEnrichmentQueue(): Promise<void> {
+  if (isEnrichmentRunning || ENRICHMENT_QUEUE.length === 0) return;
+  
+  isEnrichmentRunning = true;
+  
+  try {
+    while (ENRICHMENT_QUEUE.length > 0) {
+      ENRICHMENT_QUEUE.sort((a, b) => {
+        const priorityOrder = { high: 0, normal: 1, low: 2 };
+        if (priorityOrder[a.priority] !== priorityOrder[b.priority]) {
+          return priorityOrder[a.priority] - priorityOrder[b.priority];
+        }
+        return a.requestedAt - b.requestedAt;
+      });
+      
+      const request = ENRICHMENT_QUEUE.shift()!;
+      await enrichToken(request);
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  } finally {
+    isEnrichmentRunning = false;
+  }
+}
+
+async function enrichToken(request: EnrichmentRequest): Promise<boolean> {
+  const { tokenMint, requiredFields } = request;
+  
+  const cached = await getTokenData(tokenMint);
+  if (cached && hasRequiredFields(cached, requiredFields)) {
+    return true;
+  }
+  
+  const dexData = await fetchFromDexScreener(tokenMint);
+  if (dexData) {
+    await upsertTokenData(tokenMint, {
+      tokenSymbol: dexData.tokenSymbol,
+      tokenName: dexData.tokenName,
+      priceUsd: dexData.priceUsd,
+      marketCap: dexData.marketCap,
+      fdv: dexData.fdv,
+      liquidity: dexData.liquidity,
+      volume24h: dexData.volume24h,
+      priceChange24h: dexData.priceChange24h,
+    }, 'dexscreener');
+    
+    const updated = await getTokenData(tokenMint);
+    if (updated && hasRequiredFields(updated, requiredFields)) {
+      return true;
+    }
+  }
+  
+  const geckoData = await fetchFromGeckoTerminal(tokenMint);
+  if (geckoData) {
+    await upsertTokenData(tokenMint, {
+      tokenSymbol: geckoData.tokenSymbol,
+      tokenName: geckoData.tokenName,
+      priceUsd: geckoData.priceUsd,
+      marketCap: geckoData.marketCap,
+      fdv: geckoData.fdv,
+      volume24h: geckoData.volume24h,
+    }, 'geckoterminal');
+    
+    const updated = await getTokenData(tokenMint);
+    if (updated && hasRequiredFields(updated, requiredFields)) {
+      return true;
+    }
+  }
+  
+  if (requiredFields.includes('holders') || requiredFields.includes('topHolders')) {
+    console.log(`[Enrichment] Would use Helius for ${tokenMint} holders (not implemented)`);
+  }
+  
+  return false;
+}
+
+function hasRequiredFields(data: TokenDataPoolEntry, requiredFields: string[]): boolean {
+  for (const field of requiredFields) {
+    const value = (data as Record<string, unknown>)[field];
+    if (value === null || value === undefined) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function getEnrichmentQueueStats(): {
+  queueLength: number;
+  isRunning: boolean;
+  byPriority: { high: number; normal: number; low: number };
+} {
+  return {
+    queueLength: ENRICHMENT_QUEUE.length,
+    isRunning: isEnrichmentRunning,
+    byPriority: {
+      high: ENRICHMENT_QUEUE.filter(r => r.priority === 'high').length,
+      normal: ENRICHMENT_QUEUE.filter(r => r.priority === 'normal').length,
+      low: ENRICHMENT_QUEUE.filter(r => r.priority === 'low').length,
+    },
+  };
+}
+
+export async function bulkEnrich(
+  tokenMints: string[],
+  priority: 'high' | 'normal' | 'low' = 'low'
+): Promise<number> {
+  let queued = 0;
+  
+  for (const tokenMint of tokenMints) {
+    const cached = await getTokenData(tokenMint);
+    if (!cached || isDataStale(cached)) {
+      queueEnrichment(tokenMint, priority);
+      queued++;
+    }
+  }
+  
+  return queued;
+}
+
+function isDataStale(data: TokenDataPoolEntry): boolean {
+  const now = Math.floor(Date.now() / 1000);
+  const staleTTL = 3600;
+  return !data.priceUpdatedAt || (now - data.priceUpdatedAt) > staleTTL;
+}

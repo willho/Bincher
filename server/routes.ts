@@ -44,7 +44,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -5612,6 +5612,124 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error completing experiment:", error);
       res.status(500).json({ error: "Failed to complete experiment" });
+    }
+  });
+
+  // =====================
+  // DISCOVERY ENGINE API ROUTES
+  // =====================
+  
+  app.get("/api/discovery/stats", requireAuth, async (req, res) => {
+    try {
+      const { getDiscoveryStats } = await import("./discovery-engine");
+      const stats = await getDiscoveryStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting discovery stats:", error);
+      res.status(500).json({ error: "Failed to get discovery stats" });
+    }
+  });
+  
+  app.get("/api/discovery/events", requireAuth, async (req, res) => {
+    try {
+      const { getRecentEvents } = await import("./discovery-engine");
+      const limit = parseInt(req.query.limit as string) || 20;
+      const status = req.query.status as string | undefined;
+      const events = await getRecentEvents(limit, status);
+      res.json(events);
+    } catch (error) {
+      console.error("Error getting discovery events:", error);
+      res.status(500).json({ error: "Failed to get discovery events" });
+    }
+  });
+  
+  app.get("/api/discovery/triggers", requireAuth, async (req, res) => {
+    try {
+      const triggers = await db.select().from(discoveryTriggers)
+        .orderBy(desc(discoveryTriggers.priority));
+      res.json(triggers);
+    } catch (error) {
+      console.error("Error getting triggers:", error);
+      res.status(500).json({ error: "Failed to get triggers" });
+    }
+  });
+  
+  app.patch("/api/discovery/triggers/:id", requireAuth, async (req, res) => {
+    try {
+      const triggerId = parseInt(req.params.id);
+      const { enabled, threshold, priority, cooldownMinutes } = req.body;
+      
+      const updates: Record<string, unknown> = { updatedAt: Math.floor(Date.now() / 1000) };
+      if (enabled !== undefined) updates.enabled = enabled;
+      if (threshold !== undefined) updates.threshold = threshold;
+      if (priority !== undefined) updates.priority = priority;
+      if (cooldownMinutes !== undefined) updates.cooldownMinutes = cooldownMinutes;
+      
+      const [updated] = await db.update(discoveryTriggers)
+        .set(updates)
+        .where(eq(discoveryTriggers.id, triggerId))
+        .returning();
+      
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating trigger:", error);
+      res.status(500).json({ error: "Failed to update trigger" });
+    }
+  });
+  
+  app.post("/api/discovery/scan", requireAuth, async (req, res) => {
+    try {
+      const { scanForDiscoveries } = await import("./discovery-engine");
+      const events = await scanForDiscoveries();
+      res.json({ fired: events.length, events });
+    } catch (error) {
+      console.error("Error running discovery scan:", error);
+      res.status(500).json({ error: "Failed to run discovery scan" });
+    }
+  });
+  
+  app.post("/api/discovery/hourly-job", requireAuth, async (req, res) => {
+    try {
+      const { runHourlyMonitor } = await import("./discovery-engine");
+      const result = await runHourlyMonitor();
+      res.json(result);
+    } catch (error) {
+      console.error("Error running hourly job:", error);
+      res.status(500).json({ error: "Failed to run hourly job" });
+    }
+  });
+  
+  app.post("/api/discovery/daily-tune", requireAuth, async (req, res) => {
+    try {
+      const { runDailyTuning } = await import("./discovery-engine");
+      const result = await runDailyTuning();
+      res.json(result);
+    } catch (error) {
+      console.error("Error running daily tune:", error);
+      res.status(500).json({ error: "Failed to run daily tune" });
+    }
+  });
+  
+  app.get("/api/discovery/job-history", requireAuth, async (req, res) => {
+    try {
+      const runs = await db.select().from(discoveryJobRuns)
+        .orderBy(desc(discoveryJobRuns.startedAt))
+        .limit(20);
+      res.json(runs);
+    } catch (error) {
+      console.error("Error getting job history:", error);
+      res.status(500).json({ error: "Failed to get job history" });
+    }
+  });
+  
+  app.post("/api/discovery/init-triggers", requireAuth, async (req, res) => {
+    try {
+      const { initializeDefaultTriggers } = await import("./discovery-engine");
+      await initializeDefaultTriggers();
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error initializing triggers:", error);
+      res.status(500).json({ error: "Failed to initialize triggers" });
     }
   });
 

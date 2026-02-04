@@ -311,3 +311,207 @@ export async function getClusterStats(): Promise<{
     avgSuccessRate: avgSuccess,
   };
 }
+
+// =====================
+// CLUSTER MERGE/DIVERGE WITH AI DECISIONS
+// =====================
+
+interface MergeProposal {
+  clusterId1: string;
+  clusterId2: string;
+  sharedWallets: string[];
+  overlapPercent: number;
+  confidence: number;
+  reason: string;
+}
+
+interface DivergeProposal {
+  clusterId: string;
+  subgroups: string[][];
+  divergenceScore: number;
+  reason: string;
+}
+
+export function detectClusterOverlap(
+  cluster1: WalletCluster,
+  cluster2: WalletCluster
+): MergeProposal | null {
+  const sharedWallets = cluster1.members.filter(w => cluster2.members.includes(w));
+  
+  if (sharedWallets.length === 0) return null;
+  
+  const overlapPercent = sharedWallets.length / Math.min(cluster1.members.length, cluster2.members.length);
+  
+  if (overlapPercent < 0.3) return null;
+  
+  const tokenOverlap = cluster1.tokenOverlap.filter(t => cluster2.tokenOverlap.includes(t));
+  
+  return {
+    clusterId1: cluster1.id,
+    clusterId2: cluster2.id,
+    sharedWallets,
+    overlapPercent,
+    confidence: overlapPercent * 0.6 + (tokenOverlap.length / 10) * 0.4,
+    reason: `${sharedWallets.length} shared wallets (${(overlapPercent * 100).toFixed(0)}%), ${tokenOverlap.length} shared tokens`,
+  };
+}
+
+export async function detectDivergence(cluster: WalletCluster): Promise<DivergeProposal | null> {
+  if (cluster.members.length < 6) return null;
+  
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - 7 * 24 * 3600;
+  
+  const activityByWallet: Record<string, { tokens: string[]; avgTime: number; count: number }> = {};
+  
+  for (const wallet of cluster.members) {
+    const recentSwaps = await db.query.swaps.findMany({
+      where: and(
+        eq(swaps.source, wallet),
+        gte(swaps.timestamp, cutoff)
+      ),
+    });
+    
+    const tokens = Array.from(new Set(recentSwaps.map(s => s.toToken)));
+    const avgTime = recentSwaps.length > 0 
+      ? recentSwaps.reduce((sum, s) => sum + s.timestamp, 0) / recentSwaps.length 
+      : 0;
+    
+    activityByWallet[wallet] = { tokens, avgTime, count: recentSwaps.length };
+  }
+  
+  const activeWallets = Object.entries(activityByWallet).filter(([_, a]) => a.count > 0);
+  const inactiveWallets = Object.entries(activityByWallet).filter(([_, a]) => a.count === 0);
+  
+  if (inactiveWallets.length >= cluster.members.length * 0.4) {
+    return {
+      clusterId: cluster.id,
+      subgroups: [
+        activeWallets.map(([w]) => w),
+        inactiveWallets.map(([w]) => w),
+      ],
+      divergenceScore: inactiveWallets.length / cluster.members.length,
+      reason: `${inactiveWallets.length} wallets inactive (${(inactiveWallets.length / cluster.members.length * 100).toFixed(0)}%)`,
+    };
+  }
+  
+  return null;
+}
+
+export function mergeClusters(
+  cluster1: WalletCluster,
+  cluster2: WalletCluster
+): WalletCluster {
+  const mergedMembers = Array.from(new Set([...cluster1.members, ...cluster2.members]));
+  const mergedTokens = Array.from(new Set([...cluster1.tokenOverlap, ...cluster2.tokenOverlap]));
+  
+  const avgSuccessRate = (
+    ((cluster1.successRate || 0) * cluster1.members.length) +
+    ((cluster2.successRate || 0) * cluster2.members.length)
+  ) / (cluster1.members.length + cluster2.members.length);
+  
+  const merged: WalletCluster = {
+    id: `merged_${cluster1.id}_${cluster2.id}`,
+    members: mergedMembers,
+    tokenOverlap: mergedTokens,
+    timingCorrelation: (cluster1.timingCorrelation + cluster2.timingCorrelation) / 2,
+    detectedVia: cluster1.detectedVia,
+    firstSeen: Math.min(cluster1.firstSeen, cluster2.firstSeen),
+    lastSeen: Math.max(cluster1.lastSeen, cluster2.lastSeen),
+    successRate: avgSuccessRate,
+  };
+  
+  CLUSTER_CACHE.delete(cluster1.id);
+  CLUSTER_CACHE.delete(cluster2.id);
+  CLUSTER_CACHE.set(merged.id, merged);
+  
+  console.log(`[Cluster] Merged ${cluster1.id} + ${cluster2.id} → ${merged.id} (${merged.members.length} wallets)`);
+  
+  return merged;
+}
+
+export function divergeCluster(
+  cluster: WalletCluster,
+  subgroups: string[][]
+): WalletCluster[] {
+  CLUSTER_CACHE.delete(cluster.id);
+  
+  const newClusters: WalletCluster[] = [];
+  
+  for (let i = 0; i < subgroups.length; i++) {
+    const members = subgroups[i];
+    if (members.length < MIN_CLUSTER_SIZE) continue;
+    
+    const subCluster: WalletCluster = {
+      id: `${cluster.id}_sub${i + 1}`,
+      members,
+      tokenOverlap: cluster.tokenOverlap,
+      timingCorrelation: cluster.timingCorrelation,
+      detectedVia: cluster.detectedVia,
+      firstSeen: cluster.firstSeen,
+      lastSeen: Math.floor(Date.now() / 1000),
+      successRate: cluster.successRate,
+    };
+    
+    CLUSTER_CACHE.set(subCluster.id, subCluster);
+    newClusters.push(subCluster);
+  }
+  
+  console.log(`[Cluster] Diverged ${cluster.id} → ${newClusters.length} sub-clusters`);
+  
+  return newClusters;
+}
+
+export async function runClusterMaintenance(): Promise<{
+  merged: number;
+  diverged: number;
+  proposals: { merges: MergeProposal[]; diverges: DivergeProposal[] };
+}> {
+  const clusters = getCachedClusters();
+  const mergeProposals: MergeProposal[] = [];
+  const divergeProposals: DivergeProposal[] = [];
+  
+  for (let i = 0; i < clusters.length; i++) {
+    for (let j = i + 1; j < clusters.length; j++) {
+      const proposal = detectClusterOverlap(clusters[i], clusters[j]);
+      if (proposal && proposal.confidence > 0.5) {
+        mergeProposals.push(proposal);
+      }
+    }
+  }
+  
+  for (const cluster of clusters) {
+    const proposal = await detectDivergence(cluster);
+    if (proposal && proposal.divergenceScore > 0.4) {
+      divergeProposals.push(proposal);
+    }
+  }
+  
+  let merged = 0;
+  for (const proposal of mergeProposals.filter(p => p.confidence > 0.7)) {
+    const c1 = CLUSTER_CACHE.get(proposal.clusterId1);
+    const c2 = CLUSTER_CACHE.get(proposal.clusterId2);
+    if (c1 && c2) {
+      mergeClusters(c1, c2);
+      merged++;
+    }
+  }
+  
+  let diverged = 0;
+  for (const proposal of divergeProposals.filter(p => p.divergenceScore > 0.6)) {
+    const cluster = CLUSTER_CACHE.get(proposal.clusterId);
+    if (cluster) {
+      divergeCluster(cluster, proposal.subgroups);
+      diverged++;
+    }
+  }
+  
+  return {
+    merged,
+    diverged,
+    proposals: {
+      merges: mergeProposals,
+      diverges: divergeProposals,
+    },
+  };
+}

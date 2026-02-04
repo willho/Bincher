@@ -2359,3 +2359,180 @@ export const strategyExperiments = pgTable("strategy_experiments", {
 export const insertStrategyExperimentsSchema = createInsertSchema(strategyExperiments).omit({ id: true });
 export type StrategyExperiment = typeof strategyExperiments.$inferSelect;
 export type InsertStrategyExperiment = z.infer<typeof insertStrategyExperimentsSchema>;
+
+// =============================================
+// PHASE E: DISCOVERY & AI LEARNING
+// =============================================
+
+// Discovery triggers - configurable thresholds that fire discovery events
+export const discoveryTriggers = pgTable("discovery_triggers", {
+  id: serial("id").primaryKey(),
+  
+  // Trigger identification
+  name: text("name").notNull(),
+  description: text("description"),
+  metric: text("metric").notNull(), // price_surge, volume_spike, whale_buy, cluster_activity, heat_score, holder_growth
+  
+  // Threshold configuration
+  threshold: real("threshold").notNull(), // Value to exceed
+  timeWindowMinutes: integer("time_window_minutes").default(60), // Lookback window
+  operator: text("operator").notNull().default("gte"), // gte, lte, eq, change_pct
+  
+  // Priority and cooldowns
+  priority: integer("priority").notNull().default(50), // 1-100, higher = more important
+  cooldownMinutes: integer("cooldown_minutes").default(30), // Min time between fires per token
+  
+  // AI evolution tracking
+  isAiProposed: boolean("is_ai_proposed").default(false),
+  shadowMode: boolean("shadow_mode").default(false), // Tracks but doesn't act
+  promotedAt: integer("promoted_at"), // When shadow->active
+  parentTriggerId: integer("parent_trigger_id"), // For AI-evolved variants
+  
+  // Performance stats
+  fireCount: integer("fire_count").default(0),
+  truePositives: integer("true_positives").default(0), // Led to profit
+  falsePositives: integer("false_positives").default(0), // Led to loss
+  precision: real("precision"), // TP / (TP + FP)
+  
+  // Dampening
+  currentWeight: real("current_weight").default(1.0),
+  dampeningFactor: real("dampening_factor").default(0.1), // How fast weights change
+  explorationPhase: boolean("exploration_phase").default(true), // Fast learning
+  
+  // Status
+  enabled: boolean("enabled").default(true),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertDiscoveryTriggersSchema = createInsertSchema(discoveryTriggers).omit({ id: true });
+export type DiscoveryTrigger = typeof discoveryTriggers.$inferSelect;
+export type InsertDiscoveryTrigger = z.infer<typeof insertDiscoveryTriggersSchema>;
+
+// Discovery events - fired when triggers match
+export const discoveryEvents = pgTable("discovery_events", {
+  id: serial("id").primaryKey(),
+  
+  triggerId: integer("trigger_id").notNull(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  
+  // Event context
+  metricValue: real("metric_value").notNull(), // Actual value that triggered
+  threshold: real("threshold").notNull(), // Threshold at fire time
+  priority: integer("priority").notNull(),
+  
+  // Market snapshot at discovery
+  priceAtDiscovery: real("price_at_discovery"),
+  marketCapAtDiscovery: real("market_cap_at_discovery"),
+  liquidityAtDiscovery: real("liquidity_at_discovery"),
+  volumeAtDiscovery: real("volume_at_discovery"),
+  
+  // Outcome tracking
+  priceAfter1h: real("price_after_1h"),
+  priceAfter4h: real("price_after_4h"),
+  priceAfter24h: real("price_after_24h"),
+  outcome: text("outcome"), // profit, loss, neutral, pending
+  outcomePercent: real("outcome_percent"),
+  
+  // Actions taken
+  paperPositionId: integer("paper_position_id"),
+  wasActedUpon: boolean("was_acted_upon").default(false),
+  
+  // Status
+  status: text("status").notNull().default("pending"), // pending, tracked, expired
+  firedAt: integer("fired_at").notNull(),
+  expiresAt: integer("expires_at"),
+  evaluatedAt: integer("evaluated_at"),
+});
+
+export type DiscoveryEvent = typeof discoveryEvents.$inferSelect;
+
+// Discovery metrics - self-evolving metric definitions
+export const discoveryMetrics = pgTable("discovery_metrics", {
+  id: serial("id").primaryKey(),
+  
+  name: text("name").notNull().unique(), // price_surge, volume_spike, etc.
+  description: text("description"),
+  
+  // Calculation method
+  calculationType: text("calculation_type").notNull(), // absolute, percent_change, ratio, composite
+  formula: text("formula"), // For composite: JSON of sub-metrics
+  
+  // Data sources
+  primarySource: text("primary_source").notNull(), // token_data_pool, swap_history, holder_cache
+  updateFrequency: integer("update_frequency_seconds").default(60),
+  
+  // Performance baseline
+  baselineHitRate: real("baseline_hit_rate"), // Expected precision
+  currentHitRate: real("current_hit_rate"),
+  sampleSize: integer("sample_size").default(0),
+  
+  // AI proposals for improvement
+  proposedVariants: text("proposed_variants"), // JSON array of AI-proposed tweaks
+  
+  // Status
+  isCore: boolean("is_core").default(false), // Built-in vs AI-created
+  enabled: boolean("enabled").default(true),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export type DiscoveryMetric = typeof discoveryMetrics.$inferSelect;
+
+// Regime detection - market condition tracking
+export const marketRegimes = pgTable("market_regimes", {
+  id: serial("id").primaryKey(),
+  
+  // Regime identification
+  name: text("name").notNull(), // bull, bear, crab, volatile, quiet
+  
+  // Detection criteria
+  solPriceChangeThreshold: real("sol_price_change_threshold"), // e.g., +10% = bull
+  volumeRatioThreshold: real("volume_ratio_threshold"), // Current vs avg
+  volatilityThreshold: real("volatility_threshold"),
+  
+  // Current regime tracking
+  detectedAt: integer("detected_at"),
+  confidence: real("confidence"),
+  duration: integer("duration_minutes"),
+  
+  // Performance by regime
+  avgTriggerPrecision: real("avg_trigger_precision"),
+  avgOutcomePercent: real("avg_outcome_percent"),
+  sampleSize: integer("sample_size").default(0),
+  
+  // Recommended adjustments
+  thresholdMultiplier: real("threshold_multiplier").default(1.0), // Scale triggers in this regime
+  cooldownMultiplier: real("cooldown_multiplier").default(1.0),
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export type MarketRegime = typeof marketRegimes.$inferSelect;
+
+// Discovery job runs - hourly/daily job tracking
+export const discoveryJobRuns = pgTable("discovery_job_runs", {
+  id: serial("id").primaryKey(),
+  
+  jobType: text("job_type").notNull(), // hourly_monitor, daily_tune, regime_detect
+  
+  // Run details
+  startedAt: integer("started_at").notNull(),
+  completedAt: integer("completed_at"),
+  
+  // Stats
+  triggersEvaluated: integer("triggers_evaluated").default(0),
+  eventsFired: integer("events_fired").default(0),
+  outcomesUpdated: integer("outcomes_updated").default(0),
+  thresholdsAdjusted: integer("thresholds_adjusted").default(0),
+  
+  // Regime at run time
+  currentRegime: text("current_regime"),
+  
+  // Summary
+  summary: text("summary"), // JSON of key findings
+  status: text("status").notNull().default("running"), // running, completed, failed
+  error: text("error"),
+});
