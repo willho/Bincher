@@ -4113,6 +4113,21 @@ export async function chatWithAI(
     createdAt: now,
   });
 
+  // Route message to determine what vectors to load (token-efficient routing)
+  const { routeMessage, recordRouteFeedback } = await import("./vector-router");
+  const routeResult = await routeMessage(userMessage);
+  
+  // Extract token/wallet from message for context loading
+  const tokenMintMatch = userMessage.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
+  const tokenMint = tokenMintMatch ? tokenMintMatch[0] : undefined;
+  const walletMatch = userMessage.match(/[1-9A-HJ-NP-Za-km-z]{43,44}/);
+  const walletAddress = walletMatch ? walletMatch[0] : undefined;
+  
+  // Load vectors dynamically based on route
+  const { loadVectorsForRoute, vectorsToPromptContext } = await import("./vector-loader");
+  const loadedVectors = await loadVectorsForRoute(routeResult, userId, tokenMint, walletAddress);
+  const vectorContext = vectorsToPromptContext(loadedVectors);
+
   // Get cross-channel history to maintain context across web and telegram
   const crossChannelHistory = await getCrossChannelHistory(userId, 20);
   
@@ -4144,6 +4159,11 @@ export async function chatWithAI(
   
   // Generate the personality-driven system prompt with vector learning
   let systemPrompt = await buildPincherSystemPromptAsync(pincherContext);
+  
+  // Add dynamically loaded vector context (token-efficient based on routing)
+  if (vectorContext) {
+    systemPrompt += `\n\n${vectorContext}`;
+  }
   
   // Check for pending trade and pending settings
   const pendingTradeCtx = getPendingTradeContext(userId);
@@ -4707,11 +4727,13 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
               let summary = `TOKEN SAFETY CHECK:\n\n`;
               summary += `Token: ${tokenMint.slice(0, 8)}...\n\n`;
               
+              const source = safety.rugcheck && safety.goplus ? 'both' : safety.rugcheck ? 'rugcheck' : safety.goplus ? 'goplus' : 'none';
+              
               if (safety.rugcheck) {
                 const riskLevel = (safety.rugcheck as any).riskLevel || 'unknown';
                 summary += `RUGCHECK:\n`;
                 summary += `  Risk level: ${riskLevel}\n`;
-                summary += `  Checked: ${safety.rugcheckCheckedAt ? new Date(safety.rugcheckCheckedAt * 1000).toLocaleString() : 'Never'}\n\n`;
+                summary += `  Status: Checked\n\n`;
               } else {
                 summary += `RUGCHECK: Not checked yet\n\n`;
               }
@@ -4721,12 +4743,12 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
                 summary += `GOPLUS:\n`;
                 summary += `  Honeypot: ${gp.is_honeypot ? "YES - DANGER" : "No"}\n`;
                 summary += `  Mintable: ${gp.is_mintable ? "Yes" : "No"}\n`;
-                summary += `  Checked: ${safety.goplusCheckedAt ? new Date(safety.goplusCheckedAt * 1000).toLocaleString() : 'Never'}\n\n`;
+                summary += `  Status: Checked\n\n`;
               } else {
                 summary += `GOPLUS: Not checked yet\n\n`;
               }
               
-              summary += `Data source: ${safety.source || 'pending'}\n`;
+              summary += `Data source: ${source}\n`;
               
               toolResults.push(summary);
             }
@@ -4793,6 +4815,17 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
       
       const assistantMessage = followUp.choices[0]?.message?.content || toolResults.join("\n");
       
+      // Record which tools were actually used for vector routing feedback
+      const usedTools = message.tool_calls.map(tc => {
+        if ('function' in tc) {
+          return (tc as { function: { name: string } }).function.name;
+        }
+        return null;
+      }).filter(Boolean) as string[];
+      
+      recordRouteFeedback(routeResult.intent, usedTools, userMessage)
+        .catch(err => console.error("[VectorRouter] Feedback recording failed:", err));
+      
       await db.insert(aiChatMessages).values({
         userId,
         role: "assistant",
@@ -4805,6 +4838,10 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
     }
 
     const assistantMessage = message?.content || "I couldn't generate a response.";
+    
+    // No tools used - record feedback for routing (likely casual intent)
+    recordRouteFeedback(routeResult.intent, [], userMessage)
+      .catch(err => console.error("[VectorRouter] Feedback recording failed:", err));
 
     await db.insert(aiChatMessages).values({
       userId,

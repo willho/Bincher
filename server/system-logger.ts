@@ -330,6 +330,16 @@ export async function cleanupAllLogs(): Promise<{ [key: string]: number }> {
     results.clusters = 0;
   }
   
+  try {
+    const { shouldRunAggregation, run8HourAggregation } = await import("./vector-aggregation");
+    if (shouldRunAggregation()) {
+      const aggResult = await run8HourAggregation();
+      results.vectorAggregation = aggResult.routeUpdates + aggResult.strategyUpdates + aggResult.behaviorUpdates;
+    }
+  } catch (err) {
+    console.error("[Logger] Vector aggregation failed:", err);
+  }
+  
   const totalDeleted = Object.values(results).reduce((a, b) => a + b, 0);
   if (totalDeleted > 0) {
     console.log(`[Logger] Cleanup: ${JSON.stringify(results)}`);
