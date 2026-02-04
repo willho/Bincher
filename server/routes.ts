@@ -44,7 +44,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -1916,6 +1916,110 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting log summary:", error);
       res.status(500).json({ error: "Failed to get log summary" });
+    }
+  });
+
+  // Admin: Budget pool status for all users
+  app.get("/api/admin/budget-pool-status", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { getPoolSummary, cleanupOldQueueItems } = await import("./budget-manager");
+      
+      const poolSummary = await getPoolSummary();
+      const queueItemsCleaned = await cleanupOldQueueItems();
+      
+      // Get queue stats from db
+      const queueStats = await db.select({
+        status: apiQueue.status,
+        count: sql<number>`count(*)`,
+        avgWait: sql<number>`avg(extract(epoch from (now() - ${apiQueue.createdAt})))`,
+      })
+        .from(apiQueue)
+        .groupBy(apiQueue.status);
+      
+      const userBudgets = await db.select({
+        userId: userBudgetUsage.userId,
+        monthlyBudget: userBudgetUsage.monthlyBudget,
+        usedCredits: userBudgetUsage.usedCredits,
+        projectedEndOfMonth: userBudgetUsage.projectedEndOfMonth,
+        throttleRate: userBudgetUsage.throttleRate,
+        lastThrottleAt: userBudgetUsage.lastThrottleAt,
+      })
+        .from(budgetUsage)
+        .limit(50);
+
+      res.json({
+        pool: poolSummary,
+        queueStats,
+        queueItemsCleaned,
+        userBudgets,
+      });
+    } catch (error) {
+      console.error("Error getting budget pool status:", error);
+      res.status(500).json({ error: "Failed to get budget pool status" });
+    }
+  });
+
+  // Admin: Data pool status
+  app.get("/api/admin/data-pool-status", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { getDataPoolStats, isSystemIdle, getStaleTokensForRefresh, getStaleHoldersForRefresh } = await import("./data-pool");
+      
+      const stats = await getDataPoolStats();
+      const idle = isSystemIdle();
+      const staleTokens = await getStaleTokensForRefresh(5);
+      const staleHolders = await getStaleHoldersForRefresh(5);
+
+      res.json({
+        ...stats,
+        systemIdle: idle,
+        staleTokensSample: staleTokens,
+        staleHoldersSample: staleHolders,
+      });
+    } catch (error) {
+      console.error("Error getting data pool status:", error);
+      res.status(500).json({ error: "Failed to get data pool status" });
+    }
+  });
+
+  // Admin: Throttle status across users
+  app.get("/api/admin/throttle-status", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const throttledUsers = await db.select({
+        userId: userBudgetUsage.userId,
+        throttleRate: userBudgetUsage.throttleRate,
+        usedCredits: userBudgetUsage.usedCredits,
+        monthlyBudget: userBudgetUsage.monthlyBudget,
+        lastThrottleAt: userBudgetUsage.lastThrottleAt,
+      })
+        .from(budgetUsage)
+        .where(sql`${userBudgetUsage.throttleRate} > 0`);
+
+      const queueBacklog = await db.select({
+        priority: apiQueue.priority,
+        count: sql<number>`count(*)`,
+        oldestItem: sql<string>`min(${apiQueue.createdAt})`,
+      })
+        .from(apiQueue)
+        .where(eq(apiQueue.status, "pending"))
+        .groupBy(apiQueue.priority);
+
+      res.json({
+        throttledUserCount: throttledUsers.length,
+        throttledUsers,
+        queueBacklog,
+      });
+    } catch (error) {
+      console.error("Error getting throttle status:", error);
+      res.status(500).json({ error: "Failed to get throttle status" });
     }
   });
 
@@ -5561,6 +5665,18 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error fetching wallet strategy:", error);
       res.status(500).json({ error: "Failed to fetch strategy" });
+    }
+  });
+
+  app.post("/api/paper/strategies/:wallet/analyze", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { analyzeWalletStrategy, saveWalletStrategy } = await import("./paper-trading");
+      const analysis = await analyzeWalletStrategy(req.params.wallet, req.user!.id);
+      const saved = await saveWalletStrategy(req.params.wallet, req.user!.id, analysis);
+      res.json({ analysis, saved });
+    } catch (error) {
+      console.error("Error analyzing wallet strategy:", error);
+      res.status(500).json({ error: "Failed to analyze strategy" });
     }
   });
 

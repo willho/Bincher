@@ -1864,6 +1864,52 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_wallet_strategy",
+      description: "Get AI-analyzed trading strategy for a signal wallet. Shows their trading style, win rate, hold duration, typical take-profit/stop-loss levels, and insights. Use when user asks about a wallet's strategy, trading patterns, or how they trade.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletIdentifier: {
+            type: "string",
+            description: "The wallet address or label/name to analyze"
+          }
+        },
+        required: ["walletIdentifier"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "analyze_wallet_strategy",
+      description: "Trigger fresh analysis of a signal wallet's trading strategy from their swap history. Use when user wants to update or refresh the strategy analysis.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletIdentifier: {
+            type: "string",
+            description: "The wallet address or label/name to analyze"
+          }
+        },
+        required: ["walletIdentifier"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_paper_trading_stats",
+      description: "Get paper trading stats showing open positions, total trades, win rate, P&L. Use when user asks about their paper trading performance or simulated trades.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    }
   }
 ];
 
@@ -3237,6 +3283,35 @@ async function executeListMonitoredWallets(userId: number): Promise<{ success: b
   };
 }
 
+function formatDurationSeconds(seconds: number): string {
+  if (!seconds || seconds < 0) return "0s";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / 86400)}d`;
+}
+
+async function findWalletByIdentifier(userId: number, identifier: string): Promise<{ walletAddress: string; label?: string | null } | null> {
+  const wallets = await db.select()
+    .from(monitoredWallets)
+    .where(eq(monitoredWallets.userId, userId));
+  
+  // First try exact address match
+  const addressMatch = wallets.find(w => 
+    w.walletAddress.toLowerCase() === identifier.toLowerCase()
+  );
+  if (addressMatch) return addressMatch;
+  
+  // Then try label partial match
+  const searchLower = identifier.toLowerCase();
+  const labelMatch = wallets.find(w => 
+    w.label && w.label.toLowerCase().includes(searchLower)
+  );
+  if (labelMatch) return labelMatch;
+  
+  return null;
+}
+
 async function executeFindWalletByLabel(userId: number, args: any): Promise<{ success: boolean; message: string; wallet?: any }> {
   const { label } = args;
   
@@ -4370,6 +4445,74 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
               }
               toolResults.push(summary);
             }
+          }
+          // Wallet strategy tools
+          else if (toolName === "get_wallet_strategy") {
+            const wallet = await findWalletByIdentifier(userId, args.walletIdentifier);
+            if (!wallet) {
+              toolResults.push(`Could not find wallet matching "${args.walletIdentifier}"`);
+            } else {
+              const { getWalletStrategy } = await import("./paper-trading");
+              const strategy = await getWalletStrategy(wallet.walletAddress, userId);
+              
+              if (!strategy || !strategy.sampleSize || strategy.sampleSize === 0) {
+                toolResults.push(`No strategy analysis found for "${wallet.label || wallet.walletAddress}". I can analyze their trading history - just ask me to analyze this wallet's strategy.`);
+              } else {
+                let summary = `STRATEGY ANALYSIS for ${wallet.label || wallet.walletAddress}:\n\n`;
+                summary += `Type: ${strategy.strategyType} (${strategy.tradingStyle})\n`;
+                summary += `Win Rate: ${((strategy.winRate || 0) * 100).toFixed(1)}%\n`;
+                summary += `Avg Hold: ${formatDurationSeconds(strategy.avgHoldDuration || 0)}\n`;
+                summary += `Avg Position: ${(strategy.avgPositionSize || 0).toFixed(2)} SOL\n`;
+                summary += `Profit Factor: ${(strategy.profitFactor || 0).toFixed(2)}x\n`;
+                summary += `Take Profit: ${(((strategy.takeProfitMultiplier || 1) - 1) * 100).toFixed(0)}%\n`;
+                summary += `Stop Loss: ${((strategy.stopLossPercent || 0) * 100).toFixed(0)}%\n`;
+                summary += `Risk Level: ${strategy.riskLevel || 5}/10\n`;
+                summary += `Confidence: ${((strategy.confidenceScore || 0) * 100).toFixed(0)}% (${strategy.sampleSize} trades)\n`;
+                toolResults.push(summary);
+              }
+            }
+          }
+          else if (toolName === "analyze_wallet_strategy") {
+            const wallet = await findWalletByIdentifier(userId, args.walletIdentifier);
+            if (!wallet) {
+              toolResults.push(`Could not find wallet matching "${args.walletIdentifier}"`);
+            } else {
+              const { analyzeWalletStrategy, saveWalletStrategy } = await import("./paper-trading");
+              const analysis = await analyzeWalletStrategy(wallet.walletAddress, userId);
+              await saveWalletStrategy(wallet.walletAddress, userId, analysis);
+              
+              let summary = `FRESH STRATEGY ANALYSIS for ${wallet.label || wallet.walletAddress}:\n\n`;
+              summary += `Type: ${analysis.strategyType} (${analysis.tradingStyle})\n`;
+              summary += `Win Rate: ${(analysis.winRate * 100).toFixed(1)}%\n`;
+              summary += `Avg Hold: ${formatDurationSeconds(analysis.avgHoldDuration)}\n`;
+              summary += `Avg Position: ${analysis.avgPositionSize.toFixed(2)} SOL\n`;
+              summary += `Profit Factor: ${analysis.profitFactor.toFixed(2)}x\n`;
+              summary += `Take Profit: ${((analysis.takeProfitMultiplier - 1) * 100).toFixed(0)}%\n`;
+              summary += `Stop Loss: ${(analysis.stopLossPercent * 100).toFixed(0)}%\n`;
+              summary += `Risk Level: ${analysis.riskLevel}/10\n`;
+              summary += `Confidence: ${(analysis.confidenceScore * 100).toFixed(0)}% (${analysis.sampleSize} trades)\n`;
+              if (analysis.insights && analysis.insights.length > 0) {
+                summary += `\nINSIGHTS:\n`;
+                for (const insight of analysis.insights) {
+                  summary += `  - ${insight}\n`;
+                }
+              }
+              toolResults.push(summary);
+            }
+          }
+          else if (toolName === "get_paper_trading_stats") {
+            const { getPaperTradingStats } = await import("./paper-trading");
+            const stats = await getPaperTradingStats(userId);
+            
+            let summary = `PAPER TRADING STATS:\n\n`;
+            summary += `Open Positions: ${stats.openPositions}\n`;
+            summary += `Total Trades: ${stats.totalTrades}\n`;
+            summary += `Win Rate: ${(stats.winRate * 100).toFixed(1)}%\n`;
+            summary += `Wins/Losses: ${stats.wins}/${stats.losses}\n`;
+            summary += `Total P&L: ${stats.totalPnl >= 0 ? "+" : ""}${stats.totalPnl.toFixed(4)} SOL\n`;
+            summary += `Avg P&L %: ${stats.avgPnlPercent >= 0 ? "+" : ""}${stats.avgPnlPercent.toFixed(1)}%\n`;
+            
+            toolResults.push(summary);
           }
         } catch (parseError) {
           console.error("Failed to parse tool arguments:", parseError);

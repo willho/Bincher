@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff, Globe, AlertTriangle, Server, Webhook, ArrowLeftRight } from "lucide-react";
+import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff, Globe, AlertTriangle, Server, Webhook, ArrowLeftRight, Database, Gauge, Clock, Layers } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
@@ -301,6 +301,39 @@ export function AdminDashboard() {
   const { data: usageAnalytics, isLoading: analyticsLoading } = useQuery<UsageAnalyticsResponse>({
     queryKey: ["/api/admin/usage-analytics"],
     refetchInterval: 60000,
+  });
+
+  const { data: budgetPoolStatus, isLoading: budgetPoolLoading } = useQuery<{
+    pool: { totalCredits: number; usedCredits: number; surplusCredits: number; throttledUserCredits: number; discoveryCredits: number };
+    queueStats: { status: string; count: number; avgWait: number }[];
+    userBudgets: { userId: number; monthlyBudget: number; usedCredits: number; throttleRate: number }[];
+  }>({
+    queryKey: ["/api/admin/budget-pool-status"],
+    refetchInterval: 30000,
+  });
+
+  const { data: dataPoolStatus, isLoading: dataPoolLoading } = useQuery<{
+    totalTokens: number;
+    tokensFresh: number;
+    tokensStale: number;
+    holderCacheCount: number;
+    priceHistoryPoints: number;
+    fetchQueuePending: number;
+    systemIdle: boolean;
+    staleTokensSample: string[];
+    staleHoldersSample: string[];
+  }>({
+    queryKey: ["/api/admin/data-pool-status"],
+    refetchInterval: 30000,
+  });
+
+  const { data: throttleStatus, isLoading: throttleLoading } = useQuery<{
+    throttledUserCount: number;
+    throttledUsers: { userId: number; throttleRate: number; usedCredits: number; monthlyBudget: number }[];
+    queueBacklog: { priority: number; count: number; oldestItem: string }[];
+  }>({
+    queryKey: ["/api/admin/throttle-status"],
+    refetchInterval: 30000,
   });
 
   const setNetworkModeMutation = useMutation({
@@ -802,6 +835,201 @@ export function AdminDashboard() {
                   <div className="text-xs text-muted-foreground">Max Limit</div>
                 </div>
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Budget Pool Status */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="h-5 w-5" />
+            Budget Pool Status
+          </CardTitle>
+          <CardDescription>Credit allocation and queue management</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {budgetPoolLoading ? (
+            <div className="grid gap-4 md:grid-cols-4">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : budgetPoolStatus ? (
+            <div className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-5">
+                <div className="p-3 rounded-lg bg-muted/50 border text-center" data-testid="pool-total-credits">
+                  <div className="text-2xl font-bold">{(budgetPoolStatus.pool?.totalCredits || 0).toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground">Total Credits</div>
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 border text-center" data-testid="pool-used-credits">
+                  <div className="text-2xl font-bold">{(budgetPoolStatus.pool?.usedCredits || 0).toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground">Used Credits</div>
+                </div>
+                <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 text-center" data-testid="pool-surplus-credits">
+                  <div className="text-2xl font-bold text-green-600">{(budgetPoolStatus.pool?.surplusCredits || 0).toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground">Surplus Pool</div>
+                </div>
+                <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-center" data-testid="pool-throttled-credits">
+                  <div className="text-2xl font-bold text-yellow-600">{(budgetPoolStatus.pool?.throttledUserCredits || 0).toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground">For Throttled Users</div>
+                </div>
+                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 text-center" data-testid="pool-discovery-credits">
+                  <div className="text-2xl font-bold text-blue-600">{(budgetPoolStatus.pool?.discoveryCredits || 0).toLocaleString()}</div>
+                  <div className="text-xs text-muted-foreground">For Discovery</div>
+                </div>
+              </div>
+
+              {budgetPoolStatus.queueStats && budgetPoolStatus.queueStats.length > 0 && (
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm font-medium mb-2 flex items-center gap-2">
+                    <Clock className="h-4 w-4" />
+                    Queue Status
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-3">
+                    {budgetPoolStatus.queueStats.map((stat) => (
+                      <div key={stat.status} className="flex items-center justify-between p-2 bg-muted/30 rounded text-sm">
+                        <Badge variant={stat.status === "pending" ? "secondary" : stat.status === "processing" ? "default" : "outline"}>
+                          {stat.status}
+                        </Badge>
+                        <span className="font-medium">{stat.count}</span>
+                        {stat.avgWait > 0 && <span className="text-xs text-muted-foreground">{Math.round(stat.avgWait)}s avg</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-center py-4">No budget pool data available</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Data Pool Status */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Layers className="h-5 w-5" />
+            Data Pool Status
+          </CardTitle>
+          <CardDescription>Token data caching and refresh status</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {dataPoolLoading ? (
+            <div className="grid gap-4 md:grid-cols-4">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : dataPoolStatus ? (
+            <div className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-6">
+                <div className="p-3 rounded-lg bg-muted/50 border text-center" data-testid="pool-total-tokens">
+                  <div className="text-2xl font-bold">{dataPoolStatus.totalTokens}</div>
+                  <div className="text-xs text-muted-foreground">Total Tokens</div>
+                </div>
+                <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 text-center" data-testid="pool-fresh-tokens">
+                  <div className="text-2xl font-bold text-green-600">{dataPoolStatus.tokensFresh}</div>
+                  <div className="text-xs text-muted-foreground">Fresh</div>
+                </div>
+                <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-center" data-testid="pool-stale-tokens">
+                  <div className="text-2xl font-bold text-yellow-600">{dataPoolStatus.tokensStale}</div>
+                  <div className="text-xs text-muted-foreground">Stale</div>
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 border text-center" data-testid="pool-holder-cache">
+                  <div className="text-2xl font-bold">{dataPoolStatus.holderCacheCount}</div>
+                  <div className="text-xs text-muted-foreground">Holder Cache</div>
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 border text-center" data-testid="pool-price-history">
+                  <div className="text-2xl font-bold">{dataPoolStatus.priceHistoryPoints}</div>
+                  <div className="text-xs text-muted-foreground">Price Points</div>
+                </div>
+                <div className={`p-3 rounded-lg border text-center ${dataPoolStatus.systemIdle ? "bg-green-500/10 border-green-500/30" : "bg-blue-500/10 border-blue-500/30"}`} data-testid="pool-system-status">
+                  <div className="text-2xl font-bold">{dataPoolStatus.systemIdle ? "Idle" : "Busy"}</div>
+                  <div className="text-xs text-muted-foreground">System</div>
+                </div>
+              </div>
+
+              {dataPoolStatus.fetchQueuePending > 0 && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <RefreshCw className="h-4 w-4" />
+                  {dataPoolStatus.fetchQueuePending} items in fetch queue
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-center py-4">No data pool information available</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Throttle Status */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Gauge className="h-5 w-5" />
+            Throttle Status
+          </CardTitle>
+          <CardDescription>User throttling and queue backlog</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {throttleLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : throttleStatus ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <div className={`p-4 rounded-lg border ${throttleStatus.throttledUserCount > 0 ? "bg-yellow-500/10 border-yellow-500/30" : "bg-green-500/10 border-green-500/30"}`} data-testid="throttle-user-count">
+                  <div className="text-3xl font-bold">{throttleStatus.throttledUserCount}</div>
+                  <div className="text-sm text-muted-foreground">Throttled Users</div>
+                </div>
+
+                {throttleStatus.queueBacklog && throttleStatus.queueBacklog.length > 0 && (
+                  <div className="flex-1 border rounded-lg p-3">
+                    <div className="text-sm font-medium mb-2">Queue Backlog by Priority</div>
+                    <div className="flex gap-4 flex-wrap">
+                      {throttleStatus.queueBacklog.map((item) => (
+                        <div key={item.priority} className="text-center">
+                          <div className="text-lg font-bold">{item.count}</div>
+                          <div className="text-xs text-muted-foreground">P{item.priority}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {throttleStatus.throttledUsers && throttleStatus.throttledUsers.length > 0 && (
+                <div className="border rounded-lg p-3">
+                  <div className="text-sm font-medium mb-2">Throttled User Details</div>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {throttleStatus.throttledUsers.map((user) => (
+                      <div key={user.userId} className="flex items-center justify-between text-sm p-1 bg-muted/30 rounded">
+                        <span>User #{user.userId}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-muted-foreground">
+                            {user.usedCredits.toLocaleString()} / {user.monthlyBudget.toLocaleString()}
+                          </span>
+                          <Badge variant="outline" className="text-yellow-600">
+                            {Math.round(user.throttleRate * 100)}% throttle
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-4">
+              <CheckCircle className="h-8 w-8 mx-auto mb-2 text-green-500 opacity-50" />
+              <p className="text-muted-foreground">No users currently throttled</p>
             </div>
           )}
         </CardContent>

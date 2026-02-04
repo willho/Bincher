@@ -1,10 +1,10 @@
 import { db } from "./db";
 import { 
-  paperPositions, walletStrategies, strategyExperiments,
+  paperPositions, walletStrategies, strategyExperiments, swaps,
   PaperPosition, WalletStrategy, StrategyExperiment,
   InsertPaperPosition, InsertWalletStrategy, InsertStrategyExperiment
 } from "@shared/schema";
-import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, count } from "drizzle-orm";
 import { fetchTokenWithFallback } from "./data-pool";
 
 // =====================
@@ -459,4 +459,293 @@ export async function getPaperTradingStats(userId: number): Promise<{
     totalPnl,
     avgPnlPercent,
   };
+}
+
+// =====================
+// WALLET STRATEGY ANALYSIS
+// =====================
+
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+
+export interface StrategyAnalysis {
+  strategyType: string;
+  tradingStyle: string;
+  avgHoldDuration: number;
+  avgPositionSize: number;
+  winRate: number;
+  avgProfit: number;
+  avgLoss: number;
+  profitFactor: number;
+  preferredEntryTime: string;
+  entryTokenAge: string;
+  entryMarketCap: string;
+  takeProfitMultiplier: number;
+  stopLossPercent: number;
+  riskLevel: number;
+  maxConcurrentPositions: number;
+  confidenceScore: number;
+  sampleSize: number;
+  insights: string[];
+}
+
+export async function analyzeWalletStrategy(
+  walletAddress: string,
+  userId: number
+): Promise<StrategyAnalysis> {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - 90 * 86400; // 90 days of data
+  
+  const walletSwaps = await db.select().from(swaps)
+    .where(and(
+      eq(swaps.source, walletAddress),
+      gte(swaps.timestamp, cutoff)
+    ))
+    .orderBy(sql`${swaps.timestamp} DESC`);
+  
+  const buys = walletSwaps.filter(s => s.fromToken === SOL_MINT);
+  const sells = walletSwaps.filter(s => s.toToken === SOL_MINT);
+  
+  const tokenPositions: Map<string, {
+    buyTime: number;
+    sellTime?: number;
+    solSpent: number;
+    solReceived: number;
+    buyHour: number;
+    tokenSymbol: string;
+  }> = new Map();
+  
+  for (const swap of buys) {
+    const token = swap.toToken;
+    const hour = new Date(swap.timestamp * 1000).getHours();
+    if (!tokenPositions.has(token)) {
+      tokenPositions.set(token, {
+        buyTime: swap.timestamp,
+        solSpent: swap.fromAmount,
+        solReceived: 0,
+        buyHour: hour,
+        tokenSymbol: swap.toTokenSymbol || "UNKNOWN",
+      });
+    } else {
+      const pos = tokenPositions.get(token)!;
+      pos.solSpent += swap.fromAmount;
+    }
+  }
+  
+  for (const swap of sells) {
+    const token = swap.fromToken;
+    const pos = tokenPositions.get(token);
+    if (pos) {
+      pos.sellTime = swap.timestamp;
+      pos.solReceived += swap.toAmount;
+    }
+  }
+  
+  const closedPositions = Array.from(tokenPositions.values())
+    .filter(p => p.sellTime && p.solSpent > 0);
+  
+  const holdDurations: number[] = [];
+  const positionSizes: number[] = [];
+  const profitMultipliers: number[] = [];
+  const lossMultipliers: number[] = [];
+  const buyHours: number[] = [];
+  let wins = 0;
+  let totalProfit = 0;
+  let totalLoss = 0;
+  
+  for (const pos of closedPositions) {
+    const duration = (pos.sellTime! - pos.buyTime);
+    holdDurations.push(duration);
+    positionSizes.push(pos.solSpent);
+    buyHours.push(pos.buyHour);
+    
+    const multiplier = pos.solReceived / pos.solSpent;
+    if (multiplier > 1) {
+      wins++;
+      profitMultipliers.push(multiplier);
+      totalProfit += pos.solReceived - pos.solSpent;
+    } else {
+      lossMultipliers.push(multiplier);
+      totalLoss += pos.solSpent - pos.solReceived;
+    }
+  }
+  
+  const sampleSize = closedPositions.length;
+  const avgHoldDuration = sampleSize > 0 
+    ? holdDurations.reduce((a, b) => a + b, 0) / sampleSize 
+    : 0;
+  const avgPositionSize = sampleSize > 0
+    ? positionSizes.reduce((a, b) => a + b, 0) / sampleSize
+    : 0;
+  const winRate = sampleSize > 0 ? wins / sampleSize : 0;
+  
+  const avgProfit = profitMultipliers.length > 0
+    ? (profitMultipliers.reduce((a, b) => a + b, 0) / profitMultipliers.length) - 1
+    : 0;
+  const avgLoss = lossMultipliers.length > 0
+    ? 1 - (lossMultipliers.reduce((a, b) => a + b, 0) / lossMultipliers.length)
+    : 0;
+  
+  const profitFactor = totalLoss > 0 ? totalProfit / totalLoss : (totalProfit > 0 ? 999 : 0);
+  
+  const mostCommonHour = buyHours.length > 0
+    ? buyHours.sort((a, b) => 
+        buyHours.filter(h => h === a).length - buyHours.filter(h => h === b).length
+      ).pop()
+    : 12;
+  const preferredEntryTime = mostCommonHour !== undefined 
+    ? `${mostCommonHour}:00-${(mostCommonHour + 2) % 24}:00 UTC`
+    : "varied";
+  
+  let strategyType = "balanced";
+  let tradingStyle = "balanced";
+  
+  if (avgHoldDuration < 3600) {
+    strategyType = "scalper";
+    tradingStyle = "aggressive";
+  } else if (avgHoldDuration < 86400) {
+    strategyType = "momentum";
+    tradingStyle = winRate > 0.5 ? "balanced" : "aggressive";
+  } else if (avgHoldDuration < 7 * 86400) {
+    strategyType = "swing";
+    tradingStyle = "balanced";
+  } else {
+    strategyType = "holder";
+    tradingStyle = "conservative";
+  }
+  
+  const takeProfitMultiplier = profitMultipliers.length > 0
+    ? profitMultipliers.reduce((a, b) => a + b, 0) / profitMultipliers.length
+    : 1.5;
+  
+  const stopLossPercent = lossMultipliers.length > 0
+    ? 1 - (lossMultipliers.reduce((a, b) => a + b, 0) / lossMultipliers.length)
+    : 0.2;
+  
+  let riskLevel = 5;
+  if (avgPositionSize > 1 && avgHoldDuration < 3600) riskLevel = 8;
+  else if (avgPositionSize > 0.5 && avgHoldDuration < 86400) riskLevel = 6;
+  else if (avgHoldDuration > 7 * 86400) riskLevel = 3;
+  
+  const openPositions = Array.from(tokenPositions.values())
+    .filter(p => !p.sellTime).length;
+  const maxConcurrent = Math.max(openPositions, Math.ceil(buys.length / 10));
+  
+  let confidenceScore = 0;
+  if (sampleSize >= 50) confidenceScore = 0.9;
+  else if (sampleSize >= 20) confidenceScore = 0.7;
+  else if (sampleSize >= 10) confidenceScore = 0.5;
+  else if (sampleSize >= 5) confidenceScore = 0.3;
+  
+  const insights: string[] = [];
+  if (winRate > 0.6) {
+    insights.push(`Strong performer with ${(winRate * 100).toFixed(0)}% win rate`);
+  } else if (winRate < 0.4 && sampleSize > 5) {
+    insights.push(`Below average win rate - consider tighter stop losses`);
+  }
+  
+  if (profitFactor > 2) {
+    insights.push(`Excellent risk/reward ratio (${profitFactor.toFixed(1)}x)`);
+  }
+  
+  if (avgHoldDuration < 1800 && sampleSize > 10) {
+    insights.push(`Quick flipper - holds positions avg ${Math.round(avgHoldDuration / 60)} minutes`);
+  } else if (avgHoldDuration > 86400) {
+    insights.push(`Patient trader - holds positions avg ${Math.round(avgHoldDuration / 86400)} days`);
+  }
+  
+  if (avgPositionSize > 0.5) {
+    insights.push(`Large positions averaging ${avgPositionSize.toFixed(2)} SOL`);
+  }
+  
+  if (openPositions > 5) {
+    insights.push(`Currently holding ${openPositions} open positions`);
+  }
+  
+  const entryTokenAge = avgHoldDuration < 7200 ? "fresh" : avgHoldDuration < 86400 ? "established" : "mature";
+  const entryMarketCap = avgPositionSize > 1 ? "small" : avgPositionSize > 0.1 ? "micro" : "micro";
+  
+  return {
+    strategyType,
+    tradingStyle,
+    avgHoldDuration: Math.round(avgHoldDuration),
+    avgPositionSize,
+    winRate,
+    avgProfit,
+    avgLoss,
+    profitFactor,
+    preferredEntryTime,
+    entryTokenAge,
+    entryMarketCap,
+    takeProfitMultiplier,
+    stopLossPercent,
+    riskLevel,
+    maxConcurrentPositions: maxConcurrent,
+    confidenceScore,
+    sampleSize,
+    insights,
+  };
+}
+
+export async function saveWalletStrategy(
+  walletAddress: string,
+  userId: number,
+  analysis: StrategyAnalysis
+): Promise<WalletStrategy> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const existing = await getWalletStrategy(walletAddress, userId);
+  
+  if (existing) {
+    const [updated] = await db.update(walletStrategies)
+      .set({
+        strategyType: analysis.strategyType,
+        tradingStyle: analysis.tradingStyle,
+        avgHoldDuration: analysis.avgHoldDuration,
+        avgPositionSize: analysis.avgPositionSize,
+        winRate: analysis.winRate,
+        avgProfit: analysis.avgProfit,
+        avgLoss: analysis.avgLoss,
+        profitFactor: analysis.profitFactor,
+        preferredEntryTime: analysis.preferredEntryTime,
+        entryTokenAge: analysis.entryTokenAge,
+        entryMarketCap: analysis.entryMarketCap,
+        takeProfitMultiplier: analysis.takeProfitMultiplier,
+        stopLossPercent: analysis.stopLossPercent,
+        riskLevel: analysis.riskLevel,
+        maxConcurrentPositions: analysis.maxConcurrentPositions,
+        confidenceScore: analysis.confidenceScore,
+        sampleSize: analysis.sampleSize,
+        lastUpdatedAt: now,
+        version: sql`${walletStrategies.version} + 1`,
+      })
+      .where(eq(walletStrategies.id, existing.id))
+      .returning();
+    return updated;
+  }
+  
+  const [created] = await db.insert(walletStrategies).values({
+    walletAddress,
+    userId,
+    strategyType: analysis.strategyType,
+    tradingStyle: analysis.tradingStyle,
+    avgHoldDuration: analysis.avgHoldDuration,
+    avgPositionSize: analysis.avgPositionSize,
+    winRate: analysis.winRate,
+    avgProfit: analysis.avgProfit,
+    avgLoss: analysis.avgLoss,
+    profitFactor: analysis.profitFactor,
+    preferredEntryTime: analysis.preferredEntryTime,
+    entryTokenAge: analysis.entryTokenAge,
+    entryMarketCap: analysis.entryMarketCap,
+    takeProfitMultiplier: analysis.takeProfitMultiplier,
+    stopLossPercent: analysis.stopLossPercent,
+    riskLevel: analysis.riskLevel,
+    maxConcurrentPositions: analysis.maxConcurrentPositions,
+    confidenceScore: analysis.confidenceScore,
+    sampleSize: analysis.sampleSize,
+    lastUpdatedAt: now,
+    createdAt: now,
+  }).returning();
+  
+  return created;
 }

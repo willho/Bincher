@@ -26,12 +26,13 @@ import SignalWalletPage from "@/pages/signal-wallet";
 import CopySettingsPage from "@/pages/copy-settings";
 import HoldingsPage from "@/pages/holdings";
 import SignalsPage from "@/pages/signals";
+import PaperTradingPage from "@/pages/paper-trading";
 import SettingsPage from "@/pages/settings";
 import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
 import NotFound from "@/pages/not-found";
 import { PincherFooter } from "@/components/pincher-footer";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, Coins, Radio } from "lucide-react";
+import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, Coins, Radio, FlaskConical } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { SidebarGroupLabel } from "@/components/ui/sidebar";
 import { apiRequest } from "@/lib/queryClient";
@@ -44,6 +45,7 @@ const tradingItems = [
   { title: "Holdings", href: "/holdings", icon: Coins, description: "Your Positions" },
   { title: "Signals", href: "/signals", icon: Radio, description: "Signal Wallets" },
   { title: "Trading", href: "/trading", icon: TrendingUp, description: "Hot Wallet" },
+  { title: "Paper Trading", href: "/paper", icon: FlaskConical, description: "Practice Mode" },
 ];
 
 const systemItems = [
@@ -241,6 +243,7 @@ function AuthenticatedApp() {
               <Route path="/signal/:id/copy-settings" component={CopySettingsPage} />
               <Route path="/trading" component={TradingPage} />
               <Route path="/trading/:token" component={TokenPage} />
+              <Route path="/paper" component={PaperTradingPage} />
               <Route path="/settings" component={SettingsPage} />
               <Route component={NotFound} />
             </Switch>

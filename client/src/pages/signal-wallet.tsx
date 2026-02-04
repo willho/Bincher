@@ -8,10 +8,32 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer, Settings } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer, Settings, ChevronDown, ChevronUp, Sparkles, Brain, Zap, Shield, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 import { SignalWalletActivityChart } from "@/components/portfolio-charts";
+
+interface StrategyAnalysis {
+  strategyType: string;
+  tradingStyle: string;
+  avgHoldDuration: number;
+  avgPositionSize: number;
+  winRate: number;
+  avgProfit: number;
+  avgLoss: number;
+  profitFactor: number;
+  preferredEntryTime: string;
+  entryTokenAge: string;
+  entryMarketCap: string;
+  takeProfitMultiplier: number;
+  stopLossPercent: number;
+  riskLevel: number;
+  maxConcurrentPositions: number;
+  confidenceScore: number;
+  sampleSize: number;
+  insights: string[];
+}
 
 interface Trade {
   id: number;
@@ -119,6 +141,27 @@ function truncateAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+  return `${Math.round(seconds / 86400)}d`;
+}
+
+function getRiskColor(level: number): string {
+  if (level <= 3) return "text-green-500";
+  if (level <= 6) return "text-yellow-500";
+  return "text-red-500";
+}
+
+function getStyleBadgeVariant(style: string): "default" | "secondary" | "outline" {
+  switch (style) {
+    case "aggressive": return "default";
+    case "conservative": return "secondary";
+    default: return "outline";
+  }
+}
+
 export default function SignalWalletPage() {
   const params = useParams<{ id: string }>();
   const [, navigate] = useLocation();
@@ -126,6 +169,7 @@ export default function SignalWalletPage() {
   const [timeframe, setTimeframe] = useState("24h");
   const [holdingsSort, setHoldingsSort] = useState<HoldingsSortOption>("value");
   const [holdingsTab, setHoldingsTab] = useState<HoldingsTab>("signal");
+  const [showStrategyPanel, setShowStrategyPanel] = useState(false);
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
   const wsRef = useRef<WebSocket | null>(null);
@@ -183,6 +227,43 @@ export default function SignalWalletPage() {
     onError: (error: any) => {
       toast({ 
         description: error.message || "Failed to refresh history", 
+        variant: "destructive" 
+      });
+    },
+  });
+
+  const walletAddress = activity?.wallet?.address;
+
+  const { data: strategyData, isLoading: strategyLoading, refetch: refetchStrategy } = useQuery<{ analysis: StrategyAnalysis } | null>({
+    queryKey: ["/api/paper/strategies", walletAddress, "analysis"],
+    queryFn: async () => {
+      if (!walletAddress) return null;
+      const response = await fetch(`/api/paper/strategies/${walletAddress}`, {
+        credentials: "include",
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      if (data.sampleSize && data.sampleSize > 0) {
+        return { analysis: data as StrategyAnalysis };
+      }
+      return null;
+    },
+    enabled: !!walletAddress && showStrategyPanel,
+    staleTime: 300000,
+  });
+
+  const analyzeMutation = useMutation({
+    mutationFn: async () => {
+      if (!walletAddress) throw new Error("No wallet address");
+      return apiRequest("POST", `/api/paper/strategies/${walletAddress}/analyze`);
+    },
+    onSuccess: () => {
+      toast({ description: "Strategy analysis complete" });
+      refetchStrategy();
+    },
+    onError: (error: any) => {
+      toast({ 
+        description: error.message || "Failed to analyze strategy", 
         variant: "destructive" 
       });
     },
@@ -561,6 +642,205 @@ export default function SignalWalletPage() {
       </div>
 
       <SignalWalletActivityChart trades={trades} />
+
+      {/* Pincher's Strategy Panel */}
+      <Card data-testid="card-pincher-strategy">
+        <CardHeader 
+          className="cursor-pointer hover-elevate"
+          onClick={() => setShowStrategyPanel(!showStrategyPanel)}
+          data-testid="button-toggle-strategy"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              <CardTitle className="text-base">Pincher's Strategy Analysis</CardTitle>
+            </div>
+            <Button variant="ghost" size="icon" className="h-8 w-8">
+              {showStrategyPanel ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </Button>
+          </div>
+          <CardDescription>
+            AI-analyzed trading patterns and strategy recommendations
+          </CardDescription>
+        </CardHeader>
+        
+        {showStrategyPanel && (
+          <CardContent className="space-y-4">
+            {strategyLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-1/2" />
+                <Skeleton className="h-20 w-full" />
+              </div>
+            ) : !strategyData ? (
+              <div className="text-center py-6">
+                <Brain className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground mb-4">
+                  No strategy analysis yet. Analyze trading history to see patterns.
+                </p>
+                <Button 
+                  onClick={() => analyzeMutation.mutate()}
+                  disabled={analyzeMutation.isPending}
+                  data-testid="button-analyze-strategy"
+                >
+                  {analyzeMutation.isPending ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      Analyzing...
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-4 w-4 mr-2" />
+                      Analyze Strategy
+                    </>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between flex-wrap gap-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant={getStyleBadgeVariant(strategyData.analysis.tradingStyle)} className="capitalize">
+                      {strategyData.analysis.tradingStyle}
+                    </Badge>
+                    <Badge variant="outline" className="capitalize">
+                      {strategyData.analysis.strategyType}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <span>Based on {strategyData.analysis.sampleSize} trades</span>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-7 w-7"
+                      onClick={() => analyzeMutation.mutate()}
+                      disabled={analyzeMutation.isPending}
+                      data-testid="button-refresh-strategy"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${analyzeMutation.isPending ? "animate-spin" : ""}`} />
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Confidence</span>
+                    <span>{Math.round(strategyData.analysis.confidenceScore * 100)}%</span>
+                  </div>
+                  <Progress value={strategyData.analysis.confidenceScore * 100} className="h-2" />
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Trophy className="h-4 w-4" />
+                      <span>Win Rate</span>
+                    </div>
+                    <p className="text-xl font-bold">
+                      {(strategyData.analysis.winRate * 100).toFixed(1)}%
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Timer className="h-4 w-4" />
+                      <span>Avg Hold</span>
+                    </div>
+                    <p className="text-xl font-bold">
+                      {formatDuration(strategyData.analysis.avgHoldDuration)}
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Coins className="h-4 w-4" />
+                      <span>Avg Size</span>
+                    </div>
+                    <p className="text-xl font-bold">
+                      {strategyData.analysis.avgPositionSize.toFixed(2)} SOL
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Shield className="h-4 w-4" />
+                      <span>Risk Level</span>
+                    </div>
+                    <p className={`text-xl font-bold ${getRiskColor(strategyData.analysis.riskLevel)}`}>
+                      {strategyData.analysis.riskLevel}/10
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="p-3 rounded-md bg-secondary/30">
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-green-500" />
+                      Entry Patterns
+                    </h4>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Preferred Time</span>
+                        <span>{strategyData.analysis.preferredEntryTime}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Token Age</span>
+                        <span className="capitalize">{strategyData.analysis.entryTokenAge}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Market Cap</span>
+                        <span className="capitalize">{strategyData.analysis.entryMarketCap}</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div className="p-3 rounded-md bg-secondary/30">
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <TrendingDown className="h-4 w-4 text-red-500" />
+                      Exit Patterns
+                    </h4>
+                    <div className="space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Take Profit</span>
+                        <span className="text-green-500">
+                          {((strategyData.analysis.takeProfitMultiplier - 1) * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Stop Loss</span>
+                        <span className="text-red-500">
+                          -{(strategyData.analysis.stopLossPercent * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Profit Factor</span>
+                        <span>{strategyData.analysis.profitFactor.toFixed(2)}x</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {strategyData.analysis.insights && strategyData.analysis.insights.length > 0 && (
+                  <div className="p-3 rounded-md border border-primary/30 bg-primary/5">
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-primary" />
+                      Pincher's Insights
+                    </h4>
+                    <ul className="space-y-1">
+                      {strategyData.analysis.insights.map((insight, idx) => (
+                        <li key={idx} className="text-sm flex items-start gap-2">
+                          <span className="text-primary">•</span>
+                          <span>{insight}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
 
       {stats.mostTradedTokens.length > 0 && (
         <Card data-testid="card-most-traded">
