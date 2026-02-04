@@ -2212,3 +2212,150 @@ export const surplusPool = pgTable("surplus_pool", {
 export const insertSurplusPoolSchema = createInsertSchema(surplusPool).omit({ id: true });
 export type SurplusPoolEntry = typeof surplusPool.$inferSelect;
 export type InsertSurplusPoolEntry = z.infer<typeof insertSurplusPoolSchema>;
+
+// =====================
+// PAPER TRADING SCHEMA
+// =====================
+
+// Wallet strategies - Pincher's learned patterns for each signal wallet
+export const walletStrategies = pgTable("wallet_strategies", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull(),
+  userId: integer("user_id").notNull(),
+  
+  // Strategy classification
+  strategyType: text("strategy_type"), // momentum, swing, pump_fun, sniper
+  tradingStyle: text("trading_style"), // aggressive, conservative, balanced
+  
+  // Learned parameters
+  avgHoldDuration: integer("avg_hold_duration"), // seconds
+  avgPositionSize: real("avg_position_size"), // in SOL
+  winRate: real("win_rate"), // 0.0-1.0
+  avgProfit: real("avg_profit"),
+  avgLoss: real("avg_loss"),
+  profitFactor: real("profit_factor"),
+  
+  // Entry patterns
+  preferredEntryTime: text("preferred_entry_time"),
+  entryTokenAge: text("entry_token_age"), // fresh, established, mature
+  entryMarketCap: text("entry_market_cap"), // micro, small, mid
+  
+  // Exit patterns
+  takeProfitMultiplier: real("take_profit_multiplier"),
+  stopLossPercent: real("stop_loss_percent"),
+  trailingSellEnabled: boolean("trailing_sell_enabled"),
+  
+  // Risk profile
+  riskLevel: integer("risk_level"), // 1-10
+  diversification: real("diversification"),
+  maxConcurrentPositions: integer("max_concurrent_positions"),
+  
+  // Confidence
+  confidenceScore: real("confidence_score").default(0),
+  sampleSize: integer("sample_size").default(0),
+  lastUpdatedAt: integer("last_updated_at"),
+  version: integer("version").default(1),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertWalletStrategiesSchema = createInsertSchema(walletStrategies).omit({ id: true });
+export type WalletStrategy = typeof walletStrategies.$inferSelect;
+export type InsertWalletStrategy = z.infer<typeof insertWalletStrategiesSchema>;
+
+// Paper positions - simulated trades
+export const paperPositions = pgTable("paper_positions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  
+  // Position details
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  tokenName: text("token_name"),
+  
+  // Entry
+  entryPrice: real("entry_price").notNull(),
+  entrySol: real("entry_sol").notNull(),
+  entryTokens: real("entry_tokens").notNull(),
+  entryTimestamp: integer("entry_timestamp").notNull(),
+  entryTxSignature: text("entry_tx_signature"),
+  
+  // Exit
+  exitPrice: real("exit_price"),
+  exitSol: real("exit_sol"),
+  exitTimestamp: integer("exit_timestamp"),
+  exitTxSignature: text("exit_tx_signature"),
+  exitReason: text("exit_reason"), // take_profit, stop_loss, mirror_sell, manual
+  
+  // P&L
+  realizedPnl: real("realized_pnl"),
+  realizedPnlPercent: real("realized_pnl_percent"),
+  highestPrice: real("highest_price"),
+  lowestPrice: real("lowest_price"),
+  
+  // Source
+  strategyId: integer("strategy_id"),
+  signalWallet: text("signal_wallet"),
+  experimentId: integer("experiment_id"),
+  
+  // Config at entry
+  takeProfitMultiplier: real("take_profit_multiplier"),
+  stopLossPercent: real("stop_loss_percent"),
+  trailingStop: boolean("trailing_stop"),
+  
+  // Status
+  status: text("status").notNull().default("open"), // open, closed, expired
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertPaperPositionsSchema = createInsertSchema(paperPositions).omit({ id: true });
+export type PaperPosition = typeof paperPositions.$inferSelect;
+export type InsertPaperPosition = z.infer<typeof insertPaperPositionsSchema>;
+
+// Strategy experiments - A/B testing
+export const strategyExperiments = pgTable("strategy_experiments", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  
+  name: text("name").notNull(),
+  description: text("description"),
+  
+  // What to test
+  signalWallet: text("signal_wallet"),
+  strategyId: integer("strategy_id"),
+  
+  // Control vs variant
+  controlConfig: text("control_config"), // JSON
+  variantConfig: text("variant_config"), // JSON
+  
+  // Budget
+  paperBudgetSol: real("paper_budget_sol").notNull(),
+  usedBudgetSol: real("used_budget_sol").default(0),
+  
+  // Results
+  tradesControl: integer("trades_control").default(0),
+  tradesVariant: integer("trades_variant").default(0),
+  pnlControl: real("pnl_control").default(0),
+  pnlVariant: real("pnl_variant").default(0),
+  winRateControl: real("win_rate_control"),
+  winRateVariant: real("win_rate_variant"),
+  
+  // Statistics
+  pValue: real("p_value"),
+  confidenceLevel: real("confidence_level"),
+  
+  // Duration
+  startedAt: integer("started_at").notNull(),
+  endsAt: integer("ends_at"),
+  endedAt: integer("ended_at"),
+  
+  // Status
+  status: text("status").notNull().default("active"), // active, paused, completed
+  winner: text("winner"), // control, variant, inconclusive
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertStrategyExperimentsSchema = createInsertSchema(strategyExperiments).omit({ id: true });
+export type StrategyExperiment = typeof strategyExperiments.$inferSelect;
+export type InsertStrategyExperiment = z.infer<typeof insertStrategyExperimentsSchema>;

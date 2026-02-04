@@ -5473,6 +5473,148 @@ export async function registerRoutes(
     }
   });
 
+  // === PAPER TRADING ROUTES ===
+
+  const openPaperPositionSchema = z.object({
+    tokenMint: z.string().min(32),
+    tokenSymbol: z.string().optional(),
+    tokenName: z.string().optional(),
+    entrySol: z.number().positive(),
+    signalWallet: z.string().optional(),
+    strategyId: z.number().optional(),
+    experimentId: z.number().optional(),
+    takeProfitMultiplier: z.number().optional(),
+    stopLossPercent: z.number().optional(),
+    trailingStop: z.boolean().optional(),
+  });
+
+  app.post("/api/paper/positions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const parsed = openPaperPositionSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid request", details: parsed.error.errors });
+      }
+      const { openPaperPosition } = await import("./paper-trading");
+      const position = await openPaperPosition({ userId: req.user!.id, ...parsed.data });
+      res.json(position);
+    } catch (error: any) {
+      console.error("Error opening paper position:", error);
+      res.status(500).json({ error: error.message || "Failed to open paper position" });
+    }
+  });
+
+  app.get("/api/paper/positions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getOpenPositions } = await import("./paper-trading");
+      const positions = await getOpenPositions(req.user!.id);
+      res.json(positions);
+    } catch (error) {
+      console.error("Error fetching paper positions:", error);
+      res.status(500).json({ error: "Failed to fetch positions" });
+    }
+  });
+
+  app.get("/api/paper/positions/history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 50;
+      const { getPositionHistory } = await import("./paper-trading");
+      const positions = await getPositionHistory(req.user!.id, limit);
+      res.json(positions);
+    } catch (error) {
+      console.error("Error fetching position history:", error);
+      res.status(500).json({ error: "Failed to fetch history" });
+    }
+  });
+
+  app.post("/api/paper/positions/:id/close", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const positionId = parseInt(req.params.id);
+      const { reason } = req.body;
+      const { closePaperPosition } = await import("./paper-trading");
+      const position = await closePaperPosition(positionId, reason || "manual", req.user!.id);
+      if (!position) {
+        return res.status(404).json({ error: "Position not found or already closed" });
+      }
+      res.json(position);
+    } catch (error) {
+      console.error("Error closing paper position:", error);
+      res.status(500).json({ error: "Failed to close position" });
+    }
+  });
+
+  app.get("/api/paper/stats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getPaperTradingStats } = await import("./paper-trading");
+      const stats = await getPaperTradingStats(req.user!.id);
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching paper trading stats:", error);
+      res.status(500).json({ error: "Failed to fetch stats" });
+    }
+  });
+
+  app.get("/api/paper/strategies/:wallet", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getWalletStrategy } = await import("./paper-trading");
+      const strategy = await getWalletStrategy(req.params.wallet, req.user!.id);
+      res.json(strategy || { walletAddress: req.params.wallet, sampleSize: 0 });
+    } catch (error) {
+      console.error("Error fetching wallet strategy:", error);
+      res.status(500).json({ error: "Failed to fetch strategy" });
+    }
+  });
+
+  const createExperimentSchema = z.object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    signalWallet: z.string().optional(),
+    strategyId: z.number().optional(),
+    controlConfig: z.record(z.any()),
+    variantConfig: z.record(z.any()),
+    paperBudgetSol: z.number().positive(),
+    durationDays: z.number().positive().optional(),
+  });
+
+  app.post("/api/paper/experiments", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const parsed = createExperimentSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid request", details: parsed.error.errors });
+      }
+      const { createExperiment } = await import("./paper-trading");
+      const experiment = await createExperiment({ userId: req.user!.id, ...parsed.data });
+      res.json(experiment);
+    } catch (error) {
+      console.error("Error creating experiment:", error);
+      res.status(500).json({ error: "Failed to create experiment" });
+    }
+  });
+
+  app.get("/api/paper/experiments", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getActiveExperiments } = await import("./paper-trading");
+      const experiments = await getActiveExperiments(req.user!.id);
+      res.json(experiments);
+    } catch (error) {
+      console.error("Error fetching experiments:", error);
+      res.status(500).json({ error: "Failed to fetch experiments" });
+    }
+  });
+
+  app.post("/api/paper/experiments/:id/complete", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { completeExperiment } = await import("./paper-trading");
+      const experiment = await completeExperiment(parseInt(req.params.id), req.user!.id);
+      if (!experiment) {
+        return res.status(404).json({ error: "Experiment not found" });
+      }
+      res.json(experiment);
+    } catch (error) {
+      console.error("Error completing experiment:", error);
+      res.status(500).json({ error: "Failed to complete experiment" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
   
