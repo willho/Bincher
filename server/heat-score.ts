@@ -549,12 +549,24 @@ export async function processHeatFactorUpdates(bucketId: string): Promise<number
       }
     }
     
-    // Final validation: ensure sum is exactly 1.0
+    // Final validation: if sum still not 1.0, adjust smallest unfixed factor
+    // This ensures we don't violate bounds by uniform scaling
     const finalTotal = Object.values(result).reduce((sum, w) => sum + w, 0);
-    if (finalTotal > 0 && Math.abs(finalTotal - 1.0) > 0.001) {
-      const adjust = 1.0 / finalTotal;
+    if (Math.abs(finalTotal - 1.0) > 0.0001) {
+      const diff = 1.0 - finalTotal;
+      // Find factor with most room to absorb the difference
+      let bestKey: string | null = null;
+      let bestRoom = 0;
       for (const key of factors) {
-        result[key] *= adjust;
+        const b = bounds[key] || { min: 0.05, max: 0.35 };
+        const room = diff > 0 ? (b.max - result[key]) : (result[key] - b.min);
+        if (room > bestRoom) {
+          bestRoom = room;
+          bestKey = key;
+        }
+      }
+      if (bestKey && bestRoom >= Math.abs(diff)) {
+        result[bestKey] += diff;
       }
     }
     
