@@ -3006,3 +3006,211 @@ export const heatFactorConfig = pgTable("heat_factor_config", {
 export const insertHeatFactorConfigSchema = createInsertSchema(heatFactorConfig).omit({ id: true });
 export type HeatFactorConfig = typeof heatFactorConfig.$inferSelect;
 export type InsertHeatFactorConfig = z.infer<typeof insertHeatFactorConfigSchema>;
+
+// ============================================================================
+// APP INTELLIGENCE LAYER - Meta-optimization and emergent strategy system
+// ============================================================================
+
+// System events - unified event log for cross-system correlation
+export const systemEvents = pgTable("system_events", {
+  id: serial("id").primaryKey(),
+  eventId: text("event_id").notNull().unique(), // nanoid
+  
+  // Event classification
+  eventType: text("event_type").notNull(), // discovery_fired, heat_calculated, copy_executed, ai_recommendation, trade_opened, trade_closed, whale_detected, etc.
+  sourceSystem: text("source_system").notNull(), // discovery, heat_score, copy_trading, ai_chat, paper_trading, strategy_cluster, etc.
+  targetSystem: text("target_system"), // system that was affected (if any)
+  
+  // Context
+  userId: integer("user_id"), // null for system-level events
+  tokenMint: text("token_mint"),
+  walletAddress: text("wallet_address"),
+  positionId: integer("position_id"),
+  correlationId: text("correlation_id"), // links related events across systems
+  
+  // Event data
+  payload: jsonb("payload").$type<Record<string, any>>(), // event-specific data
+  metrics: jsonb("metrics").$type<Record<string, number>>(), // numeric metrics for correlation analysis
+  
+  // Outcome tracking (updated later)
+  outcomeType: text("outcome_type"), // win, loss, neutral, pending
+  outcomePnl: real("outcome_pnl"),
+  outcomeRecordedAt: integer("outcome_recorded_at"),
+  
+  // Timestamps
+  timestamp: integer("timestamp").notNull(),
+  bucketId: text("bucket_id"), // 8-hour bucket for aggregation
+});
+
+export const insertSystemEventSchema = createInsertSchema(systemEvents).omit({ id: true });
+export type SystemEvent = typeof systemEvents.$inferSelect;
+export type InsertSystemEvent = z.infer<typeof insertSystemEventSchema>;
+
+// Meta experiments - system-level A/B tests for cross-system optimization
+export const metaExperiments = pgTable("meta_experiments", {
+  id: serial("id").primaryKey(),
+  experimentId: text("experiment_id").notNull().unique(), // nanoid
+  
+  // Experiment definition
+  name: text("name").notNull(),
+  hypothesis: text("hypothesis").notNull(), // "Increasing heat threshold with whale activity improves win rate"
+  experimentType: text("experiment_type").notNull(), // parameter_tuning, rule_testing, system_interaction
+  
+  // Target systems
+  targetSystems: jsonb("target_systems").$type<string[]>().default([]), // which systems are being tested
+  
+  // Configurations
+  controlConfig: jsonb("control_config").$type<Record<string, any>>(), // current/baseline config
+  variantConfig: jsonb("variant_config").$type<Record<string, any>>(), // new config to test
+  
+  // Assignment
+  assignmentRatio: real("assignment_ratio").default(0.5), // % assigned to variant
+  
+  // Metrics
+  controlTrades: integer("control_trades").default(0),
+  variantTrades: integer("variant_trades").default(0),
+  controlWinRate: real("control_win_rate").default(0),
+  variantWinRate: real("variant_win_rate").default(0),
+  controlPnl: real("control_pnl").default(0),
+  variantPnl: real("variant_pnl").default(0),
+  
+  // Statistical significance
+  pValue: real("p_value"),
+  confidenceLevel: real("confidence_level"),
+  minSampleSize: integer("min_sample_size").default(20),
+  
+  // Status
+  status: text("status").default("active"), // active, paused, completed, promoted, discarded
+  winner: text("winner"), // control, variant, inconclusive
+  
+  // Timing
+  startedAt: integer("started_at").notNull(),
+  endsAt: integer("ends_at"), // optional auto-end
+  completedAt: integer("completed_at"),
+  
+  // Audit
+  createdBy: text("created_by").default("system"), // system, user, ai
+  promotedConfig: jsonb("promoted_config").$type<Record<string, any>>(), // final config if promoted
+});
+
+export const insertMetaExperimentSchema = createInsertSchema(metaExperiments).omit({ id: true });
+export type MetaExperiment = typeof metaExperiments.$inferSelect;
+export type InsertMetaExperiment = z.infer<typeof insertMetaExperimentSchema>;
+
+// Emergent rules - AI-discovered trading rules with trigger/condition/action
+export const emergentRules = pgTable("emergent_rules", {
+  id: serial("id").primaryKey(),
+  ruleId: text("rule_id").notNull().unique(), // nanoid
+  
+  // Rule identity
+  name: text("name").notNull(), // AI-generated descriptive name
+  description: text("description"), // Natural language explanation
+  
+  // Trigger - when to evaluate this rule
+  triggerType: text("trigger_type").notNull(), // interval, event, threshold
+  triggerConfig: jsonb("trigger_config").$type<{
+    type: 'interval' | 'event' | 'threshold';
+    intervalMinutes?: number; // for interval triggers
+    eventType?: string; // for event triggers (whale_sell, volume_drop, etc.)
+    metric?: string; // for threshold triggers
+    threshold?: number;
+    operator?: string; // gte, lte, gt, lt
+  }>(),
+  
+  // Condition - what must be true (supports AND/OR/NOT composition)
+  condition: jsonb("condition").$type<{
+    operator: 'AND' | 'OR' | 'NOT' | 'SIMPLE';
+    conditions?: any[]; // nested conditions for AND/OR
+    metric?: string; // for SIMPLE conditions
+    comparator?: string; // eq, gte, lte, gt, lt
+    value?: number | string;
+  }>(),
+  
+  // Action - what to do when triggered and condition met
+  actionType: text("action_type").notNull(), // sell_percent, sell_all, adjust_stop, add_position, alert
+  actionConfig: jsonb("action_config").$type<{
+    type: 'sell_percent' | 'sell_all' | 'adjust_stop' | 'add_position' | 'alert';
+    percent?: number; // for sell_percent
+    stopLossPercent?: number; // for adjust_stop
+    amount?: number; // for add_position
+    message?: string; // for alert
+  }>(),
+  
+  // Scope
+  scope: text("scope").default("global"), // global, per_token, per_wallet, per_user
+  appliesTo: jsonb("applies_to").$type<string[]>().default([]), // specific tokens/wallets if scoped
+  
+  // Learning metrics
+  confidence: real("confidence").default(0), // 0-1 learned success rate
+  sampleCount: integer("sample_count").default(0),
+  winCount: integer("win_count").default(0),
+  totalPnl: real("total_pnl").default(0),
+  avgPnlPerTrade: real("avg_pnl_per_trade").default(0),
+  
+  // Origin tracking
+  origin: text("origin").default("evolved"), // preset, evolved, ai_created, user_created
+  parentRuleId: text("parent_rule_id"), // if evolved from another rule
+  discoveredPattern: text("discovered_pattern"), // pattern that led to this rule
+  
+  // Status
+  status: text("status").default("testing"), // testing, active, paused, deprecated
+  enabled: boolean("enabled").default(true),
+  paperOnly: boolean("paper_only").default(true), // only use for paper trading until proven
+  
+  // Promotion criteria
+  minSampleForPromotion: integer("min_sample_for_promotion").default(20),
+  minConfidenceForPromotion: real("min_confidence_for_promotion").default(0.6),
+  promotedAt: integer("promoted_at"),
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+  lastTriggeredAt: integer("last_triggered_at"),
+});
+
+export const insertEmergentRuleSchema = createInsertSchema(emergentRules).omit({ id: true });
+export type EmergentRule = typeof emergentRules.$inferSelect;
+export type InsertEmergentRule = z.infer<typeof insertEmergentRuleSchema>;
+
+// System correlations - discovered relationships between system events
+export const systemCorrelations = pgTable("system_correlations", {
+  id: serial("id").primaryKey(),
+  correlationId: text("correlation_id").notNull().unique(), // nanoid
+  
+  // Correlation definition
+  sourceEventType: text("source_event_type").notNull(), // e.g., "discovery_fired"
+  sourceSystem: text("source_system").notNull(),
+  targetEventType: text("target_event_type").notNull(), // e.g., "trade_win"
+  targetSystem: text("target_system").notNull(),
+  
+  // Conditions that strengthen correlation
+  conditions: jsonb("conditions").$type<Array<{
+    metric: string;
+    operator: string;
+    value: number | string;
+  }>>().default([]),
+  
+  // Statistics
+  occurrenceCount: integer("occurrence_count").default(0),
+  correlationStrength: real("correlation_strength").default(0), // -1 to 1
+  pValue: real("p_value"),
+  
+  // Outcome tracking
+  positiveOutcomes: integer("positive_outcomes").default(0),
+  negativeOutcomes: integer("negative_outcomes").default(0),
+  avgPnlWhenPresent: real("avg_pnl_when_present"),
+  avgPnlWhenAbsent: real("avg_pnl_when_absent"),
+  
+  // Status
+  status: text("status").default("tracking"), // tracking, significant, actionable, deprecated
+  actionableInsight: text("actionable_insight"), // AI-generated recommendation
+  
+  // Timestamps
+  discoveredAt: integer("discovered_at").notNull(),
+  lastUpdatedAt: integer("last_updated_at"),
+  lastSeenAt: integer("last_seen_at"),
+});
+
+export const insertSystemCorrelationSchema = createInsertSchema(systemCorrelations).omit({ id: true });
+export type SystemCorrelation = typeof systemCorrelations.$inferSelect;
+export type InsertSystemCorrelation = z.infer<typeof insertSystemCorrelationSchema>;
