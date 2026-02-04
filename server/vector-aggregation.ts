@@ -422,6 +422,35 @@ export async function run8HourAggregation(): Promise<{
     console.error("[VectorAggregation] Heat factor processing failed:", err);
   }
   
+  let metaInsights = { correlationsFound: 0, experimentsProposed: 0, experimentsConcluded: 0 };
+  try {
+    const { processMetaInsights } = await import("./meta-optimizer");
+    metaInsights = await processMetaInsights(bucketId);
+    console.log(`[VectorAggregation] Meta-optimizer: correlations=${metaInsights.correlationsFound}, experiments=${metaInsights.experimentsProposed}, concluded=${metaInsights.experimentsConcluded}`);
+  } catch (err) {
+    console.error("[VectorAggregation] Meta-optimizer processing failed:", err);
+  }
+  
+  let rulesPromoted: string[] = [];
+  let ruleExecutionStats = { positionsEvaluated: 0, rulesTriggered: 0, actionsExecuted: 0 };
+  try {
+    const { evaluateRulePromotion, initializePresetRules } = await import("./emergent-rules");
+    await initializePresetRules();
+    rulesPromoted = await evaluateRulePromotion();
+    if (rulesPromoted.length > 0) {
+      console.log(`[VectorAggregation] Rules promoted: ${rulesPromoted.join(", ")}`);
+    }
+    
+    const { runRuleEvaluationCycle, recordClosedPositionOutcomes } = await import("./rule-executor");
+    ruleExecutionStats = await runRuleEvaluationCycle();
+    const outcomesRecorded = await recordClosedPositionOutcomes();
+    if (outcomesRecorded > 0) {
+      console.log(`[VectorAggregation] Recorded ${outcomesRecorded} rule outcomes`);
+    }
+  } catch (err) {
+    console.error("[VectorAggregation] Rule evaluation failed:", err);
+  }
+  
   await updateGlobalBaseline();
   
   const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 3600);

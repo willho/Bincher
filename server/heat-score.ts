@@ -2,6 +2,7 @@ import { db } from "./db";
 import { holdings, pendingBuys, tokenSnapshots, heatFactorConfig, discoverySources } from "@shared/schema";
 import { eq, gte, and, or, desc, sql } from "drizzle-orm";
 import { getHoldersCached } from "./price-aggregator";
+import { logSystemEvent } from "./system-events";
 
 export interface TokenHeatData {
   tokenMint: string;
@@ -246,6 +247,33 @@ export async function calculateTokenHeat(tokenMint: string): Promise<TokenHeatDa
   };
 
   heatCache.set(tokenMint, heatData);
+  
+  if (heatTier === 'hot') {
+    try {
+      await logSystemEvent({
+        eventType: 'heat_threshold_crossed',
+        sourceSystem: 'heat_score',
+        tokenMint,
+        payload: {
+          heatScore,
+          heatTier,
+          factors: heatData.factors,
+        },
+        metrics: {
+          heatScore,
+          recentBuys: recentBuysScore,
+          volatility: priceVolatilityScore,
+          userAttention: userAttentionScore,
+          recency: recencyScore,
+          whaleActivity: whaleActivityScore,
+          discoveryQuality: discoveryQualityScore,
+        },
+      });
+    } catch (err) {
+      // Silent fail for logging
+    }
+  }
+  
   return heatData;
 }
 

@@ -9,6 +9,7 @@ import {
 } from "@shared/schema";
 import { eq, and, desc, gte, lte, sql, gt, lt, isNull } from "drizzle-orm";
 import { fetchTokenWithFallback } from "./data-pool";
+import { logSystemEvent, createCorrelationId } from "./system-events";
 
 const OUTCOME_WINDOW_HOURS = 24;
 const PROFIT_THRESHOLD_PERCENT = 5;
@@ -189,6 +190,31 @@ export async function checkTriggerForToken(
     .where(eq(discoveryTriggers.id, trigger.id));
   
   console.log(`[Discovery] Trigger "${trigger.name}" fired for ${tokenSymbol || tokenMint}: ${metricValue.toFixed(2)} >= ${weightedThreshold.toFixed(2)}`);
+  
+  try {
+    await logSystemEvent({
+      eventType: 'discovery_fired',
+      sourceSystem: 'discovery',
+      tokenMint,
+      payload: {
+        triggerName: trigger.name,
+        triggerType: trigger.metric,
+        metricValue,
+        threshold: trigger.threshold,
+        priority: trigger.priority,
+        shadowMode: trigger.shadowMode,
+      },
+      metrics: {
+        metricValue,
+        threshold: trigger.threshold,
+        priceUsd: tokenData.priceUsd || 0,
+        marketCap: tokenData.marketCap || 0,
+        liquidity: tokenData.liquidity || 0,
+      },
+    });
+  } catch (err) {
+    console.error('[Discovery] System event logging failed:', err);
+  }
   
   return event;
 }
