@@ -61,6 +61,14 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
   - Legacy `system_logs` (100 entries): General logging, hourly cleanup
   - Miss Pincher tools: `query_system_logs`, `query_error_logs`, `query_trade_logs` for production diagnosis
   - Admin dashboard: Tabbed interface for each log category with real-time counts
+- **Budget & API Management System** (Added 2026-02-04):
+  - Unified priority queue: shared across price/safety/holder systems with UI display support
+  - Safety checker: RugCheck + GoPlus parallel fetch, rate limiting, background processing, WebSocket broadcasts
+  - Behavioral analysis: bot detection, leader/follower classification, copytrade window (~9min taper curve), synchronized buying
+  - Wallet fingerprinting: time-in-market, size discipline, partial sell patterns, entry timing, playbook consistency
+  - Discovery engine: DexScreener sources (new tokens, gainers, random sampling), crowding risk, alpha decay
+  - Cluster learning: whale_clusters table with addresses, P&L tracking, 30-day retention (3+ events minimum)
+  - Miss Pincher tools: `analyze_token_behavior`, `get_wallet_fingerprint`, `get_copytrade_window`, `check_token_safety`, `classify_wallet_behavior`
 
 ## External Dependencies
 
