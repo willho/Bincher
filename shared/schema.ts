@@ -820,6 +820,13 @@ export const adminSettings = pgTable("admin_settings", {
   updatedBy: integer("updated_by"),
 });
 
+export const adminChatMessages = pgTable("admin_chat_messages", {
+  id: serial("id").primaryKey(),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
 // Community insights - anonymous token opinions shared across users with consent
 export const communityInsights = pgTable("community_insights", {
   id: serial("id").primaryKey(),

@@ -44,7 +44,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -4007,6 +4007,69 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error setting pincher instructions:", error);
       res.status(500).json({ error: "Failed to set instructions" });
+    }
+  });
+
+  // ==================== Admin Chat Routes ====================
+  
+  app.get("/api/admin/chat", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const messages = await db.select()
+        .from(adminChatMessages)
+        .orderBy(adminChatMessages.createdAt)
+        .limit(100);
+      res.json(messages.map(m => ({ role: m.role, content: m.content })));
+    } catch (error) {
+      console.error("Error getting admin chat:", error);
+      res.status(500).json({ error: "Failed to get chat history" });
+    }
+  });
+
+  app.post("/api/admin/chat", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { message } = req.body;
+      if (!message || typeof message !== 'string') {
+        return res.status(400).json({ error: "Message is required" });
+      }
+      const now = Math.floor(Date.now() / 1000);
+      await db.insert(adminChatMessages).values({
+        role: "user",
+        content: message.trim(),
+        createdAt: now,
+      });
+      const { getSystemSummaryForAdmin, chatWithAdminAI } = await import("./admin-ai");
+      const systemContext = await getSystemSummaryForAdmin();
+      const aiResponse = await chatWithAdminAI(message.trim(), systemContext);
+      await db.insert(adminChatMessages).values({
+        role: "assistant",
+        content: aiResponse,
+        createdAt: Math.floor(Date.now() / 1000),
+      });
+      res.json({ response: aiResponse });
+    } catch (error) {
+      console.error("Error in admin chat:", error);
+      res.status(500).json({ error: "Failed to process message" });
+    }
+  });
+
+  app.delete("/api/admin/chat", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      await db.delete(adminChatMessages);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error clearing admin chat:", error);
+      res.status(500).json({ error: "Failed to clear chat" });
+    }
+  });
+
+  app.get("/api/admin/system-summary", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getSystemSummaryForAdmin } = await import("./admin-ai");
+      const summary = await getSystemSummaryForAdmin();
+      res.json(summary);
+    } catch (error) {
+      console.error("Error getting system summary:", error);
+      res.status(500).json({ error: "Failed to get system summary" });
     }
   });
 

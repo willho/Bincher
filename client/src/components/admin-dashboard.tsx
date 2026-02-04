@@ -9,10 +9,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff, Globe, AlertTriangle, Server, Webhook, ArrowLeftRight, Database, Gauge, Clock, Layers } from "lucide-react";
+import { Trash2, Users, Wallet, Activity, BarChart3, Megaphone, Send, Loader2, CheckCircle, XCircle, Brain, RefreshCw, Target, TrendingUp, Key, Plus, Settings, Power, PowerOff, Globe, AlertTriangle, Server, Webhook, ArrowLeftRight, Database, Gauge, Clock, Layers, MessageSquare } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { AdminChat } from "./admin-chat";
 
 interface AdminUser {
   id: number;
@@ -592,6 +593,19 @@ export function AdminDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5" />
+            System Intelligence
+          </CardTitle>
+          <CardDescription>Chat with the system AI about errors, self-optimization, and observations</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <AdminChat />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
