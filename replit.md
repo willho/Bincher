@@ -54,6 +54,7 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **Production System Logging**: Separated logging architecture with dedicated tables for faster queries and independent retention for AI, API, webhook, trade, and error logs.
 - **Budget & API Management System**: Features a unified priority queue, safety checker (RugCheck + GoPlus), behavioral analysis (bot detection, leader/follower classification), wallet fingerprinting, discovery engine, and cluster learning.
 - **Vector Learning**: Incorporates multi-dimensional personality and trading vectors, strategy clustering, unified vector routing, and 8-hour bucket aggregation for self-optimization.
+- **System Insight Bus**: Cross-system knowledge sharing via `systemInsights` table. LLM→Trigger flow auto-creates rules from repeated high-confidence AI patterns (5+ occurrences, 60%+ confidence). Trigger→LLM flow injects rule performance into AI context via `buildContextForAI()`. Underperforming rules (<40% confidence) trigger AI fix proposals. All key systems (heat-score, discovery-engine, whale-detection, rule-executor) publish and consume insights. Insights decay in 8-hour aggregation cycle.
 
 ## External Dependencies
 
