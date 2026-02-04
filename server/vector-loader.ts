@@ -67,10 +67,10 @@ export async function loadVectorsForRoute(
   
   const loadPromises: Promise<void>[] = [];
   
-  // Only load personality/relationship if needed (trading, advice, full context intents)
-  // For simple queries (safety check, general), skip to save tokens
+  // Only load personality/relationship for chat-based intents that need communication style
+  // Trading AI and safety checks don't need personality vectors
   const needsPersonality = needs.has("personality") || needs.has("full") || 
-    routeResult.intent === "trading" || routeResult.intent === "advice" ||
+    routeResult.intent === "advice" || routeResult.intent === "chat" ||
     routeResult.intent === "unknown" || routeResult.tier >= 3;
   
   if (needsPersonality) {
