@@ -500,7 +500,7 @@ export async function analyzeWalletStrategy(
       eq(swaps.source, walletAddress),
       gte(swaps.timestamp, cutoff)
     ))
-    .orderBy(sql`${swaps.timestamp} DESC`);
+    .orderBy(sql`${swaps.timestamp} ASC`);
   
   const buys = walletSwaps.filter(s => s.fromToken === SOL_MINT);
   const sells = walletSwaps.filter(s => s.toToken === SOL_MINT);
