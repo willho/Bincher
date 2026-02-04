@@ -1995,6 +1995,91 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: ["walletAddress"]
       }
     }
+  },
+  // Holdings and Activity Filtering
+  {
+    type: "function",
+    function: {
+      name: "filter_holdings",
+      description: "Filter and sort user's token holdings. Use when user asks to show holdings sorted/filtered by profit, value, age, or name (e.g., 'show my most profitable tokens', 'sort holdings by age').",
+      parameters: {
+        type: "object",
+        properties: {
+          sortBy: {
+            type: "string",
+            enum: ["value", "profit", "age", "name"],
+            description: "Sort holdings by: value (USD), profit (% gain/loss), age (oldest/newest), name (alphabetical)"
+          },
+          sortOrder: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description: "Sort order: asc (ascending/smallest first) or desc (descending/largest first). Default: desc"
+          },
+          filterProfitable: {
+            type: "boolean",
+            description: "If true, only show profitable holdings. If false, only show losing holdings."
+          },
+          minValue: {
+            type: "number",
+            description: "Minimum USD value to include"
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of holdings to return (default 10, max 50)"
+          }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "filter_activities",
+      description: "Filter and sort trade activities/history. Use when user asks to see trades filtered by type, amount, date, or token (e.g., 'show sells over 1 SOL', 'my trades from last week', 'show all BONK trades').",
+      parameters: {
+        type: "object",
+        properties: {
+          tradeType: {
+            type: "string",
+            enum: ["buy", "sell", "all"],
+            description: "Filter by trade type: buy, sell, or all"
+          },
+          minSol: {
+            type: "number",
+            description: "Minimum SOL amount for the trade"
+          },
+          maxSol: {
+            type: "number",
+            description: "Maximum SOL amount for the trade"
+          },
+          timeframe: {
+            type: "string",
+            enum: ["24h", "7d", "30d", "90d", "all"],
+            description: "Time range for trades"
+          },
+          tokenSymbol: {
+            type: "string",
+            description: "Filter to trades of a specific token symbol"
+          },
+          sortBy: {
+            type: "string",
+            enum: ["time", "amount"],
+            description: "Sort by: time (most recent) or amount (SOL value)"
+          },
+          sortOrder: {
+            type: "string",
+            enum: ["asc", "desc"],
+            description: "Sort order: asc or desc. Default: desc"
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of trades to return (default 10, max 50)"
+          }
+        },
+        required: []
+      }
+    }
   }
 ];
 
@@ -4811,6 +4896,164 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             summary += `  Leads followers: ${behavior.signals.leadsFollowers.length}\n`;
             
             toolResults.push(summary);
+          }
+          // Holdings filtering and sorting
+          else if (toolName === "filter_holdings") {
+            const rawHoldings = await getHoldings(userId);
+            
+            if (rawHoldings.length === 0) {
+              toolResults.push("No token holdings. You haven't bought anything yet.");
+            } else {
+              // Get SOL price for USD calculations
+              const solPriceUsd = await getTokenPrice("So11111111111111111111111111111111111111112") || 100;
+              
+              // Enrich holdings with calculated values
+              const enrichedHoldings = rawHoldings.map(h => {
+                const multiplier = h.lastPrice && h.buyPrice ? (h.lastPrice / h.buyPrice) : null;
+                const costUsd = h.solSpent * solPriceUsd;
+                const currentUsd = multiplier !== null ? costUsd * multiplier : costUsd;
+                return { ...h, multiplier, costUsd, currentUsd };
+              });
+              
+              let holdingsList = [...enrichedHoldings];
+              
+              // Apply filters
+              if (args.filterProfitable !== undefined) {
+                holdingsList = holdingsList.filter(h => {
+                  if (h.multiplier === null) return false; // Exclude unknown profitability
+                  return args.filterProfitable ? h.multiplier > 1 : h.multiplier <= 1;
+                });
+              }
+              if (args.minValue !== undefined) {
+                holdingsList = holdingsList.filter(h => h.currentUsd >= args.minValue);
+              }
+              
+              // Sort holdings
+              const sortBy = args.sortBy || "value";
+              const sortOrder = args.sortOrder || "desc";
+              holdingsList.sort((a, b) => {
+                let aVal = 0, bVal = 0;
+                if (sortBy === "value") {
+                  aVal = a.currentUsd;
+                  bVal = b.currentUsd;
+                } else if (sortBy === "profit") {
+                  aVal = a.multiplier ?? 1;
+                  bVal = b.multiplier ?? 1;
+                } else if (sortBy === "age") {
+                  aVal = a.buyTimestamp || 0;
+                  bVal = b.buyTimestamp || 0;
+                } else if (sortBy === "name") {
+                  return sortOrder === "asc" 
+                    ? (a.tokenSymbol || "").localeCompare(b.tokenSymbol || "")
+                    : (b.tokenSymbol || "").localeCompare(a.tokenSymbol || "");
+                }
+                return sortOrder === "asc" ? aVal - bVal : bVal - aVal;
+              });
+              
+              // Apply limit
+              const limit = Math.min(args.limit || 10, 50);
+              holdingsList = holdingsList.slice(0, limit);
+              
+              // Format output
+              let summary = `YOUR HOLDINGS (${holdingsList.length}${enrichedHoldings.length > holdingsList.length ? ` of ${enrichedHoldings.length}` : ""}):\n\n`;
+              for (const h of holdingsList) {
+                const pnlPct = h.multiplier !== null ? (h.multiplier - 1) * 100 : null;
+                const pnlStr = pnlPct !== null ? `${pnlPct >= 0 ? "+" : ""}${pnlPct.toFixed(0)}%` : "?%";
+                summary += `${h.tokenSymbol || "???"}: $${h.currentUsd.toFixed(2)} (${pnlStr}, spent ${h.solSpent.toFixed(3)} SOL)\n`;
+              }
+              toolResults.push(summary);
+            }
+          }
+          // Activities filtering and sorting
+          else if (toolName === "filter_activities") {
+            const SOL_MINT_ADDR = "So11111111111111111111111111111111111111112";
+            const now = Math.floor(Date.now() / 1000);
+            const timeframeCutoffs: Record<string, number> = {
+              "24h": now - 86400,
+              "7d": now - 7 * 86400,
+              "30d": now - 30 * 86400,
+              "90d": now - 90 * 86400,
+              "all": 0,
+            };
+            const cutoff = timeframeCutoffs[args.timeframe || "all"] || 0;
+            
+            // Get user's hot wallet for trade filtering
+            const hotWallet = await getOrCreateHotWallet(userId);
+            const walletAddress = hotWallet?.publicKey;
+            
+            if (!walletAddress) {
+              toolResults.push("No hot wallet configured. Set up your wallet first.");
+            } else {
+              let trades = await db.select().from(swaps)
+                .where(and(
+                  eq(swaps.source, walletAddress),
+                  gte(swaps.timestamp, cutoff)
+                ))
+                .orderBy(desc(swaps.timestamp))
+                .limit(200);
+              
+              // Apply trade type filter
+              if (args.tradeType === "buy") {
+                trades = trades.filter(t => t.fromToken === SOL_MINT_ADDR);
+              } else if (args.tradeType === "sell") {
+                trades = trades.filter(t => t.toToken === SOL_MINT_ADDR);
+              }
+              
+              // Apply amount filters
+              if (args.minSol !== undefined) {
+                trades = trades.filter(t => {
+                  const sol = t.fromToken === SOL_MINT_ADDR ? t.fromAmount : t.toAmount;
+                  return sol >= args.minSol;
+                });
+              }
+              if (args.maxSol !== undefined) {
+                trades = trades.filter(t => {
+                  const sol = t.fromToken === SOL_MINT_ADDR ? t.fromAmount : t.toAmount;
+                  return sol <= args.maxSol;
+                });
+              }
+              
+              // Apply token filter
+              if (args.tokenSymbol) {
+                const symbolLower = args.tokenSymbol.toLowerCase();
+                trades = trades.filter(t => 
+                  t.fromTokenSymbol?.toLowerCase().includes(symbolLower) ||
+                  t.toTokenSymbol?.toLowerCase().includes(symbolLower)
+                );
+              }
+              
+              // Sort trades
+              const sortBy = args.sortBy || "time";
+              const sortOrder = args.sortOrder || "desc";
+              trades.sort((a, b) => {
+                let aVal = 0, bVal = 0;
+                if (sortBy === "time") {
+                  aVal = a.timestamp;
+                  bVal = b.timestamp;
+                } else if (sortBy === "amount") {
+                  aVal = a.fromToken === SOL_MINT_ADDR ? a.fromAmount : a.toAmount;
+                  bVal = b.fromToken === SOL_MINT_ADDR ? b.fromAmount : b.toAmount;
+                }
+                return sortOrder === "asc" ? aVal - bVal : bVal - aVal;
+              });
+              
+              // Apply limit
+              const limit = Math.min(args.limit || 10, 50);
+              trades = trades.slice(0, limit);
+              
+              // Format output
+              let summary = `TRADE HISTORY (${trades.length} trades):\n\n`;
+              for (const t of trades) {
+                const isBuy = t.fromToken === SOL_MINT_ADDR;
+                const type = isBuy ? "BUY" : "SELL";
+                const sol = isBuy ? t.fromAmount : t.toAmount;
+                const token = isBuy ? (t.toTokenSymbol || "???") : (t.fromTokenSymbol || "???");
+                const time = new Date(t.timestamp * 1000).toLocaleDateString();
+                
+                summary += `${type} ${token}: ${sol.toFixed(3)} SOL (${time})\n`;
+              }
+              toolResults.push(summary);
+            }
           }
         } catch (parseError) {
           console.error("Failed to parse tool arguments:", parseError);

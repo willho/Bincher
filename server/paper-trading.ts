@@ -510,6 +510,8 @@ export async function analyzeWalletStrategy(
     sellTime?: number;
     solSpent: number;
     solReceived: number;
+    tokensBought: number;
+    tokensSold: number;
     buyHour: number;
     tokenSymbol: string;
   }> = new Map();
@@ -522,12 +524,15 @@ export async function analyzeWalletStrategy(
         buyTime: swap.timestamp,
         solSpent: swap.fromAmount,
         solReceived: 0,
+        tokensBought: swap.toAmount || 0,
+        tokensSold: 0,
         buyHour: hour,
         tokenSymbol: swap.toTokenSymbol || "UNKNOWN",
       });
     } else {
       const pos = tokenPositions.get(token)!;
       pos.solSpent += swap.fromAmount;
+      pos.tokensBought += swap.toAmount || 0;
     }
   }
   
@@ -537,11 +542,31 @@ export async function analyzeWalletStrategy(
     if (pos) {
       pos.sellTime = swap.timestamp;
       pos.solReceived += swap.toAmount;
+      pos.tokensSold += swap.fromAmount || 0;
     }
   }
   
+  // Only count positions as "closed" if >80% of tokens were sold
+  // This filters out partial sells that would skew the analysis
   const closedPositions = Array.from(tokenPositions.values())
-    .filter(p => p.sellTime && p.solSpent > 0);
+    .filter(p => {
+      if (!p.sellTime || p.solSpent <= 0) return false;
+      // If we have token amounts, require 80%+ sold to count as closed
+      if (p.tokensBought > 0 && p.tokensSold > 0) {
+        const soldRatio = p.tokensSold / p.tokensBought;
+        return soldRatio >= 0.8;
+      }
+      // Fallback: if token amounts are missing but we have SOL data,
+      // consider closed if solReceived >= 50% of solSpent (rough heuristic)
+      // This avoids counting tiny partial sells as full closes
+      if (p.solReceived > 0 && p.solSpent > 0) {
+        // If they received more than they spent, likely a profitable close
+        // If they received less but at least 50%, might be a close
+        return p.solReceived >= p.solSpent * 0.5;
+      }
+      // No reliable data, skip this position
+      return false;
+    });
   
   const holdDurations: number[] = [];
   const positionSizes: number[] = [];
@@ -578,12 +603,20 @@ export async function analyzeWalletStrategy(
     : 0;
   const winRate = sampleSize > 0 ? wins / sampleSize : 0;
   
-  const avgProfit = profitMultipliers.length > 0
-    ? (profitMultipliers.reduce((a, b) => a + b, 0) / profitMultipliers.length) - 1
-    : 0;
-  const avgLoss = lossMultipliers.length > 0
-    ? 1 - (lossMultipliers.reduce((a, b) => a + b, 0) / lossMultipliers.length)
-    : 0;
+  // Helper to get median from sorted array
+  const getMedian = (arr: number[]): number => {
+    if (arr.length === 0) return 0;
+    const sorted = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  // Use median instead of mean to reduce outlier impact (e.g., 660x trades skewing average)
+  const medianProfitMultiplier = getMedian(profitMultipliers);
+  const avgProfit = medianProfitMultiplier > 0 ? medianProfitMultiplier - 1 : 0;
+  
+  const medianLossMultiplier = getMedian(lossMultipliers);
+  const avgLoss = medianLossMultiplier > 0 ? 1 - medianLossMultiplier : 0;
   
   const profitFactor = totalLoss > 0 ? totalProfit / totalLoss : (totalProfit > 0 ? 999 : 0);
   
@@ -613,13 +646,17 @@ export async function analyzeWalletStrategy(
     tradingStyle = "conservative";
   }
   
+  // Use median for take-profit to avoid outlier inflation
   const takeProfitMultiplier = profitMultipliers.length > 0
-    ? profitMultipliers.reduce((a, b) => a + b, 0) / profitMultipliers.length
+    ? getMedian(profitMultipliers)
     : 1.5;
   
-  const stopLossPercent = lossMultipliers.length > 0
-    ? 1 - (lossMultipliers.reduce((a, b) => a + b, 0) / lossMultipliers.length)
-    : 0.2;
+  // Derive stop-loss from actual losing trades using median, not hardcoded 20%
+  const stopLossPercent = lossMultipliers.length >= 3
+    ? 1 - getMedian(lossMultipliers)  // Median loss percentage
+    : lossMultipliers.length > 0
+      ? 1 - (lossMultipliers.reduce((a, b) => a + b, 0) / lossMultipliers.length)  // Mean if few samples
+      : 0.2;  // Default only when no loss data
   
   let riskLevel = 5;
   if (avgPositionSize > 1 && avgHoldDuration < 3600) riskLevel = 8;
@@ -659,6 +696,25 @@ export async function analyzeWalletStrategy(
   
   if (openPositions > 5) {
     insights.push(`Currently holding ${openPositions} open positions`);
+  }
+  
+  // Add percentile-based TP recommendations if we have enough profit data
+  if (profitMultipliers.length >= 5) {
+    const sorted = [...profitMultipliers].sort((a, b) => a - b);
+    const p50 = sorted[Math.floor(sorted.length * 0.5)];
+    const p75 = sorted[Math.floor(sorted.length * 0.75)];
+    const p90 = sorted[Math.floor(sorted.length * 0.9)];
+    
+    // Format multipliers as "Xx" (e.g., "7x")
+    const format = (m: number) => m >= 10 ? `${Math.round(m)}x` : `${m.toFixed(1)}x`;
+    
+    if (p75 > p50 * 1.5) {
+      // High variance - show percentile breakdown
+      insights.push(`Take-profit tiers: 50% of wins at ${format(p50)}+, 25% hit ${format(p75)}+${p90 > p75 * 1.5 ? `, 10% reach ${format(p90)}+` : ''}`);
+    } else {
+      // Consistent exits - show median
+      insights.push(`Consistent exit pattern: median ${format(p50)} return`);
+    }
   }
   
   const entryTokenAge = avgHoldDuration < 7200 ? "fresh" : avgHoldDuration < 86400 ? "established" : "mature";
