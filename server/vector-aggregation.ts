@@ -414,6 +414,14 @@ export async function run8HourAggregation(): Promise<{
     console.error("[VectorAggregation] Discovery processing failed:", err);
   }
   
+  let heatFactorUpdates = 0;
+  try {
+    const { processHeatFactorUpdates } = await import("./heat-score");
+    heatFactorUpdates = await processHeatFactorUpdates(bucketId);
+  } catch (err) {
+    console.error("[VectorAggregation] Heat factor processing failed:", err);
+  }
+  
   await updateGlobalBaseline();
   
   const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 3600);
@@ -423,7 +431,7 @@ export async function run8HourAggregation(): Promise<{
       lt(vectorUpdates.createdAt, sevenDaysAgo)
     ));
   
-  console.log(`[VectorAggregation] Processed: routes=${routeUpdates}, strategies=${strategyUpdates}, behavior=${behaviorUpdates}, discovery=${discoveryUpdates}`);
+  console.log(`[VectorAggregation] Processed: routes=${routeUpdates}, strategies=${strategyUpdates}, behavior=${behaviorUpdates}, discovery=${discoveryUpdates}, heat=${heatFactorUpdates}`);
   
   return {
     routeUpdates,
