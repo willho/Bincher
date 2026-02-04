@@ -2967,3 +2967,42 @@ export const emergentPatterns = pgTable("emergent_patterns", {
 export const insertEmergentPatternSchema = createInsertSchema(emergentPatterns).omit({ id: true });
 export type EmergentPattern = typeof emergentPatterns.$inferSelect;
 export type InsertEmergentPattern = z.infer<typeof insertEmergentPatternSchema>;
+
+// Heat factor config - self-learning heat score weights
+export const heatFactorConfig = pgTable("heat_factor_config", {
+  id: serial("id").primaryKey(),
+  configKey: text("config_key").notNull().unique(), // "global" or user-specific
+  
+  // Factor weights (must sum to ~1.0)
+  recentBuysWeight: real("recent_buys_weight").default(0.25),
+  volatilityWeight: real("volatility_weight").default(0.20),
+  userAttentionWeight: real("user_attention_weight").default(0.20),
+  recencyWeight: real("recency_weight").default(0.15),
+  whaleActivityWeight: real("whale_activity_weight").default(0.20),
+  discoveryQualityWeight: real("discovery_quality_weight").default(0), // new factor, starts at 0
+  
+  // Weight bounds (min/max for each factor)
+  weightBounds: jsonb("weight_bounds").$type<Record<string, { min: number; max: number }>>().default({
+    recentBuys: { min: 0.05, max: 0.40 },
+    volatility: { min: 0.05, max: 0.35 },
+    userAttention: { min: 0.05, max: 0.35 },
+    recency: { min: 0.05, max: 0.30 },
+    whaleActivity: { min: 0.05, max: 0.35 },
+    discoveryQuality: { min: 0, max: 0.25 }
+  }),
+  
+  // Learning metrics per factor
+  factorPerformance: jsonb("factor_performance").$type<Record<string, {
+    winCorrelation: number;
+    sampleCount: number;
+    confidence: number;
+  }>>().default({}),
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertHeatFactorConfigSchema = createInsertSchema(heatFactorConfig).omit({ id: true });
+export type HeatFactorConfig = typeof heatFactorConfig.$inferSelect;
+export type InsertHeatFactorConfig = z.infer<typeof insertHeatFactorConfigSchema>;

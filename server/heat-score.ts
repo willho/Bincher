@@ -174,7 +174,7 @@ export async function getHotTokens(): Promise<TokenHeatData[]> {
   activePending.forEach(p => allTokenMints.add(p.tokenMint));
 
   const heatScores: TokenHeatData[] = [];
-  for (const tokenMint of allTokenMints) {
+  for (const tokenMint of Array.from(allTokenMints)) {
     const heat = await calculateTokenHeat(tokenMint);
     heatScores.push(heat);
   }
