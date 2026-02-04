@@ -33,6 +33,30 @@ export async function getTokenData(tokenMint: string): Promise<TokenDataPoolEntr
   return entry ?? null;
 }
 
+export async function resolveTokenIdentifier(identifier: string): Promise<string | null> {
+  if (!identifier || identifier.length < 2) return null;
+  
+  if (identifier.length >= 32 && identifier.length <= 44) {
+    const entry = await db.query.tokenDataPool.findFirst({
+      where: eq(tokenDataPool.tokenMint, identifier),
+    });
+    if (entry) return identifier;
+  }
+  
+  const searchLower = identifier.toLowerCase();
+  const bySymbol = await db.query.tokenDataPool.findFirst({
+    where: sql`LOWER(${tokenDataPool.tokenSymbol}) = ${searchLower}`,
+  });
+  if (bySymbol) return bySymbol.tokenMint;
+  
+  const byName = await db.query.tokenDataPool.findFirst({
+    where: sql`LOWER(${tokenDataPool.tokenName}) LIKE ${'%' + searchLower + '%'}`,
+  });
+  if (byName) return byName.tokenMint;
+  
+  return null;
+}
+
 export async function upsertTokenData(
   tokenMint: string,
   data: Partial<{

@@ -1910,6 +1910,91 @@ const chatTools: OpenAI.Chat.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "analyze_token_behavior",
+      description: "Analyze behavioral patterns around a token including copytrade windows, synchronized buying, and crowding risk. Use when user asks about how a token is being traded or if there's coordinated activity.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenIdentifier: {
+            type: "string",
+            description: "Token symbol or mint address to analyze"
+          }
+        },
+        required: ["tokenIdentifier"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_wallet_fingerprint",
+      description: "Get the behavioral fingerprint of a signal wallet including their trading style, hold times, size discipline, and entry timing patterns. Use when user asks about a wallet's trading strategy or style.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletAddress: {
+            type: "string",
+            description: "The wallet address to analyze"
+          }
+        },
+        required: ["walletAddress"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_copytrade_window",
+      description: "Analyze the copytrade window for a token showing leader wallet, follower timing, taper curve, and crowding risk. Use when user asks about copytrade patterns or entry windows.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenMint: {
+            type: "string",
+            description: "Token symbol or mint address (symbol resolution supported)"
+          }
+        },
+        required: ["tokenMint"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_token_safety",
+      description: "Check the safety status of a token using RugCheck and GoPlus data. Use when user asks if a token is safe, or about its rug risk or honeypot status.",
+      parameters: {
+        type: "object",
+        properties: {
+          tokenMint: {
+            type: "string",
+            description: "Token symbol or mint address (symbol resolution supported)"
+          }
+        },
+        required: ["tokenMint"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "classify_wallet_behavior",
+      description: "Classify a wallet as bot, leader, follower, or organic based on their trading patterns. Use when user asks about a wallet's behavior type or if they're a bot.",
+      parameters: {
+        type: "object",
+        properties: {
+          walletAddress: {
+            type: "string",
+            description: "The wallet address to classify"
+          }
+        },
+        required: ["walletAddress"]
+      }
+    }
   }
 ];
 
@@ -4511,6 +4596,156 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
             summary += `Wins/Losses: ${stats.wins}/${stats.losses}\n`;
             summary += `Total P&L: ${stats.totalPnl >= 0 ? "+" : ""}${stats.totalPnl.toFixed(4)} SOL\n`;
             summary += `Avg P&L %: ${stats.avgPnlPercent >= 0 ? "+" : ""}${stats.avgPnlPercent.toFixed(1)}%\n`;
+            
+            toolResults.push(summary);
+          }
+          else if (toolName === "analyze_token_behavior") {
+            const { analyzeCopytradeWindow, getCopytradeWindowSummary, detectSynchronizedBuying, detectCoordinatedBuying } = await import("./cluster-detection");
+            const { resolveTokenIdentifier } = await import("./data-pool");
+            
+            const tokenMint = await resolveTokenIdentifier(args.tokenIdentifier);
+            if (!tokenMint) {
+              toolResults.push(`Could not find token "${args.tokenIdentifier}" in the data pool. Try using the full mint address or check if the token has been observed in recent trades.`);
+            } else {
+              const [copyWindow, syncBuying, coordinated] = await Promise.all([
+                analyzeCopytradeWindow(tokenMint),
+                detectSynchronizedBuying(tokenMint),
+                detectCoordinatedBuying(tokenMint),
+              ]);
+              
+              let summary = `TOKEN BEHAVIOR ANALYSIS:\n\n`;
+              
+              if (copyWindow) {
+                summary += `COPYTRADE WINDOW:\n`;
+                summary += `  ${getCopytradeWindowSummary(copyWindow)}\n`;
+                summary += `  Leader: ${copyWindow.leaderWallet.slice(0, 8)}...\n`;
+                summary += `  Peak delay: ${Math.round(copyWindow.peakDelay / 60)} minutes\n\n`;
+              } else {
+                summary += `No copytrade pattern detected (may need more trade data).\n\n`;
+              }
+              
+              if (syncBuying) {
+                summary += `SYNCHRONIZED BUYING:\n`;
+                summary += `  Pattern: ${syncBuying.pattern}\n`;
+                summary += `  Wallets: ${syncBuying.wallets.length}\n`;
+                summary += `  Suspicious: ${syncBuying.isSuspicious ? "YES" : "No"}\n\n`;
+              }
+              
+              summary += `COORDINATED ACTIVITY:\n`;
+              summary += `  Detected: ${coordinated.isCoordinated ? "YES" : "No"}\n`;
+              summary += `  Cluster size: ${coordinated.clusterSize}\n`;
+              summary += `  Confidence: ${(coordinated.confidence * 100).toFixed(0)}%\n`;
+              
+              toolResults.push(summary);
+            }
+          }
+          else if (toolName === "get_wallet_fingerprint") {
+            const { analyzeWalletFingerprint, getFingerprintSummary } = await import("./wallet-fingerprint");
+            const fp = await analyzeWalletFingerprint(args.walletAddress);
+            
+            let summary = `WALLET FINGERPRINT:\n\n`;
+            summary += `Style: ${getFingerprintSummary(fp)}\n\n`;
+            summary += `HOLD TIMES:\n`;
+            summary += `  Average: ${fp.timeInMarket.avgHoldMinutes} min\n`;
+            summary += `  Median: ${fp.timeInMarket.medianHoldMinutes} min\n\n`;
+            summary += `SIZE DISCIPLINE:\n`;
+            summary += `  Avg buy: ${fp.sizeDiscipline.avgBuySol.toFixed(3)} SOL\n`;
+            summary += `  Consistency: ${(fp.sizeDiscipline.consistencyScore * 100).toFixed(0)}%\n`;
+            summary += `  Size class: ${fp.sizeDiscipline.preferredSize}\n\n`;
+            summary += `ENTRY TIMING:\n`;
+            summary += `  Pre-volume ratio: ${(fp.entryTiming.preVolumeRatio * 100).toFixed(0)}%\n`;
+            summary += `  Early bird: ${(fp.entryTiming.earlyBirdScore * 100).toFixed(0)}%\n`;
+            summary += `  Chaser: ${(fp.entryTiming.chaseScore * 100).toFixed(0)}%\n\n`;
+            summary += `SELL PATTERNS:\n`;
+            summary += `  Partial sells: ${(fp.sellPatterns.partialSellRatio * 100).toFixed(0)}%\n`;
+            summary += `  Trailing: ${fp.sellPatterns.trailingSellPattern ? "Yes" : "No"}\n\n`;
+            summary += `Success rate: ${(fp.successRate * 100).toFixed(0)}%\n`;
+            summary += `Trade count: ${fp.tradeCount}\n`;
+            
+            toolResults.push(summary);
+          }
+          else if (toolName === "get_copytrade_window") {
+            const { analyzeCopytradeWindow, getCopytradeWindowSummary } = await import("./cluster-detection");
+            const { resolveTokenIdentifier } = await import("./data-pool");
+            
+            const tokenMint = await resolveTokenIdentifier(args.tokenMint);
+            if (!tokenMint) {
+              toolResults.push(`Could not find token "${args.tokenMint}" in the data pool. Try using the full mint address.`);
+            } else {
+              const window = await analyzeCopytradeWindow(tokenMint);
+              
+              if (!window) {
+                toolResults.push("No copytrade window detected for this token. This may mean insufficient trade data or no leader/follower patterns detected.");
+              } else {
+                let summary = `COPYTRADE WINDOW ANALYSIS:\n\n`;
+                summary += `Summary: ${getCopytradeWindowSummary(window)}\n\n`;
+                summary += `Leader: ${window.leaderWallet.slice(0, 8)}...\n`;
+                summary += `Leader buy time: ${new Date(window.leaderBuyTime * 1000).toLocaleString()}\n\n`;
+                summary += `Followers: ${window.followers.length}\n`;
+                summary += `Avg delay: ${(window.avgDelay / 60).toFixed(1)} min\n`;
+                summary += `Peak delay: ${Math.round(window.peakDelay / 60)} min\n`;
+                summary += `Crowding risk: ${(window.crowdingRisk * 100).toFixed(0)}%\n\n`;
+                summary += `TAPER CURVE (buys per minute):\n`;
+                window.taperCurve.forEach((count, i) => {
+                  if (count > 0) summary += `  ${i}-${i+1}min: ${count} buys\n`;
+                });
+                
+                toolResults.push(summary);
+              }
+            }
+          }
+          else if (toolName === "check_token_safety") {
+            const { checkTokenSafety } = await import("./safety-checker");
+            const { resolveTokenIdentifier } = await import("./data-pool");
+            
+            const tokenMint = await resolveTokenIdentifier(args.tokenMint);
+            if (!tokenMint) {
+              toolResults.push(`Could not find token "${args.tokenMint}" in the data pool. For safety checks, the full mint address works best.`);
+            } else {
+              const safety = await checkTokenSafety(tokenMint);
+              
+              let summary = `TOKEN SAFETY CHECK:\n\n`;
+              summary += `Token: ${tokenMint.slice(0, 8)}...\n\n`;
+              
+              if (safety.rugcheck) {
+                const riskLevel = (safety.rugcheck as any).riskLevel || 'unknown';
+                summary += `RUGCHECK:\n`;
+                summary += `  Risk level: ${riskLevel}\n`;
+                summary += `  Checked: ${safety.rugcheckCheckedAt ? new Date(safety.rugcheckCheckedAt * 1000).toLocaleString() : 'Never'}\n\n`;
+              } else {
+                summary += `RUGCHECK: Not checked yet\n\n`;
+              }
+              
+              if (safety.goplus) {
+                const gp = safety.goplus as any;
+                summary += `GOPLUS:\n`;
+                summary += `  Honeypot: ${gp.is_honeypot ? "YES - DANGER" : "No"}\n`;
+                summary += `  Mintable: ${gp.is_mintable ? "Yes" : "No"}\n`;
+                summary += `  Checked: ${safety.goplusCheckedAt ? new Date(safety.goplusCheckedAt * 1000).toLocaleString() : 'Never'}\n\n`;
+              } else {
+                summary += `GOPLUS: Not checked yet\n\n`;
+              }
+              
+              summary += `Data source: ${safety.source || 'pending'}\n`;
+              
+              toolResults.push(summary);
+            }
+          }
+          else if (toolName === "classify_wallet_behavior") {
+            const { classifyWalletBehavior } = await import("./cluster-detection");
+            const behavior = await classifyWalletBehavior(args.walletAddress);
+            
+            let summary = `WALLET BEHAVIOR CLASSIFICATION:\n\n`;
+            summary += `Type: ${behavior.behaviorType.toUpperCase()}\n`;
+            summary += `Confidence: ${(behavior.confidence * 100).toFixed(0)}%\n\n`;
+            summary += `SIGNALS:\n`;
+            summary += `  Trade frequency: ${behavior.signals.tradeFrequency.toFixed(1)}/day\n`;
+            summary += `  Timing precision: ${(behavior.signals.timingPrecision * 100).toFixed(0)}%\n`;
+            if (behavior.signals.avgReactionTime) {
+              summary += `  Avg reaction time: ${Math.round(behavior.signals.avgReactionTime / 60)} min\n`;
+            }
+            summary += `  Follows leaders: ${behavior.signals.followsLeaders.length}\n`;
+            summary += `  Leads followers: ${behavior.signals.leadsFollowers.length}\n`;
             
             toolResults.push(summary);
           }

@@ -5695,6 +5695,155 @@ export async function registerRoutes(
     }
   });
 
+  // === BEHAVIOR ANALYSIS ROUTES ===
+
+  app.get("/api/wallet/:address/behavior", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { classifyWalletBehavior } = await import("./cluster-detection");
+      const behavior = await classifyWalletBehavior(req.params.address);
+      res.json(behavior);
+    } catch (error) {
+      console.error("Error classifying wallet behavior:", error);
+      res.status(500).json({ error: "Failed to classify wallet behavior" });
+    }
+  });
+
+  app.get("/api/wallet/:address/fingerprint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { analyzeWalletFingerprint, getStoredFingerprint } = await import("./wallet-fingerprint");
+      
+      let fingerprint = await getStoredFingerprint(req.params.address);
+      if (!fingerprint) {
+        fingerprint = await analyzeWalletFingerprint(req.params.address);
+      }
+      
+      res.json(fingerprint);
+    } catch (error) {
+      console.error("Error getting wallet fingerprint:", error);
+      res.status(500).json({ error: "Failed to get wallet fingerprint" });
+    }
+  });
+
+  app.post("/api/wallet/:address/fingerprint/refresh", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { analyzeWalletFingerprint, persistFingerprint, getFingerprintSummary } = await import("./wallet-fingerprint");
+      const fingerprint = await analyzeWalletFingerprint(req.params.address);
+      await persistFingerprint(fingerprint);
+      
+      res.json({ 
+        fingerprint,
+        summary: getFingerprintSummary(fingerprint),
+      });
+    } catch (error) {
+      console.error("Error refreshing fingerprint:", error);
+      res.status(500).json({ error: "Failed to refresh fingerprint" });
+    }
+  });
+
+  app.get("/api/tokens/:mint/copytrade-window", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { analyzeCopytradeWindow, getCopytradeWindowSummary } = await import("./cluster-detection");
+      const window = await analyzeCopytradeWindow(req.params.mint);
+      
+      if (!window) {
+        return res.status(404).json({ error: "No copytrade window found" });
+      }
+      
+      res.json({
+        ...window,
+        summary: getCopytradeWindowSummary(window),
+      });
+    } catch (error) {
+      console.error("Error analyzing copytrade window:", error);
+      res.status(500).json({ error: "Failed to analyze copytrade window" });
+    }
+  });
+
+  app.get("/api/tokens/:mint/synchronized-buying", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { detectSynchronizedBuying } = await import("./cluster-detection");
+      const result = await detectSynchronizedBuying(req.params.mint);
+      res.json(result || { isDetected: false });
+    } catch (error) {
+      console.error("Error detecting synchronized buying:", error);
+      res.status(500).json({ error: "Failed to detect synchronized buying" });
+    }
+  });
+
+  app.get("/api/clusters/stats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getClusterStats, getCachedClusters } = await import("./cluster-detection");
+      const stats = await getClusterStats();
+      const clusters = getCachedClusters();
+      
+      res.json({
+        ...stats,
+        clusters: clusters.slice(0, 10),
+      });
+    } catch (error) {
+      console.error("Error getting cluster stats:", error);
+      res.status(500).json({ error: "Failed to get cluster stats" });
+    }
+  });
+
+  app.post("/api/clusters/refresh", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { refreshClusterCache, getClusterStats } = await import("./cluster-detection");
+      await refreshClusterCache();
+      const stats = await getClusterStats();
+      
+      res.json({ success: true, stats });
+    } catch (error) {
+      console.error("Error refreshing clusters:", error);
+      res.status(500).json({ error: "Failed to refresh clusters" });
+    }
+  });
+
+  // === DISCOVERY ENGINE ROUTES ===
+
+  app.get("/api/discovery/stats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getDiscoveryStats, getDiverseDiscoveryStats } = await import("./discovery-engine");
+      const [triggerStats, diverseStats] = await Promise.all([
+        getDiscoveryStats(),
+        getDiverseDiscoveryStats(),
+      ]);
+      
+      res.json({ triggers: triggerStats, diverse: diverseStats });
+    } catch (error) {
+      console.error("Error getting discovery stats:", error);
+      res.status(500).json({ error: "Failed to get discovery stats" });
+    }
+  });
+
+  app.post("/api/discovery/run-diverse", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runDiverseDiscovery } = await import("./discovery-engine");
+      const result = await runDiverseDiscovery();
+      res.json(result);
+    } catch (error) {
+      console.error("Error running diverse discovery:", error);
+      res.status(500).json({ error: "Failed to run diverse discovery" });
+    }
+  });
+
+  app.get("/api/discovery/events", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getRecentEvents } = await import("./discovery-engine");
+      const limit = parseInt(req.query.limit as string) || 20;
+      const status = req.query.status as string | undefined;
+      
+      const events = await getRecentEvents(limit, status);
+      res.json(events);
+    } catch (error) {
+      console.error("Error getting discovery events:", error);
+      res.status(500).json({ error: "Failed to get discovery events" });
+    }
+  });
+
   // === PAPER TRADING ROUTES ===
 
   const openPaperPositionSchema = z.object({

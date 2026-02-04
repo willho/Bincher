@@ -322,6 +322,14 @@ export async function cleanupAllLogs(): Promise<{ [key: string]: number }> {
   results.trade = await cleanupTable("trade_logs", LOG_RETENTION.trade);
   results.error = await cleanupTable("error_logs", LOG_RETENTION.error);
   
+  try {
+    const { pruneOldClusters } = await import("./cluster-detection");
+    results.clusters = await pruneOldClusters(30, 3);
+  } catch (err) {
+    console.error("[Logger] Cluster pruning failed:", err);
+    results.clusters = 0;
+  }
+  
   const totalDeleted = Object.values(results).reduce((a, b) => a + b, 0);
   if (totalDeleted > 0) {
     console.log(`[Logger] Cleanup: ${JSON.stringify(results)}`);

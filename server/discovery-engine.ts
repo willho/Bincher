@@ -861,3 +861,378 @@ export async function suggestTriggerVariants(): Promise<TriggerProposal[]> {
   
   return proposals;
 }
+
+// =====================
+// DIVERSE TOKEN DISCOVERY (DexScreener, pump.fun, etc.)
+// =====================
+
+interface DiscoveredToken {
+  tokenMint: string;
+  tokenSymbol: string;
+  tokenName: string;
+  source: 'dexscreener_new' | 'dexscreener_gainers' | 'pumpfun' | 'whale_activity' | 'random_sample';
+  priceUsd: number | null;
+  marketCap: number | null;
+  volume24h: number | null;
+  liquidity: number | null;
+  priceChange24h: number | null;
+  pairAddress: string | null;
+  discoveredAt: number;
+  crowdingRisk: number;
+  alphaDecay: number;
+}
+
+interface DiscoveryResult {
+  tokens: DiscoveredToken[];
+  source: string;
+  fetchedAt: number;
+  apiHealthy: boolean;
+}
+
+const DISCOVERY_TOKEN_CACHE: Map<string, DiscoveredToken> = new Map();
+const LAST_DISCOVERY_TIME: Map<string, number> = new Map();
+
+const DEXSCREENER_BASE = "https://api.dexscreener.com";
+
+export async function discoverNewTokens(limit: number = 20): Promise<DiscoveryResult> {
+  const source = 'dexscreener_new';
+  const now = Math.floor(Date.now() / 1000);
+  
+  try {
+    const response = await fetch(`${DEXSCREENER_BASE}/token-profiles/latest/v1`, {
+      headers: { 'Accept': 'application/json' },
+    });
+    
+    if (!response.ok) {
+      return { tokens: [], source, fetchedAt: now, apiHealthy: false };
+    }
+    
+    const data = await response.json();
+    const tokens: DiscoveredToken[] = [];
+    
+    const solanaTokens = (data || [])
+      .filter((t: any) => t.chainId === 'solana')
+      .slice(0, limit);
+    
+    for (const token of solanaTokens) {
+      const discovered: DiscoveredToken = {
+        tokenMint: token.tokenAddress,
+        tokenSymbol: token.symbol || 'UNKNOWN',
+        tokenName: token.name || 'Unknown Token',
+        source: 'dexscreener_new',
+        priceUsd: null,
+        marketCap: null,
+        volume24h: null,
+        liquidity: null,
+        priceChange24h: null,
+        pairAddress: null,
+        discoveredAt: now,
+        crowdingRisk: 0,
+        alphaDecay: 0,
+      };
+      
+      tokens.push(discovered);
+      DISCOVERY_TOKEN_CACHE.set(token.tokenAddress, discovered);
+    }
+    
+    LAST_DISCOVERY_TIME.set(source, now);
+    return { tokens, source, fetchedAt: now, apiHealthy: true };
+  } catch (error) {
+    console.error("[Discovery] Error fetching new tokens:", error);
+    return { tokens: [], source, fetchedAt: now, apiHealthy: false };
+  }
+}
+
+export async function discoverTopGainers(limit: number = 20): Promise<DiscoveryResult> {
+  const source = 'dexscreener_gainers';
+  const now = Math.floor(Date.now() / 1000);
+  
+  try {
+    const response = await fetch(`${DEXSCREENER_BASE}/token-boosts/top/v1`, {
+      headers: { 'Accept': 'application/json' },
+    });
+    
+    if (!response.ok) {
+      return { tokens: [], source, fetchedAt: now, apiHealthy: false };
+    }
+    
+    const data = await response.json();
+    const tokens: DiscoveredToken[] = [];
+    
+    const solanaTokens = (data || [])
+      .filter((t: any) => t.chainId === 'solana')
+      .slice(0, limit);
+    
+    for (const token of solanaTokens) {
+      const discovered: DiscoveredToken = {
+        tokenMint: token.tokenAddress,
+        tokenSymbol: token.symbol || 'UNKNOWN',
+        tokenName: token.name || 'Unknown Token',
+        source: 'dexscreener_gainers',
+        priceUsd: null,
+        marketCap: null,
+        volume24h: null,
+        liquidity: null,
+        priceChange24h: null,
+        pairAddress: null,
+        discoveredAt: now,
+        crowdingRisk: 0.3,
+        alphaDecay: 0.2,
+      };
+      
+      tokens.push(discovered);
+      DISCOVERY_TOKEN_CACHE.set(token.tokenAddress, discovered);
+    }
+    
+    LAST_DISCOVERY_TIME.set(source, now);
+    return { tokens, source, fetchedAt: now, apiHealthy: true };
+  } catch (error) {
+    console.error("[Discovery] Error fetching top gainers:", error);
+    return { tokens: [], source, fetchedAt: now, apiHealthy: false };
+  }
+}
+
+export async function discoverFromWhaleActivity(limit: number = 10): Promise<DiscoveryResult> {
+  const source = 'whale_activity';
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - 3600;
+  
+  try {
+    const recentBuys = await db.select().from(swaps)
+      .where(and(
+        eq(swaps.type, 'buy'),
+        gte(swaps.timestamp, cutoff)
+      ))
+      .orderBy(desc(swaps.fromAmount))
+      .limit(100);
+    
+    const tokenCounts: Map<string, { count: number; totalSol: number; symbol: string }> = new Map();
+    
+    for (const buy of recentBuys) {
+      const current = tokenCounts.get(buy.toToken) || { count: 0, totalSol: 0, symbol: '' };
+      current.count++;
+      current.totalSol += buy.fromAmount;
+      if (buy.toTokenSymbol) current.symbol = buy.toTokenSymbol;
+      tokenCounts.set(buy.toToken, current);
+    }
+    
+    const sortedTokens = Array.from(tokenCounts.entries())
+      .sort((a, b) => b[1].totalSol - a[1].totalSol)
+      .slice(0, limit);
+    
+    const tokens: DiscoveredToken[] = sortedTokens.map(([tokenMint, data]) => ({
+      tokenMint,
+      tokenSymbol: data.symbol || 'UNKNOWN',
+      tokenName: 'Unknown Token',
+      source: 'whale_activity' as const,
+      priceUsd: null,
+      marketCap: null,
+      volume24h: null,
+      liquidity: null,
+      priceChange24h: null,
+      pairAddress: null,
+      discoveredAt: now,
+      crowdingRisk: Math.min(data.count / 10, 1),
+      alphaDecay: 0.1 * data.count,
+    }));
+    
+    for (const token of tokens) {
+      DISCOVERY_TOKEN_CACHE.set(token.tokenMint, token);
+    }
+    
+    LAST_DISCOVERY_TIME.set(source, now);
+    return { tokens, source, fetchedAt: now, apiHealthy: true };
+  } catch (error) {
+    console.error("[Discovery] Error fetching whale activity:", error);
+    return { tokens: [], source, fetchedAt: now, apiHealthy: false };
+  }
+}
+
+export async function discoverPumpfunTokens(limit: number = 10): Promise<DiscoveryResult> {
+  const source = 'pumpfun';
+  const now = Math.floor(Date.now() / 1000);
+  
+  try {
+    const pumpfunTokens = await db.select().from(tokenDataPool)
+      .where(eq(tokenDataPool.isPumpfun, true))
+      .orderBy(desc(tokenDataPool.updatedAt))
+      .limit(limit);
+    
+    const tokens: DiscoveredToken[] = pumpfunTokens.map(t => ({
+      tokenMint: t.tokenMint,
+      tokenSymbol: t.tokenSymbol || 'UNKNOWN',
+      tokenName: t.tokenName || 'Unknown Token',
+      source: 'pumpfun' as const,
+      priceUsd: t.priceUsd,
+      marketCap: t.marketCap,
+      volume24h: t.volume24h,
+      liquidity: t.liquidity,
+      priceChange24h: t.priceChange24h,
+      pairAddress: t.pairAddress,
+      discoveredAt: now,
+      crowdingRisk: 0.2,
+      alphaDecay: t.pumpfunGraduated ? 0.5 : 0.1,
+    }));
+    
+    for (const token of tokens) {
+      DISCOVERY_TOKEN_CACHE.set(token.tokenMint, token);
+    }
+    
+    LAST_DISCOVERY_TIME.set(source, now);
+    return { tokens, source, fetchedAt: now, apiHealthy: true };
+  } catch (error) {
+    console.error("[Discovery] Error fetching pump.fun tokens:", error);
+    return { tokens: [], source, fetchedAt: now, apiHealthy: false };
+  }
+}
+
+export async function discoverRandomSample(limit: number = 5): Promise<DiscoveryResult> {
+  const source = 'random_sample';
+  const now = Math.floor(Date.now() / 1000);
+  
+  try {
+    const recentTokens = await db.select().from(tokenDataPool)
+      .where(gte(tokenDataPool.updatedAt, now - 86400))
+      .limit(100);
+    
+    const shuffled = recentTokens.sort(() => Math.random() - 0.5).slice(0, limit);
+    
+    const tokens: DiscoveredToken[] = shuffled.map(t => ({
+      tokenMint: t.tokenMint,
+      tokenSymbol: t.tokenSymbol || 'UNKNOWN',
+      tokenName: t.tokenName || 'Unknown Token',
+      source: 'random_sample' as const,
+      priceUsd: t.priceUsd,
+      marketCap: t.marketCap,
+      volume24h: t.volume24h,
+      liquidity: t.liquidity,
+      priceChange24h: t.priceChange24h,
+      pairAddress: t.pairAddress,
+      discoveredAt: now,
+      crowdingRisk: 0,
+      alphaDecay: 0,
+    }));
+    
+    for (const token of tokens) {
+      DISCOVERY_TOKEN_CACHE.set(token.tokenMint, token);
+    }
+    
+    LAST_DISCOVERY_TIME.set(source, now);
+    return { tokens, source, fetchedAt: now, apiHealthy: true };
+  } catch (error) {
+    console.error("[Discovery] Error fetching random sample:", error);
+    return { tokens: [], source, fetchedAt: now, apiHealthy: false };
+  }
+}
+
+export async function runDiverseDiscovery(): Promise<{
+  newTokens: DiscoveryResult;
+  gainers: DiscoveryResult;
+  whaleActivity: DiscoveryResult;
+  pumpfun: DiscoveryResult;
+  random: DiscoveryResult;
+  total: number;
+}> {
+  const [newTokens, gainers, whaleActivity, pumpfun, random] = await Promise.all([
+    discoverNewTokens(10),
+    discoverTopGainers(10),
+    discoverFromWhaleActivity(5),
+    discoverPumpfunTokens(5),
+    discoverRandomSample(3),
+  ]);
+  
+  const total = 
+    newTokens.tokens.length + 
+    gainers.tokens.length + 
+    whaleActivity.tokens.length + 
+    pumpfun.tokens.length + 
+    random.tokens.length;
+  
+  return { newTokens, gainers, whaleActivity, pumpfun, random, total };
+}
+
+export function calculateCrowdingRisk(
+  walletCount: number,
+  timeWindowMinutes: number = 15
+): number {
+  if (walletCount <= 2) return 0;
+  if (walletCount <= 5) return 0.2;
+  if (walletCount <= 10) return 0.4;
+  if (walletCount <= 20) return 0.6;
+  if (walletCount <= 50) return 0.8;
+  return 1.0;
+}
+
+export function calculateAlphaDecay(
+  discoveryAge: number,
+  uniqueHolders: number
+): number {
+  const ageHours = discoveryAge / 3600;
+  const ageDecay = Math.min(ageHours / 24, 1);
+  const holderDecay = Math.min(uniqueHolders / 100, 1);
+  return Math.min((ageDecay * 0.6) + (holderDecay * 0.4), 1);
+}
+
+export async function trackPumpfunGraduation(tokenMint: string): Promise<{
+  graduated: boolean;
+  graduationTime: number | null;
+  ageAtGraduation: number | null;
+  bondingCurveProgress: number;
+} | null> {
+  try {
+    const [token] = await db.select().from(tokenDataPool)
+      .where(eq(tokenDataPool.tokenMint, tokenMint))
+      .limit(1);
+    
+    if (!token || !token.isPumpfun) return null;
+    
+    return {
+      graduated: token.pumpfunGraduated || false,
+      graduationTime: token.pumpfunGraduationTime,
+      ageAtGraduation: token.pumpfunAgeAtGraduation,
+      bondingCurveProgress: token.pumpfunBondingCurveProgress || 0,
+    };
+  } catch (error) {
+    console.error("[Discovery] Error tracking graduation:", error);
+    return null;
+  }
+}
+
+export function getDiscoveryTokenCache(): DiscoveredToken[] {
+  return Array.from(DISCOVERY_TOKEN_CACHE.values());
+}
+
+export function getDiscoveryTokenCacheSize(): number {
+  return DISCOVERY_TOKEN_CACHE.size;
+}
+
+export function clearDiscoveryTokenCache(): void {
+  DISCOVERY_TOKEN_CACHE.clear();
+}
+
+export function getLastDiscoveryTimes(): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const [key, value] of Array.from(LAST_DISCOVERY_TIME.entries())) {
+    result[key] = value;
+  }
+  return result;
+}
+
+export async function getDiverseDiscoveryStats(): Promise<{
+  cacheSize: number;
+  lastDiscovery: Record<string, number>;
+  sourceBreakdown: Record<string, number>;
+}> {
+  const cached = getDiscoveryTokenCache();
+  const sourceBreakdown: Record<string, number> = {};
+  
+  for (const token of cached) {
+    sourceBreakdown[token.source] = (sourceBreakdown[token.source] || 0) + 1;
+  }
+  
+  return {
+    cacheSize: cached.length,
+    lastDiscovery: getLastDiscoveryTimes(),
+    sourceBreakdown,
+  };
+}

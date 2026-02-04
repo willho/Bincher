@@ -515,3 +515,467 @@ export async function runClusterMaintenance(): Promise<{
     },
   };
 }
+
+// =====================
+// WALLET BEHAVIOR CLASSIFICATION
+// =====================
+
+export type WalletBehaviorType = 'bot' | 'leader' | 'follower' | 'organic' | 'unknown';
+
+interface WalletBehavior {
+  walletAddress: string;
+  behaviorType: WalletBehaviorType;
+  confidence: number;
+  signals: {
+    avgReactionTime: number | null;
+    tradeFrequency: number;
+    timingPrecision: number;
+    followsLeaders: string[];
+    leadsFollowers: string[];
+    solanaBlockLatency: number | null;
+  };
+  lastAnalyzed: number;
+}
+
+const WALLET_BEHAVIOR_CACHE: Map<string, WalletBehavior> = new Map();
+
+export async function classifyWalletBehavior(
+  walletAddress: string,
+  lookbackDays: number = 14
+): Promise<WalletBehavior> {
+  const cached = WALLET_BEHAVIOR_CACHE.get(walletAddress);
+  const now = Math.floor(Date.now() / 1000);
+  
+  if (cached && (now - cached.lastAnalyzed) < 3600) {
+    return cached;
+  }
+  
+  const cutoff = now - (lookbackDays * 86400);
+  
+  const walletSwaps = await db.query.swaps.findMany({
+    where: and(
+      eq(swaps.source, walletAddress),
+      gte(swaps.timestamp, cutoff)
+    ),
+    orderBy: [desc(swaps.timestamp)],
+  });
+  
+  if (walletSwaps.length < 5) {
+    const behavior: WalletBehavior = {
+      walletAddress,
+      behaviorType: 'unknown',
+      confidence: 0,
+      signals: {
+        avgReactionTime: null,
+        tradeFrequency: walletSwaps.length / lookbackDays,
+        timingPrecision: 0,
+        followsLeaders: [],
+        leadsFollowers: [],
+        solanaBlockLatency: null,
+      },
+      lastAnalyzed: now,
+    };
+    WALLET_BEHAVIOR_CACHE.set(walletAddress, behavior);
+    return behavior;
+  }
+  
+  const timestamps = walletSwaps.map(s => s.timestamp);
+  const intervals: number[] = [];
+  for (let i = 1; i < timestamps.length; i++) {
+    intervals.push(timestamps[i - 1] - timestamps[i]);
+  }
+  
+  const avgInterval = intervals.length > 0 
+    ? intervals.reduce((a, b) => a + b, 0) / intervals.length 
+    : 0;
+  const intervalStdDev = intervals.length > 1
+    ? Math.sqrt(intervals.reduce((sum, i) => sum + Math.pow(i - avgInterval, 2), 0) / intervals.length)
+    : avgInterval;
+  
+  const tradeFrequency = walletSwaps.length / lookbackDays;
+  const timingPrecision = avgInterval > 0 ? 1 - Math.min(intervalStdDev / avgInterval, 1) : 0;
+  
+  let behaviorType: WalletBehaviorType = 'organic';
+  let confidence = 0.5;
+  
+  const isHighFrequency = tradeFrequency > 10;
+  const isPreciseTiming = timingPrecision > 0.7;
+  const hasConsistentSizes = await checkSizeConsistency(walletSwaps);
+  
+  if (isHighFrequency && isPreciseTiming && hasConsistentSizes) {
+    behaviorType = 'bot';
+    confidence = 0.85;
+  }
+  
+  const { followsLeaders, leadsFollowers, reactionTimes } = await analyzeLeaderFollowerRelations(
+    walletAddress, 
+    walletSwaps.map(s => s.toToken)
+  );
+  
+  const avgReactionTime = reactionTimes.length > 0
+    ? reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length
+    : null;
+  
+  if (followsLeaders.length >= 3 && (avgReactionTime && avgReactionTime < 600)) {
+    if (behaviorType !== 'bot') {
+      behaviorType = 'follower';
+      confidence = Math.min(0.6 + followsLeaders.length * 0.05, 0.9);
+    }
+  } else if (leadsFollowers.length >= 5) {
+    behaviorType = 'leader';
+    confidence = Math.min(0.6 + leadsFollowers.length * 0.03, 0.9);
+  }
+  
+  const behavior: WalletBehavior = {
+    walletAddress,
+    behaviorType,
+    confidence,
+    signals: {
+      avgReactionTime,
+      tradeFrequency,
+      timingPrecision,
+      followsLeaders,
+      leadsFollowers,
+      solanaBlockLatency: null,
+    },
+    lastAnalyzed: now,
+  };
+  
+  WALLET_BEHAVIOR_CACHE.set(walletAddress, behavior);
+  return behavior;
+}
+
+async function checkSizeConsistency(swapsData: typeof swaps.$inferSelect[]): Promise<boolean> {
+  if (swapsData.length < 5) return false;
+  
+  const amounts = swapsData.map(s => s.fromAmount);
+  const avgAmount = amounts.reduce((a, b) => a + b, 0) / amounts.length;
+  const stdDev = Math.sqrt(
+    amounts.reduce((sum, a) => sum + Math.pow(a - avgAmount, 2), 0) / amounts.length
+  );
+  
+  return avgAmount > 0 && (stdDev / avgAmount) < 0.3;
+}
+
+async function analyzeLeaderFollowerRelations(
+  walletAddress: string,
+  tokensMints: string[]
+): Promise<{
+  followsLeaders: string[];
+  leadsFollowers: string[];
+  reactionTimes: number[];
+}> {
+  const followsLeaders: Set<string> = new Set();
+  const leadsFollowers: Set<string> = new Set();
+  const reactionTimes: number[] = [];
+  
+  const uniqueTokens = Array.from(new Set(tokensMints)).slice(0, 20);
+  
+  for (const tokenMint of uniqueTokens) {
+    const tokenSwaps = await db.query.swaps.findMany({
+      where: and(
+        eq(swaps.toToken, tokenMint),
+        eq(swaps.type, 'buy')
+      ),
+      orderBy: [desc(swaps.timestamp)],
+      limit: 50,
+    });
+    
+    const ourSwap = tokenSwaps.find(s => s.source === walletAddress);
+    if (!ourSwap) continue;
+    
+    for (const swap of tokenSwaps) {
+      if (swap.source === walletAddress) continue;
+      
+      const timeDiff = ourSwap.timestamp - swap.timestamp;
+      
+      if (timeDiff > 0 && timeDiff < 900) {
+        followsLeaders.add(swap.source);
+        reactionTimes.push(timeDiff);
+      } else if (timeDiff < 0 && timeDiff > -900) {
+        leadsFollowers.add(swap.source);
+      }
+    }
+  }
+  
+  return {
+    followsLeaders: Array.from(followsLeaders),
+    leadsFollowers: Array.from(leadsFollowers),
+    reactionTimes,
+  };
+}
+
+// =====================
+// COPYTRADE WINDOW ANALYSIS
+// =====================
+
+interface CopytradeWindow {
+  tokenMint: string;
+  leaderWallet: string;
+  leaderBuyTime: number;
+  followers: {
+    wallet: string;
+    buyTime: number;
+    delaySeconds: number;
+  }[];
+  taperCurve: number[];
+  avgDelay: number;
+  peakDelay: number;
+  crowdingRisk: number;
+}
+
+const COPYTRADE_WINDOW_MINUTES = 15;
+const TAPER_PEAK_MINUTES = 9;
+
+export async function analyzeCopytradeWindow(
+  tokenMint: string,
+  lookbackHours: number = 24
+): Promise<CopytradeWindow | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - (lookbackHours * 3600);
+  
+  const buys = await db.query.swaps.findMany({
+    where: and(
+      eq(swaps.toToken, tokenMint),
+      eq(swaps.type, 'buy'),
+      gte(swaps.timestamp, cutoff)
+    ),
+    orderBy: [desc(swaps.timestamp)],
+    limit: 100,
+  });
+  
+  if (buys.length < 3) return null;
+  
+  buys.sort((a, b) => a.timestamp - b.timestamp);
+  const leader = buys[0];
+  
+  const followers: CopytradeWindow['followers'] = [];
+  const taperBuckets: number[] = Array(COPYTRADE_WINDOW_MINUTES).fill(0);
+  
+  for (let i = 1; i < buys.length; i++) {
+    const buy = buys[i];
+    const delaySeconds = buy.timestamp - leader.timestamp;
+    
+    if (delaySeconds > 0 && delaySeconds <= COPYTRADE_WINDOW_MINUTES * 60) {
+      followers.push({
+        wallet: buy.source,
+        buyTime: buy.timestamp,
+        delaySeconds,
+      });
+      
+      const bucketIndex = Math.floor(delaySeconds / 60);
+      if (bucketIndex < taperBuckets.length) {
+        taperBuckets[bucketIndex]++;
+      }
+    }
+  }
+  
+  if (followers.length === 0) return null;
+  
+  const avgDelay = followers.reduce((sum, f) => sum + f.delaySeconds, 0) / followers.length;
+  
+  let peakBucket = 0;
+  let peakCount = 0;
+  for (let i = 0; i < taperBuckets.length; i++) {
+    if (taperBuckets[i] > peakCount) {
+      peakCount = taperBuckets[i];
+      peakBucket = i;
+    }
+  }
+  const peakDelay = peakBucket * 60;
+  
+  const uniqueFollowers = new Set(followers.map(f => f.wallet)).size;
+  const crowdingRisk = Math.min(uniqueFollowers / 10, 1);
+  
+  return {
+    tokenMint,
+    leaderWallet: leader.source,
+    leaderBuyTime: leader.timestamp,
+    followers,
+    taperCurve: taperBuckets,
+    avgDelay,
+    peakDelay,
+    crowdingRisk,
+  };
+}
+
+export function getCopytradeWindowSummary(window: CopytradeWindow): string {
+  const peakMinutes = Math.round(window.peakDelay / 60);
+  const avgMinutes = (window.avgDelay / 60).toFixed(1);
+  
+  let riskLabel = 'low';
+  if (window.crowdingRisk > 0.7) riskLabel = 'high';
+  else if (window.crowdingRisk > 0.4) riskLabel = 'medium';
+  
+  return `${window.followers.length} followers, peak at ${peakMinutes}min, avg ${avgMinutes}min, ${riskLabel} crowding`;
+}
+
+// =====================
+// SYNCHRONIZED TIMING DETECTION
+// =====================
+
+interface SynchronizedEvent {
+  tokenMint: string;
+  timestamp: number;
+  wallets: string[];
+  windowSeconds: number;
+  isSuspicious: boolean;
+  pattern: 'burst' | 'staggered' | 'synchronized';
+}
+
+export async function detectSynchronizedBuying(
+  tokenMint: string,
+  windowSeconds: number = 30
+): Promise<SynchronizedEvent | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - 3600;
+  
+  const recentBuys = await db.query.swaps.findMany({
+    where: and(
+      eq(swaps.toToken, tokenMint),
+      eq(swaps.type, 'buy'),
+      gte(swaps.timestamp, cutoff)
+    ),
+    orderBy: [desc(swaps.timestamp)],
+  });
+  
+  if (recentBuys.length < 3) return null;
+  
+  recentBuys.sort((a, b) => a.timestamp - b.timestamp);
+  
+  for (let i = 0; i < recentBuys.length; i++) {
+    const anchor = recentBuys[i];
+    const synchronizedWallets: string[] = [anchor.source];
+    
+    for (let j = i + 1; j < recentBuys.length; j++) {
+      const buy = recentBuys[j];
+      if (buy.timestamp - anchor.timestamp <= windowSeconds) {
+        if (!synchronizedWallets.includes(buy.source)) {
+          synchronizedWallets.push(buy.source);
+        }
+      } else {
+        break;
+      }
+    }
+    
+    if (synchronizedWallets.length >= 3) {
+      const timestamps = recentBuys
+        .filter(b => synchronizedWallets.includes(b.source) && b.timestamp >= anchor.timestamp && b.timestamp <= anchor.timestamp + windowSeconds)
+        .map(b => b.timestamp);
+      
+      let pattern: SynchronizedEvent['pattern'] = 'staggered';
+      
+      const uniqueTimestamps = new Set(timestamps);
+      if (uniqueTimestamps.size <= 2) {
+        pattern = 'synchronized';
+      } else if (timestamps.length >= 5 && (timestamps[timestamps.length - 1] - timestamps[0]) <= 10) {
+        pattern = 'burst';
+      }
+      
+      const isSuspicious = pattern === 'synchronized' || (pattern === 'burst' && synchronizedWallets.length >= 5);
+      
+      return {
+        tokenMint,
+        timestamp: anchor.timestamp,
+        wallets: synchronizedWallets,
+        windowSeconds,
+        isSuspicious,
+        pattern,
+      };
+    }
+  }
+  
+  return null;
+}
+
+// =====================
+// CLUSTER PERSISTENCE TO DB
+// =====================
+
+export async function persistClusterToDb(cluster: WalletCluster): Promise<number | null> {
+  try {
+    const { whaleClusters } = await import("@shared/schema");
+    const now = Math.floor(Date.now() / 1000);
+    
+    const result = await db.insert(whaleClusters).values({
+      clusterType: cluster.detectedVia,
+      memberAddresses: cluster.members,
+      memberCount: cluster.members.length,
+      firstSeenTogether: cluster.firstSeen,
+      lastSeenTogether: cluster.lastSeen,
+      coordinatedEventCount: 1,
+      typeConfidence: cluster.timingCorrelation,
+      clusterSuccessRate: cluster.successRate ?? null,
+      reliabilityScore: 50,
+      isActive: true,
+      createdAt: now,
+    }).returning({ id: whaleClusters.id });
+    
+    return result[0]?.id ?? null;
+  } catch (error) {
+    console.error("[Cluster] Failed to persist cluster:", error);
+    return null;
+  }
+}
+
+export async function updateClusterOutcome(
+  clusterId: number,
+  pnlSol: number,
+  wasWin: boolean
+): Promise<void> {
+  try {
+    const { whaleClusters } = await import("@shared/schema");
+    
+    const existing = await db.query.whaleClusters.findFirst({
+      where: eq(whaleClusters.id, clusterId),
+    });
+    
+    if (!existing) return;
+    
+    const newEventCount = (existing.coordinatedEventCount || 0) + 1;
+    const wins = wasWin ? 1 : 0;
+    const currentSuccessRate = existing.clusterSuccessRate || 0;
+    const newSuccessRate = ((currentSuccessRate * (existing.coordinatedEventCount || 1)) + wins) / newEventCount;
+    
+    await db.update(whaleClusters)
+      .set({
+        coordinatedEventCount: newEventCount,
+        clusterSuccessRate: newSuccessRate,
+        lastSeenTogether: Math.floor(Date.now() / 1000),
+      })
+      .where(eq(whaleClusters.id, clusterId));
+  } catch (error) {
+    console.error("[Cluster] Failed to update cluster outcome:", error);
+  }
+}
+
+export async function pruneOldClusters(retentionDays: number = 30, minEvents: number = 3): Promise<number> {
+  try {
+    const { whaleClusters } = await import("@shared/schema");
+    const { lt, and: andOp } = await import("drizzle-orm");
+    
+    const cutoff = Math.floor(Date.now() / 1000) - (retentionDays * 86400);
+    
+    const result = await db.delete(whaleClusters)
+      .where(
+        andOp(
+          lt(whaleClusters.lastSeenTogether, cutoff),
+          lt(whaleClusters.coordinatedEventCount, minEvents)
+        )
+      )
+      .returning({ id: whaleClusters.id });
+    
+    return result.length;
+  } catch (error) {
+    console.error("[Cluster] Failed to prune old clusters:", error);
+    return 0;
+  }
+}
+
+export function getWalletBehaviorCache(): Map<string, WalletBehavior> {
+  return WALLET_BEHAVIOR_CACHE;
+}
+
+export function clearWalletBehaviorCache(): void {
+  WALLET_BEHAVIOR_CACHE.clear();
+}
