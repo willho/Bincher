@@ -664,26 +664,34 @@ export async function analyzeWalletStrategy(
   const entryTokenAge = avgHoldDuration < 7200 ? "fresh" : avgHoldDuration < 86400 ? "established" : "mature";
   const entryMarketCap = avgPositionSize > 1 ? "small" : avgPositionSize > 0.1 ? "micro" : "micro";
   
-  return {
+  const safeNumber = (val: number, fallback: number = 0): number => {
+    if (typeof val !== 'number' || !Number.isFinite(val)) return fallback;
+    return val;
+  };
+
+  const result = {
     strategyType,
     tradingStyle,
-    avgHoldDuration: Math.round(avgHoldDuration),
-    avgPositionSize,
-    winRate,
-    avgProfit,
-    avgLoss,
-    profitFactor,
+    avgHoldDuration: Math.round(safeNumber(avgHoldDuration)),
+    avgPositionSize: safeNumber(avgPositionSize),
+    winRate: safeNumber(winRate),
+    avgProfit: safeNumber(avgProfit),
+    avgLoss: safeNumber(avgLoss),
+    profitFactor: safeNumber(profitFactor),
     preferredEntryTime,
     entryTokenAge,
     entryMarketCap,
-    takeProfitMultiplier,
-    stopLossPercent,
-    riskLevel,
-    maxConcurrentPositions: maxConcurrent,
-    confidenceScore,
+    takeProfitMultiplier: safeNumber(takeProfitMultiplier, 1.5),
+    stopLossPercent: safeNumber(stopLossPercent, 0.2),
+    riskLevel: safeNumber(riskLevel, 5),
+    maxConcurrentPositions: safeNumber(maxConcurrent, 1),
+    confidenceScore: safeNumber(confidenceScore),
     sampleSize,
     insights,
   };
+  
+  console.log(`[StrategyAnalyze] Result for wallet analysis:`, JSON.stringify(result, null, 2));
+  return result;
 }
 
 export async function saveWalletStrategy(
@@ -691,61 +699,77 @@ export async function saveWalletStrategy(
   userId: number,
   analysis: StrategyAnalysis
 ): Promise<WalletStrategy> {
+  console.log(`[SaveStrategy] Starting save for wallet: ${walletAddress}, userId: ${userId}`);
   const now = Math.floor(Date.now() / 1000);
   
+  console.log(`[SaveStrategy] Checking for existing strategy...`);
   const existing = await getWalletStrategy(walletAddress, userId);
+  console.log(`[SaveStrategy] Existing strategy found: ${existing ? 'yes' : 'no'}`);
   
   if (existing) {
-    const [updated] = await db.update(walletStrategies)
-      .set({
-        strategyType: analysis.strategyType,
-        tradingStyle: analysis.tradingStyle,
-        avgHoldDuration: analysis.avgHoldDuration,
-        avgPositionSize: analysis.avgPositionSize,
-        winRate: analysis.winRate,
-        avgProfit: analysis.avgProfit,
-        avgLoss: analysis.avgLoss,
-        profitFactor: analysis.profitFactor,
-        preferredEntryTime: analysis.preferredEntryTime,
-        entryTokenAge: analysis.entryTokenAge,
-        entryMarketCap: analysis.entryMarketCap,
-        takeProfitMultiplier: analysis.takeProfitMultiplier,
-        stopLossPercent: analysis.stopLossPercent,
-        riskLevel: analysis.riskLevel,
-        maxConcurrentPositions: analysis.maxConcurrentPositions,
-        confidenceScore: analysis.confidenceScore,
-        sampleSize: analysis.sampleSize,
-        lastUpdatedAt: now,
-        version: sql`${walletStrategies.version} + 1`,
-      })
-      .where(eq(walletStrategies.id, existing.id))
-      .returning();
-    return updated;
+    try {
+      console.log(`[SaveStrategy] Updating existing strategy id: ${existing.id}`);
+      const [updated] = await db.update(walletStrategies)
+        .set({
+          strategyType: analysis.strategyType,
+          tradingStyle: analysis.tradingStyle,
+          avgHoldDuration: analysis.avgHoldDuration,
+          avgPositionSize: analysis.avgPositionSize,
+          winRate: analysis.winRate,
+          avgProfit: analysis.avgProfit,
+          avgLoss: analysis.avgLoss,
+          profitFactor: analysis.profitFactor,
+          preferredEntryTime: analysis.preferredEntryTime,
+          entryTokenAge: analysis.entryTokenAge,
+          entryMarketCap: analysis.entryMarketCap,
+          takeProfitMultiplier: analysis.takeProfitMultiplier,
+          stopLossPercent: analysis.stopLossPercent,
+          riskLevel: analysis.riskLevel,
+          maxConcurrentPositions: analysis.maxConcurrentPositions,
+          confidenceScore: analysis.confidenceScore,
+          sampleSize: analysis.sampleSize,
+          lastUpdatedAt: now,
+          version: sql`${walletStrategies.version} + 1`,
+        })
+        .where(eq(walletStrategies.id, existing.id))
+        .returning();
+      console.log(`[SaveStrategy] Update successful`);
+      return updated;
+    } catch (updateError: any) {
+      console.error(`[SaveStrategy] Update failed:`, updateError.message);
+      throw updateError;
+    }
   }
   
-  const [created] = await db.insert(walletStrategies).values({
-    walletAddress,
-    userId,
-    strategyType: analysis.strategyType,
-    tradingStyle: analysis.tradingStyle,
-    avgHoldDuration: analysis.avgHoldDuration,
-    avgPositionSize: analysis.avgPositionSize,
-    winRate: analysis.winRate,
-    avgProfit: analysis.avgProfit,
-    avgLoss: analysis.avgLoss,
-    profitFactor: analysis.profitFactor,
-    preferredEntryTime: analysis.preferredEntryTime,
-    entryTokenAge: analysis.entryTokenAge,
-    entryMarketCap: analysis.entryMarketCap,
-    takeProfitMultiplier: analysis.takeProfitMultiplier,
-    stopLossPercent: analysis.stopLossPercent,
-    riskLevel: analysis.riskLevel,
-    maxConcurrentPositions: analysis.maxConcurrentPositions,
-    confidenceScore: analysis.confidenceScore,
-    sampleSize: analysis.sampleSize,
-    lastUpdatedAt: now,
-    createdAt: now,
-  }).returning();
-  
-  return created;
+  try {
+    console.log(`[SaveStrategy] Creating new strategy...`);
+    const [created] = await db.insert(walletStrategies).values({
+      walletAddress,
+      userId,
+      strategyType: analysis.strategyType,
+      tradingStyle: analysis.tradingStyle,
+      avgHoldDuration: analysis.avgHoldDuration,
+      avgPositionSize: analysis.avgPositionSize,
+      winRate: analysis.winRate,
+      avgProfit: analysis.avgProfit,
+      avgLoss: analysis.avgLoss,
+      profitFactor: analysis.profitFactor,
+      preferredEntryTime: analysis.preferredEntryTime,
+      entryTokenAge: analysis.entryTokenAge,
+      entryMarketCap: analysis.entryMarketCap,
+      takeProfitMultiplier: analysis.takeProfitMultiplier,
+      stopLossPercent: analysis.stopLossPercent,
+      riskLevel: analysis.riskLevel,
+      maxConcurrentPositions: analysis.maxConcurrentPositions,
+      confidenceScore: analysis.confidenceScore,
+      sampleSize: analysis.sampleSize,
+      lastUpdatedAt: now,
+      createdAt: now,
+    }).returning();
+    console.log(`[SaveStrategy] Insert successful, new id: ${created.id}`);
+    return created;
+  } catch (insertError: any) {
+    console.error(`[SaveStrategy] Insert failed:`, insertError.message);
+    throw insertError;
+  }
 }

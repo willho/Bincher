@@ -6000,13 +6000,22 @@ export async function registerRoutes(
 
   app.post("/api/paper/strategies/:wallet/analyze", requireAuth, async (req: Request, res: Response) => {
     try {
+      console.log(`[StrategyAnalyze] Starting analysis for wallet: ${req.params.wallet}, userId: ${req.user!.id}`);
       const { analyzeWalletStrategy, saveWalletStrategy } = await import("./paper-trading");
+      
+      console.log(`[StrategyAnalyze] Running analyzeWalletStrategy...`);
       const analysis = await analyzeWalletStrategy(req.params.wallet, req.user!.id);
+      console.log(`[StrategyAnalyze] Analysis complete, sampleSize: ${analysis.sampleSize}`);
+      
+      console.log(`[StrategyAnalyze] Saving strategy...`);
       const saved = await saveWalletStrategy(req.params.wallet, req.user!.id, analysis);
+      console.log(`[StrategyAnalyze] Strategy saved successfully`);
+      
       res.json({ analysis, saved });
-    } catch (error) {
-      console.error("Error analyzing wallet strategy:", error);
-      res.status(500).json({ error: "Failed to analyze strategy" });
+    } catch (error: any) {
+      console.error("[StrategyAnalyze] Error:", error);
+      console.error("[StrategyAnalyze] Stack:", error?.stack);
+      res.status(500).json({ error: "Failed to analyze strategy", details: error?.message });
     }
   });
 
