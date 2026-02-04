@@ -269,6 +269,25 @@ export async function calculateTokenHeat(tokenMint: string): Promise<TokenHeatDa
           discoveryQuality: discoveryQualityScore,
         },
       });
+      
+      // Publish insight for hot tokens
+      const { publishInsight } = await import("./insight-bus");
+      await publishInsight({
+        source: 'heat_score',
+        type: 'pattern',
+        title: `Hot token detected: ${tokenSymbol}`,
+        payload: {
+          pattern: 'hot_token',
+          heatScore,
+          factors: heatData.factors,
+          topFactor: whaleActivityScore > 30 ? 'whale_activity' :
+                     recentBuysScore > 30 ? 'recent_buys' :
+                     priceVolatilityScore > 20 ? 'volatility' : 'mixed',
+        },
+        confidence: Math.min(heatScore / 100, 0.9),
+        tokenMint,
+        expiresInHours: 4,
+      });
     } catch (err) {
       // Silent fail for logging
     }

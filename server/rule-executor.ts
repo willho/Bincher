@@ -277,9 +277,62 @@ export async function recordClosedPositionOutcomes(): Promise<number> {
     
     await recordRuleOutcome(ruleId, isWin, pnl);
     recorded++;
+    
+    // Publish performance insight
+    try {
+      const { publishInsight } = await import("./insight-bus");
+      await publishInsight({
+        source: 'rule_executor',
+        type: 'performance',
+        title: `Rule ${isWin ? 'win' : 'loss'}: ${ruleId}`,
+        payload: {
+          ruleId,
+          pnl,
+          isWin,
+          tokenMint: position.tokenMint,
+          holdingTimeMinutes: position.exitTimestamp && position.entryTimestamp
+            ? (position.exitTimestamp - position.entryTimestamp) / 60
+            : 0,
+        },
+        confidence: 0.8,
+        tokenMint: position.tokenMint,
+        expiresInHours: 168, // 1 week
+      });
+    } catch (err) {
+      console.error('[RuleExecutor] Failed to publish insight:', err);
+    }
   }
   
+  // Check for underperforming rules and request AI fixes
+  await checkUnderperformingRules();
+  
   return recorded;
+}
+
+async function checkUnderperformingRules(): Promise<void> {
+  try {
+    const { getActiveRules, getTestingRules } = await import("./emergent-rules");
+    const { proposeRuleFix } = await import("./insight-bus");
+    
+    const [activeRules, testingRules] = await Promise.all([
+      getActiveRules(),
+      getTestingRules()
+    ]);
+    
+    const allRules = [...activeRules, ...testingRules];
+    
+    for (const rule of allRules) {
+      // Only check rules with enough samples
+      if ((rule.sampleCount ?? 0) < 10) continue;
+      
+      // If confidence dropped below 40%, request a fix
+      if ((rule.confidence ?? 0.5) < 0.4) {
+        await proposeRuleFix(rule.ruleId);
+      }
+    }
+  } catch (err) {
+    console.error('[RuleExecutor] Failed to check underperforming rules:', err);
+  }
 }
 
 export async function executeEventTriggeredRule(

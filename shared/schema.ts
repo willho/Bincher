@@ -3214,3 +3214,52 @@ export const systemCorrelations = pgTable("system_correlations", {
 export const insertSystemCorrelationSchema = createInsertSchema(systemCorrelations).omit({ id: true });
 export type SystemCorrelation = typeof systemCorrelations.$inferSelect;
 export type InsertSystemCorrelation = z.infer<typeof insertSystemCorrelationSchema>;
+
+// System-wide insights for bidirectional LLM <-> Trigger flow
+export const systemInsights = pgTable("system_insights", {
+  id: serial("id").primaryKey(),
+  insightId: text("insight_id").notNull().unique(), // nanoid
+  
+  // Source and type
+  sourceSystem: text("source_system").notNull(), // discovery, heat_score, ai_chat, rule_executor, whale_detection, etc.
+  insightType: text("insight_type").notNull(), // pattern, recommendation, performance, warning, correlation
+  
+  // The insight content
+  title: text("title").notNull(), // Short description
+  payload: jsonb("payload").$type<{
+    pattern?: string;
+    signal?: string;
+    metric?: string;
+    value?: number;
+    threshold?: number;
+    recommendation?: string;
+    relatedTokens?: string[];
+    relatedWallets?: string[];
+    ruleId?: string;
+    [key: string]: any;
+  }>().default({}),
+  
+  // Confidence and weight
+  confidence: real("confidence").default(0.5), // 0-1
+  sampleCount: integer("sample_count").default(1),
+  
+  // Targeting (null = global insight)
+  tokenMint: text("token_mint"),
+  walletAddress: text("wallet_address"),
+  userId: integer("user_id"),
+  
+  // Lifecycle
+  status: text("status").default("active"), // active, consumed, expired, archived
+  consumedBy: text("consumed_by"), // Which system consumed this insight
+  consumedAt: integer("consumed_at"),
+  
+  // Timestamps and decay
+  createdAt: integer("created_at").notNull(),
+  expiresAt: integer("expires_at"), // When insight should be ignored
+  lastAccessedAt: integer("last_accessed_at"),
+  accessCount: integer("access_count").default(0),
+});
+
+export const insertSystemInsightSchema = createInsertSchema(systemInsights).omit({ id: true });
+export type SystemInsight = typeof systemInsights.$inferSelect;
+export type InsertSystemInsight = z.infer<typeof insertSystemInsightSchema>;

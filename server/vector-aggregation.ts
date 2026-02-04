@@ -460,6 +460,18 @@ export async function run8HourAggregation(): Promise<{
       lt(vectorUpdates.createdAt, sevenDaysAgo)
     ));
   
+  // Decay and archive old insights
+  let insightStats = { expired: 0, archived: 0 };
+  try {
+    const { decayAndArchiveInsights } = await import("./insight-bus");
+    insightStats = await decayAndArchiveInsights();
+    if (insightStats.expired > 0 || insightStats.archived > 0) {
+      console.log(`[VectorAggregation] Insights: expired=${insightStats.expired}, archived=${insightStats.archived}`);
+    }
+  } catch (err) {
+    console.error("[VectorAggregation] Insight decay failed:", err);
+  }
+  
   console.log(`[VectorAggregation] Processed: routes=${routeUpdates}, strategies=${strategyUpdates}, behavior=${behaviorUpdates}, discovery=${discoveryUpdates}, heat=${heatFactorUpdates}`);
   
   return {

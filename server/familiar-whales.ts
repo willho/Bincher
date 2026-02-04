@@ -116,6 +116,30 @@ export async function recordWhaleActivity(event: WhaleActivityEvent): Promise<Fa
             relatedWallet: event.walletAddress,
           }).catch(err => console.error("[FamiliarWhale] logTokenEvent error:", err));
           
+          // Publish whale insight
+          try {
+            const { publishInsight } = await import("./insight-bus");
+            await publishInsight({
+              source: 'whale_detection',
+              type: 'pattern',
+              title: `Whale ${event.action}: ${event.tokenSymbol || 'token'}`,
+              payload: {
+                pattern: 'whale_activity',
+                action: event.action,
+                rank: event.rank,
+                successRate: (whale.successRate || 0) * 100,
+                isKnownSuccessful,
+                totalTokensSeen: whale.totalTokensSeen || 1,
+              },
+              confidence: isKnownSuccessful ? 0.8 : 0.6,
+              tokenMint: event.tokenMint,
+              walletAddress: event.walletAddress,
+              expiresInHours: 6,
+            });
+          } catch (err) {
+            // Silent fail for insight publishing
+          }
+          
           return {
             whale: updatedWhale || whale,
             position,

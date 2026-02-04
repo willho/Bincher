@@ -212,6 +212,25 @@ export async function checkTriggerForToken(
         liquidity: tokenData.liquidity || 0,
       },
     });
+    
+    // Publish insight for discovery events
+    const { publishInsight } = await import("./insight-bus");
+    await publishInsight({
+      source: 'discovery',
+      type: 'pattern',
+      title: `Discovery: ${trigger.name} triggered`,
+      payload: {
+        pattern: 'discovery_trigger',
+        signal: trigger.metric,
+        triggerName: trigger.name,
+        metricValue,
+        threshold: trigger.threshold,
+        priority: trigger.priority,
+      },
+      confidence: Math.min(0.5 + (trigger.priority / 200), 0.9),
+      tokenMint,
+      expiresInHours: 12,
+    });
   } catch (err) {
     console.error('[Discovery] System event logging failed:', err);
   }

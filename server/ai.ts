@@ -4165,6 +4165,21 @@ export async function chatWithAI(
     systemPrompt += `\n\n${vectorContext}`;
   }
   
+  // Add system-wide insights from the insight bus
+  try {
+    const { buildContextForAI } = await import("./insight-bus");
+    const insightContext = await buildContextForAI({
+      userId,
+      tokenMint: tokenMint || undefined,
+    });
+    
+    if (insightContext.summary && insightContext.summary !== 'No active insights or patterns.') {
+      systemPrompt += `\n\nSYSTEM INSIGHTS:\n${insightContext.summary}`;
+    }
+  } catch (err) {
+    // Insight bus not critical, continue without it
+  }
+  
   // Check for pending trade and pending settings
   const pendingTradeCtx = getPendingTradeContext(userId);
   const pendingSettingsCtx = getPendingSettingsContext(userId);
