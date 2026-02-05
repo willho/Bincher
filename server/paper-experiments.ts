@@ -388,6 +388,15 @@ export async function getPaperExperimentStats(userId: number): Promise<{
   bestTheoryWinRate: number;
   activeExperiments: number;
   activeTheories: number;
+  bestTheory: {
+    id: string;
+    name: string;
+    takeProfitMultiplier: number;
+    stopLossPercent: number;
+    sampleSize: number;
+    winRate: number;
+    avgPnlPercent: number;
+  } | null;
   gateStatus: RealTradingGate;
 }> {
   const experimentPositions = await db.select().from(paperPositions)
@@ -427,12 +436,12 @@ export async function getPaperExperimentStats(userId: number): Promise<{
     activeTheories: theories.length,
     bestTheory: bestTheory ? {
       id: bestTheory.id,
-      hypothesis: bestTheory.hypothesis,
-      takeProfitMultiplier: bestTheory.takeProfitMultiplier,
-      stopLossPercent: bestTheory.stopLossPercent,
-      paperTrades: bestTheory.paperTrades,
-      paperWins: bestTheory.paperWins,
-      winRate: bestTheory.paperTrades > 0 ? bestTheory.paperWins / bestTheory.paperTrades : 0,
+      name: bestTheory.name,
+      takeProfitMultiplier: (bestTheory.config?.takeProfitMultiplier as number) || 2.0,
+      stopLossPercent: (bestTheory.config?.stopLossPercent as number) || 25,
+      sampleSize: bestTheory.sampleSize,
+      winRate: bestTheory.winRate,
+      avgPnlPercent: bestTheory.avgPnlPercent,
     } : null,
     gateStatus,
   };

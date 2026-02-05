@@ -16,13 +16,13 @@ interface ExperimentStats {
   activeExperiments: number;
   activeTheories: number;
   bestTheory: {
-    id: number;
-    hypothesis: string;
+    id: string;
+    name: string;
     takeProfitMultiplier: number;
     stopLossPercent: number;
-    paperTrades: number;
-    paperWins: number;
+    sampleSize: number;
     winRate: number;
+    avgPnlPercent: number;
   } | null;
   gateStatus: {
     approved: boolean;
@@ -215,16 +215,19 @@ export function LearningDashboard() {
             ) : experimentData?.bestTheory ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">Theory ID</span>
-                  <Badge variant="outline">#{experimentData.bestTheory.id}</Badge>
-                </div>
-                <div className="text-xs text-muted-foreground truncate" title={experimentData.bestTheory.hypothesis}>
-                  {experimentData.bestTheory.hypothesis.substring(0, 60)}...
+                  <span className="text-sm text-muted-foreground">Theory</span>
+                  <Badge variant="outline">{experimentData.bestTheory.name}</Badge>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">Win Rate</span>
                   <span className="font-medium">
-                    {(experimentData.bestTheory.winRate * 100).toFixed(1)}% ({experimentData.bestTheory.paperWins}/{experimentData.bestTheory.paperTrades})
+                    {(experimentData.bestTheory.winRate * 100).toFixed(1)}% ({experimentData.bestTheory.sampleSize} trades)
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Avg PnL</span>
+                  <span className={`font-medium ${experimentData.bestTheory.avgPnlPercent >= 0 ? "text-green-600" : "text-destructive"}`}>
+                    {experimentData.bestTheory.avgPnlPercent >= 0 ? "+" : ""}{experimentData.bestTheory.avgPnlPercent.toFixed(1)}%
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
