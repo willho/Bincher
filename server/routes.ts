@@ -4870,12 +4870,37 @@ export async function registerRoutes(
 
   app.get("/api/snapshots/token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
+      const tokenMint = req.params.tokenMint as string;
       const { getSnapshotByToken } = await import("./ai");
-      const snapshot = await getSnapshotByToken(req.params.tokenMint as string);
-      if (!snapshot) {
-        return res.status(404).json({ error: "No snapshot found for this token" });
+      const snapshot = await getSnapshotByToken(tokenMint);
+      
+      if (snapshot) {
+        return res.json(snapshot);
       }
-      res.json(snapshot);
+      
+      // Fallback: Try to get data from tokenDataPool
+      const { getTokenData } = await import("./data-pool");
+      const poolData = await getTokenData(tokenMint);
+      
+      if (poolData) {
+        // Return a snapshot-like response from pool data
+        return res.json({
+          tokenMint: poolData.tokenMint,
+          tokenSymbol: poolData.tokenSymbol,
+          tokenName: poolData.tokenName,
+          priceUsd: poolData.priceUsd,
+          marketCap: poolData.marketCap,
+          fdv: poolData.fdv,
+          liquidity: poolData.liquidity,
+          volume24h: poolData.volume24h,
+          priceChange24h: poolData.priceChange24h,
+          source: 'tokenDataPool',
+          lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
+          isFallback: true,
+        });
+      }
+      
+      return res.status(404).json({ error: "No snapshot found for this token" });
     } catch (error) {
       console.error("Error getting snapshot by token:", error);
       res.status(500).json({ error: "Failed to get snapshot" });

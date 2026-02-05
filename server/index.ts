@@ -69,6 +69,10 @@ app.use((req, res, next) => {
     
     const { startCleanupScheduler } = await import("./discovery-worker");
     startCleanupScheduler();
+    
+    // Start batched DexScreener refresh job (targets 80% daily budget)
+    const { startBatchedDexScreenerRefresh } = await import("./data-pool");
+    startBatchedDexScreenerRefresh();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");

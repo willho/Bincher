@@ -267,72 +267,32 @@ export interface TopHolderInfo {
 }
 
 export async function fetchTopHolders(mintAddress: string, limit: number = 100): Promise<TopHolderInfo[]> {
-  if (!HELIUS_API_KEY) {
-    console.warn("No Helius API key - skipping top holders fetch");
-    return [];
-  }
-
-  const budgetCheck = await shouldAllowApiCall("helius");
-  if (!budgetCheck.allowed) {
-    console.warn(`Helius API blocked: ${budgetCheck.reason}`);
-    return [];
-  }
-
   try {
-    const rpcUrl = await getHeliusRpcEndpoint();
-    const [holdersResponse, supplyResponse] = await Promise.all([
-      fetch(
-        rpcUrl,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: "top-holders",
-            method: "getTokenLargestAccounts",
-            params: [mintAddress],
-          }),
-        }
-      ),
-      fetch(
-        rpcUrl,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: "token-supply",
-            method: "getTokenSupply",
-            params: [mintAddress],
-          }),
-        }
-      ),
-    ]);
-
-    if (!holdersResponse.ok) {
-      console.error("Helius API error (holders):", holdersResponse.status);
+    // Use rpc-provider's wrapper which handles Chainstack routing and tracking
+    const { getTokenLargestAccounts: rpcGetLargestAccounts, rpcCall } = await import("./rpc-provider");
+    const { PublicKey } = await import("@solana/web3.js");
+    
+    // Fetch token largest accounts via rpc-provider (tracks usage, handles fallback)
+    const largestAccounts = await rpcGetLargestAccounts(mintAddress);
+    
+    if (!largestAccounts || largestAccounts.length === 0) {
       return [];
     }
 
-    const holdersData = await holdersResponse.json();
-    await trackApiCall("helius", "getTokenLargestAccounts", 1); // Track holders call only
-    if (!holdersData.result?.value) {
-      return [];
-    }
+    // Get token supply via rpc-provider
+    const supplyInfo = await rpcCall("getTokenSupply", async (connection) => {
+      return connection.getTokenSupply(new PublicKey(mintAddress));
+    });
 
     let totalSupply = 0;
-    let decimals = 9; // Default to 9 decimals (common for Solana tokens)
-    if (supplyResponse.ok) {
-      const supplyData = await supplyResponse.json();
-      await trackApiCall("helius", "getTokenSupply", 1); // Track supply call separately on success
-      if (supplyData.result?.value?.amount) {
-        totalSupply = parseFloat(supplyData.result.value.amount);
-        decimals = supplyData.result.value.decimals ?? 9;
-      }
+    let decimals = 9;
+    if (supplyInfo.value?.amount) {
+      totalSupply = parseFloat(supplyInfo.value.amount);
+      decimals = supplyInfo.value.decimals ?? 9;
     }
     
     if (totalSupply === 0) {
-      totalSupply = holdersData.result.value.reduce(
+      totalSupply = largestAccounts.reduce(
         (sum: number, h: any) => sum + parseFloat(h.amount || "0"),
         0
       );
@@ -342,11 +302,11 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
 
     const divisor = Math.pow(10, decimals);
     const holders: TopHolderInfo[] = [];
-    for (const holder of holdersData.result.value.slice(0, limit)) {
+    for (const holder of largestAccounts.slice(0, limit)) {
       const amount = parseFloat(holder.amount || "0");
       const percent = (amount / totalSupply) * 100;
       holders.push({
-        address: holder.address,
+        address: holder.address.toString(),
         percent: Math.round(percent * 100) / 100,
         amount: amount,
         uiAmount: amount / divisor,
