@@ -2381,6 +2381,19 @@ export async function registerRoutes(
     label: z.string().optional(),
     enabled: z.boolean().optional(),
     copyTradeEnabled: z.boolean().optional(),
+    copyBuyType: z.enum(["fixed_sol", "fixed_usd", "percentage"]).optional(),
+    copyBuyAmount: z.number().positive().optional(),
+    copyMinBalance: z.number().nonnegative().nullish(),
+    copyMinTradeUsd: z.number().nonnegative().nullish(),
+    copyScoreThreshold: z.number().int().min(0).max(100).nullish(),
+    copyTiming: z.enum(["immediate", "delayed", "triggered"]).optional(),
+    copyDelayMinutes: z.number().int().nonnegative().nullish(),
+    copyAutoMirror: z.boolean().optional(),
+    copyMirrorBuys: z.boolean().optional(),
+    copyMirrorSells: z.boolean().optional(),
+    dedupSkipIfHolding: z.boolean().optional(),
+    dedupSkipIfEverHeld: z.boolean().optional(),
+    dedupSkipIfPending: z.boolean().optional(),
   });
   
   // Get single monitored wallet by ID
@@ -2410,9 +2423,9 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid update data", details: parsed.error.issues });
       }
       
-      const { label, enabled, copyTradeEnabled } = parsed.data;
+      const updateData = parsed.data;
       
-      const wallet = await storage.updateMonitoredWallet(req.userId!, walletId, { label, enabled, copyTradeEnabled });
+      const wallet = await storage.updateMonitoredWallet(req.userId!, walletId, updateData);
       if (!wallet) {
         return res.status(404).json({ error: "Wallet not found" });
       }

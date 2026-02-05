@@ -235,9 +235,37 @@ export class DatabaseStorage implements IStorage {
     return rows[0];
   }
 
-  async updateMonitoredWallet(userId: number, walletId: number, updates: { label?: string; enabled?: boolean; copyTradeEnabled?: boolean }): Promise<MonitoredWallet | null> {
+  async updateMonitoredWallet(userId: number, walletId: number, updates: Partial<{
+    label: string;
+    enabled: boolean;
+    copyTradeEnabled: boolean;
+    copyBuyType: string;
+    copyBuyAmount: number;
+    copyMinBalance: number | null;
+    copyMinTradeUsd: number | null;
+    copyScoreThreshold: number | null;
+    copyTiming: string;
+    copyDelayMinutes: number | null;
+    copyAutoMirror: boolean;
+    copyMirrorBuys: boolean;
+    copyMirrorSells: boolean;
+    dedupSkipIfHolding: boolean;
+    dedupSkipIfEverHeld: boolean;
+    dedupSkipIfPending: boolean;
+  }>): Promise<MonitoredWallet | null> {
+    // Filter out undefined values to avoid "No values to set" error
+    const filteredUpdates = Object.fromEntries(
+      Object.entries(updates).filter(([_, v]) => v !== undefined)
+    );
+    if (Object.keys(filteredUpdates).length === 0) {
+      // Nothing to update, just return current wallet
+      const rows = await db.select().from(monitoredWallets)
+        .where(and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, userId)))
+        .limit(1);
+      return rows[0] || null;
+    }
     const rows = await db.update(monitoredWallets)
-      .set(updates)
+      .set(filteredUpdates)
       .where(and(eq(monitoredWallets.id, walletId), eq(monitoredWallets.userId, userId)))
       .returning();
     return rows[0] || null;
