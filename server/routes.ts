@@ -6427,6 +6427,260 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/wallet-discovery/discovered", requireAuth, async (req, res) => {
+    try {
+      const { getTopDiscoveredWallets, getCopyChainStats } = await import("./wallet-discovery");
+      const minScore = parseInt(req.query.minScore as string) || 60;
+      const limit = parseInt(req.query.limit as string) || 20;
+      const wallets = await getTopDiscoveredWallets(limit, minScore);
+      const stats = await getCopyChainStats();
+      res.json({ wallets, stats });
+    } catch (error) {
+      console.error("Error fetching discovered wallets:", error);
+      res.status(500).json({ error: "Failed to fetch discovered wallets" });
+    }
+  });
+
+  app.get("/api/wallet-discovery/leaders", requireAuth, async (req, res) => {
+    try {
+      const { getLeaderWallets } = await import("./wallet-discovery");
+      const leaders = await getLeaderWallets();
+      res.json({ leaders });
+    } catch (error) {
+      console.error("Error fetching leader wallets:", error);
+      res.status(500).json({ error: "Failed to fetch leader wallets" });
+    }
+  });
+
+  app.post("/api/wallet-discovery/run-cycle", requireAuth, async (req, res) => {
+    try {
+      const { runWalletDiscoveryCycle } = await import("./wallet-discovery");
+      const result = await runWalletDiscoveryCycle();
+      res.json(result);
+    } catch (error) {
+      console.error("Error running wallet discovery:", error);
+      res.status(500).json({ error: "Failed to run wallet discovery" });
+    }
+  });
+
+  app.get("/api/wallet-discovery/score/:address", requireAuth, async (req, res) => {
+    try {
+      const { scoreWalletForSignal } = await import("./wallet-discovery");
+      const result = await scoreWalletForSignal(req.params.address);
+      res.json(result);
+    } catch (error) {
+      console.error("Error scoring wallet:", error);
+      res.status(500).json({ error: "Failed to score wallet" });
+    }
+  });
+
+  app.post("/api/wallet-discovery/track-chain", requireAuth, async (req, res) => {
+    try {
+      const { trackCopyChain } = await import("./wallet-discovery");
+      const { wallet, maxDepth } = req.body;
+      if (!wallet) {
+        return res.status(400).json({ error: "Wallet address required" });
+      }
+      const result = await trackCopyChain(wallet, maxDepth || 3);
+      res.json(result);
+    } catch (error) {
+      console.error("Error tracking copy chain:", error);
+      res.status(500).json({ error: "Failed to track copy chain" });
+    }
+  });
+
+  app.get("/api/wallet-discovery/outcomes/:address", requireAuth, async (req, res) => {
+    try {
+      const { getWalletOutcomes } = await import("./wallet-discovery");
+      const days = parseInt(req.query.days as string) || 30;
+      const outcomes = await getWalletOutcomes(req.params.address, days);
+      res.json({ outcomes });
+    } catch (error) {
+      console.error("Error fetching wallet outcomes:", error);
+      res.status(500).json({ error: "Failed to fetch wallet outcomes" });
+    }
+  });
+
+  app.get("/api/whale-reputation/:address", requireAuth, async (req, res) => {
+    try {
+      const { buildWhaleReputation, getCachedWhaleReputation } = await import("./whale-reputation");
+      const days = parseInt(req.query.days as string) || 30;
+      let reputation = getCachedWhaleReputation(req.params.address);
+      if (!reputation) {
+        reputation = await buildWhaleReputation(req.params.address, days);
+      }
+      res.json(reputation);
+    } catch (error) {
+      console.error("Error fetching whale reputation:", error);
+      res.status(500).json({ error: "Failed to fetch whale reputation" });
+    }
+  });
+
+  app.get("/api/whale-reputation/top", requireAuth, async (req, res) => {
+    try {
+      const { getTopWhales } = await import("./whale-reputation");
+      const limit = parseInt(req.query.limit as string) || 20;
+      const minTrades = parseInt(req.query.minTrades as string) || 5;
+      const whales = await getTopWhales(limit, minTrades);
+      res.json({ whales });
+    } catch (error) {
+      console.error("Error fetching top whales:", error);
+      res.status(500).json({ error: "Failed to fetch top whales" });
+    }
+  });
+
+  app.get("/api/whale-reputation/red-flags", requireAuth, async (req, res) => {
+    try {
+      const { getRedFlagWhales } = await import("./whale-reputation");
+      const minTrades = parseInt(req.query.minTrades as string) || 10;
+      const whales = await getRedFlagWhales(minTrades);
+      res.json({ whales });
+    } catch (error) {
+      console.error("Error fetching red flag whales:", error);
+      res.status(500).json({ error: "Failed to fetch red flag whales" });
+    }
+  });
+
+  app.get("/api/whale-reputation/blacklist-candidates", requireAuth, async (req, res) => {
+    try {
+      const { getBlacklistCandidates } = await import("./whale-reputation");
+      const candidates = await getBlacklistCandidates();
+      res.json({ candidates });
+    } catch (error) {
+      console.error("Error fetching blacklist candidates:", error);
+      res.status(500).json({ error: "Failed to fetch blacklist candidates" });
+    }
+  });
+
+  app.post("/api/whale-reputation/scan", requireAuth, async (req, res) => {
+    try {
+      const { runWhaleReputationScan } = await import("./whale-reputation");
+      const days = parseInt(req.body.days) || 14;
+      const result = await runWhaleReputationScan(days);
+      res.json(result);
+    } catch (error) {
+      console.error("Error running whale reputation scan:", error);
+      res.status(500).json({ error: "Failed to run whale reputation scan" });
+    }
+  });
+
+  app.get("/api/whale-reputation/outcomes/:address", requireAuth, async (req, res) => {
+    try {
+      const { getWhaleOutcomes } = await import("./whale-reputation");
+      const days = parseInt(req.query.days as string) || 30;
+      const outcomes = await getWhaleOutcomes(req.params.address, days);
+      res.json({ outcomes });
+    } catch (error) {
+      console.error("Error fetching whale outcomes:", error);
+      res.status(500).json({ error: "Failed to fetch whale outcomes" });
+    }
+  });
+
+  app.get("/api/timeframe/daily", requireAuth, async (req, res) => {
+    try {
+      const { getDailyWinnerAggregation } = await import("./timeframe-analysis");
+      const dateStr = req.query.date as string;
+      const date = dateStr ? new Date(dateStr) : new Date();
+      const aggregation = await getDailyWinnerAggregation(date);
+      res.json(aggregation);
+    } catch (error) {
+      console.error("Error fetching daily aggregation:", error);
+      res.status(500).json({ error: "Failed to fetch daily aggregation" });
+    }
+  });
+
+  app.get("/api/timeframe/weekly", requireAuth, async (req, res) => {
+    try {
+      const { getWeeklySourceReview } = await import("./timeframe-analysis");
+      const review = await getWeeklySourceReview();
+      res.json(review);
+    } catch (error) {
+      console.error("Error fetching weekly review:", error);
+      res.status(500).json({ error: "Failed to fetch weekly review" });
+    }
+  });
+
+  app.get("/api/timeframe/hot-movers", requireAuth, async (req, res) => {
+    try {
+      const { getHourlyHotMovers } = await import("./timeframe-analysis");
+      const limit = parseInt(req.query.limit as string) || 20;
+      const movers = await getHourlyHotMovers(limit);
+      res.json({ movers });
+    } catch (error) {
+      console.error("Error fetching hot movers:", error);
+      res.status(500).json({ error: "Failed to fetch hot movers" });
+    }
+  });
+
+  app.get("/api/social/sources", requireAuth, async (req, res) => {
+    try {
+      const { getTopSocialSources, getSocialSourceStats } = await import("./social-discovery");
+      const limit = parseInt(req.query.limit as string) || 20;
+      const sources = await getTopSocialSources(limit);
+      const stats = await getSocialSourceStats();
+      res.json({ sources, stats });
+    } catch (error) {
+      console.error("Error fetching social sources:", error);
+      res.status(500).json({ error: "Failed to fetch social sources" });
+    }
+  });
+
+  app.get("/api/social/calls", requireAuth, async (req, res) => {
+    try {
+      const { getRecentSocialCalls } = await import("./social-discovery");
+      const limit = parseInt(req.query.limit as string) || 20;
+      const calls = getRecentSocialCalls(limit);
+      res.json({ calls });
+    } catch (error) {
+      console.error("Error fetching social calls:", error);
+      res.status(500).json({ error: "Failed to fetch social calls" });
+    }
+  });
+
+  app.post("/api/social/discover", requireAuth, async (req, res) => {
+    try {
+      const { discoverSocialSourcesFromWinners } = await import("./social-discovery");
+      const result = await discoverSocialSourcesFromWinners(72, 20);
+      res.json(result);
+    } catch (error) {
+      console.error("Error discovering social sources:", error);
+      res.status(500).json({ error: "Failed to discover social sources" });
+    }
+  });
+
+  app.get("/api/social/boost/:symbol", requireAuth, async (req, res) => {
+    try {
+      const { getSocialBoostForToken } = await import("./social-discovery");
+      const boost = getSocialBoostForToken(req.params.symbol);
+      res.json({ symbol: req.params.symbol, boost });
+    } catch (error) {
+      console.error("Error getting social boost:", error);
+      res.status(500).json({ error: "Failed to get social boost" });
+    }
+  });
+
+  app.get("/api/background-jobs/status", requireAuth, async (req, res) => {
+    try {
+      const { getJobStatuses } = await import("./background-jobs");
+      const statuses = getJobStatuses();
+      res.json({ jobs: statuses });
+    } catch (error) {
+      console.error("Error fetching job statuses:", error);
+      res.status(500).json({ error: "Failed to fetch job statuses" });
+    }
+  });
+
+  app.post("/api/background-jobs/run/:jobName", requireAuth, async (req, res) => {
+    try {
+      const { runJobManually } = await import("./background-jobs");
+      const result = await runJobManually(req.params.jobName);
+      res.json({ success: true, result });
+    } catch (error: any) {
+      console.error("Error running job:", error);
+      res.status(500).json({ error: error.message || "Failed to run job" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   await restoreMonitoring();
   

@@ -411,6 +411,7 @@ export async function getPaperExperimentStats(userId: number): Promise<{
     .where(eq(metaExperiments.status, "active"));
   
   const theories = await getActiveTheories();
+  const bestTheory = await getBestTheory();
   const gateStatus = await checkRealTradingGate(userId);
   
   return {
@@ -424,6 +425,15 @@ export async function getPaperExperimentStats(userId: number): Promise<{
       : 0,
     activeExperiments: activeExperiments.length,
     activeTheories: theories.length,
+    bestTheory: bestTheory ? {
+      id: bestTheory.id,
+      hypothesis: bestTheory.hypothesis,
+      takeProfitMultiplier: bestTheory.takeProfitMultiplier,
+      stopLossPercent: bestTheory.stopLossPercent,
+      paperTrades: bestTheory.paperTrades,
+      paperWins: bestTheory.paperWins,
+      winRate: bestTheory.paperTrades > 0 ? bestTheory.paperWins / bestTheory.paperTrades : 0,
+    } : null,
     gateStatus,
   };
 }

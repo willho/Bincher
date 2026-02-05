@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { AdminChat } from "./admin-chat";
+import { LearningDashboard } from "./learning-dashboard";
 
 interface AdminUser {
   id: number;
@@ -610,6 +611,19 @@ export function AdminDashboard() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5" />
+            Learning Systems
+          </CardTitle>
+          <CardDescription>Discovery, experimentation, and self-optimization status</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <LearningDashboard />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
             <BarChart3 className="h-5 w-5" />
             API Budget
           </CardTitle>
@@ -673,6 +687,20 @@ export function AdminDashboard() {
                         style={{ width: `${Math.min(budget.monthlyPercent, 100)}%` }}
                       />
                     </div>
+                    {budget.dailyUsage > 0 && (
+                      <div className="mt-2 pt-2 border-t border-border/50">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted-foreground">Projected Monthly</span>
+                          <span className={
+                            (budget.dailyUsage * 30) > budget.monthlyLimit ? "text-destructive" :
+                            (budget.dailyUsage * 30) > (budget.monthlyLimit * 0.8) ? "text-yellow-600" :
+                            "text-green-600"
+                          }>
+                            ~{(budget.dailyUsage * 30).toLocaleString()} ({((budget.dailyUsage * 30 / budget.monthlyLimit) * 100).toFixed(0)}%)
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
