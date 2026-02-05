@@ -1,7 +1,7 @@
 import { Connection, PublicKey, ParsedTransactionWithMeta, GetProgramAccountsFilter } from "@solana/web3.js";
 import { getNetworkMode } from "./network-mode";
 
-export type RpcProvider = "chainstack" | "helius";
+export type RpcProvider = "chainstack" | "quicknode" | "helius";
 
 interface RpcStats {
   calls: number;
@@ -12,6 +12,7 @@ interface RpcStats {
 
 const providerStats: Map<RpcProvider, RpcStats> = new Map([
   ["chainstack", { calls: 0, errors: 0, lastErrorAt: null, avgLatencyMs: 0 }],
+  ["quicknode", { calls: 0, errors: 0, lastErrorAt: null, avgLatencyMs: 0 }],
   ["helius", { calls: 0, errors: 0, lastErrorAt: null, avgLatencyMs: 0 }],
 ]);
 
@@ -27,6 +28,17 @@ async function getChainstackRpcUrl(): Promise<string | null> {
     return `https://solana-devnet.core.chainstack.com/${apiKey}`;
   }
   return `https://solana-mainnet.core.chainstack.com/${apiKey}`;
+}
+
+async function getQuicknodeRpcUrl(): Promise<string | null> {
+  const endpoint = process.env.QUICKNODE_API_KEY;
+  if (!endpoint) return null;
+  
+  const mode = await getNetworkMode();
+  if (mode === "devnet") {
+    return null;
+  }
+  return endpoint;
 }
 
 async function getHeliusRpcUrl(): Promise<string> {
@@ -47,6 +59,10 @@ async function shouldUseProvider(provider: RpcProvider): Promise<boolean> {
     return false;
   }
   
+  if (provider === "quicknode" && !(await getQuicknodeRpcUrl())) {
+    return false;
+  }
+  
   if (stats.lastErrorAt) {
     const timeSinceError = Date.now() - stats.lastErrorAt;
     if (timeSinceError < ERROR_COOLDOWN_MS && stats.errors >= MAX_CONSECUTIVE_ERRORS) {
@@ -60,6 +76,9 @@ async function shouldUseProvider(provider: RpcProvider): Promise<boolean> {
 async function getPreferredProvider(): Promise<RpcProvider> {
   if (await shouldUseProvider("chainstack")) {
     return "chainstack";
+  }
+  if (await shouldUseProvider("quicknode")) {
+    return "quicknode";
   }
   return "helius";
 }
@@ -92,8 +111,17 @@ export async function getConnection(provider?: RpcProvider): Promise<Connection>
     }
   }
   
+  if (selectedProvider === "quicknode") {
+    const url = await getQuicknodeRpcUrl();
+    if (url) {
+      return new Connection(url, "confirmed");
+    }
+  }
+  
   return new Connection(await getHeliusRpcUrl(), "confirmed");
 }
+
+const FALLBACK_ORDER: RpcProvider[] = ["chainstack", "quicknode", "helius"];
 
 export async function rpcCall<T>(
   operation: string,
@@ -112,17 +140,28 @@ export async function rpcCall<T>(
     recordError(primary);
     console.error(`[RpcProvider] ${primary} failed for ${operation}:`, error);
     
-    if (fallbackOnError && primary === "chainstack") {
-      console.log(`[RpcProvider] Falling back to helius for ${operation}`);
-      const fallbackStart = Date.now();
-      try {
-        const heliusConnection = await getConnection("helius");
-        const result = await fn(heliusConnection);
-        recordSuccess("helius", Date.now() - fallbackStart);
-        return result;
-      } catch (fallbackError) {
-        recordError("helius");
-        throw fallbackError;
+    if (fallbackOnError) {
+      const primaryIndex = FALLBACK_ORDER.indexOf(primary);
+      
+      for (let i = primaryIndex + 1; i < FALLBACK_ORDER.length; i++) {
+        const fallbackProvider = FALLBACK_ORDER[i];
+        
+        if (!(await shouldUseProvider(fallbackProvider))) {
+          continue;
+        }
+        
+        console.log(`[RpcProvider] Falling back to ${fallbackProvider} for ${operation}`);
+        const fallbackStart = Date.now();
+        
+        try {
+          const fallbackConnection = await getConnection(fallbackProvider);
+          const result = await fn(fallbackConnection);
+          recordSuccess(fallbackProvider, Date.now() - fallbackStart);
+          return result;
+        } catch (fallbackError) {
+          recordError(fallbackProvider);
+          console.error(`[RpcProvider] ${fallbackProvider} also failed for ${operation}:`, fallbackError);
+        }
       }
     }
     

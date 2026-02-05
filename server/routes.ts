@@ -2000,15 +2000,17 @@ export async function registerRoutes(
       const user = await storage.getUserById(req.userId!);
       if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
 
-      const { getProviderStats, getCurrentProvider, resetProviderStats } = await import("./rpc-provider");
+      const { getProviderStats, getCurrentProvider } = await import("./rpc-provider");
       
       const stats = getProviderStats();
       const currentProvider = await getCurrentProvider();
       const chainstackConfigured = !!process.env.CHAINSTACK_API_KEY;
+      const quicknodeConfigured = !!process.env.QUICKNODE_API_KEY;
 
       res.json({
         currentProvider,
         chainstackConfigured,
+        quicknodeConfigured,
         providers: stats,
       });
     } catch (error) {
