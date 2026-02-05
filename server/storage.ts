@@ -249,6 +249,12 @@ export class DatabaseStorage implements IStorage {
     copyAutoMirror: boolean;
     copyMirrorBuys: boolean;
     copyMirrorSells: boolean;
+    copyMirrorBuyMode: string;
+    copyMirrorBuyAmount: number | null;
+    copyPositionCapUsd: number | null;
+    copyMirrorSellMode: string;
+    copyMirrorSellPercent: number | null;
+    copyMirrorSellAmount: number | null;
     dedupSkipIfHolding: boolean;
     dedupSkipIfEverHeld: boolean;
     dedupSkipIfPending: boolean;

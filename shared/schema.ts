@@ -92,7 +92,7 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   copyBudgetAmount: real("copy_budget_amount"), // SOL amount for budget
   
   // Mirror buy limits
-  copyMirrorBuyMode: text("copy_mirror_buy_mode").default("same"), // "same" | "fixed" | "percent_wallet" | "percent_budget"
+  copyMirrorBuyMode: text("copy_mirror_buy_mode").default("same"), // "same" | "fixed" | "percent_wallet" | "proportional"
   copyMirrorBuyAmount: real("copy_mirror_buy_amount"), // Amount for mirror buys (if not "same")
   copyMirrorBuyMaxPerToken: integer("copy_mirror_buy_max_per_token"), // Max mirror buys per token
   copyMirrorBuyMaxPerHour: integer("copy_mirror_buy_max_per_hour"), // Max mirror buys per hour

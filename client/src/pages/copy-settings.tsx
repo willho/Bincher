@@ -46,6 +46,12 @@ interface MonitoredWallet {
   copyAutoMirror: boolean | null;
   copyMirrorBuys: boolean | null;
   copyMirrorSells: boolean | null;
+  copyMirrorBuyMode: string | null;
+  copyMirrorBuyAmount: number | null;
+  copyPositionCapUsd: number | null;
+  copyMirrorSellMode: string | null;
+  copyMirrorSellPercent: number | null;
+  copyMirrorSellAmount: number | null;
   dedupSkipIfHolding: boolean | null;
   dedupSkipIfEverHeld: boolean | null;
   dedupSkipIfPending: boolean | null;
@@ -331,29 +337,141 @@ export default function CopySettingsPage() {
               </div>
             )}
           </div>
-          <div className="flex items-center justify-between gap-4 p-3 rounded-lg border">
-            <div className="min-w-0">
-              <Label>Mirror Buys</Label>
-              <p className="text-xs text-muted-foreground">Also copy when signal wallet buys more of a token you hold</p>
+          <div className="p-3 rounded-lg border space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <Label>Mirror Repeat Buys</Label>
+                <p className="text-xs text-muted-foreground">Copy when signal wallet buys more of a token you already hold</p>
+              </div>
+              <Switch
+                checked={wallet.copyMirrorBuys ?? wallet.copyAutoMirror ?? false}
+                onCheckedChange={(v) => handleUpdate("copyMirrorBuys", v)}
+                data-testid="switch-mirror-buys"
+                className="shrink-0"
+              />
             </div>
-            <Switch
-              checked={wallet.copyMirrorBuys ?? wallet.copyAutoMirror ?? false}
-              onCheckedChange={(v) => handleUpdate("copyMirrorBuys", v)}
-              data-testid="switch-mirror-buys"
-              className="shrink-0"
-            />
+            {(wallet.copyMirrorBuys ?? wallet.copyAutoMirror) && (
+              <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-sm">Amount Mode</Label>
+                    <Select
+                      value={wallet.copyMirrorBuyMode || "same"}
+                      onValueChange={(v) => handleUpdate("copyMirrorBuyMode", v)}
+                      data-testid="select-mirror-buy-mode"
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="same">Same as Initial Buy</SelectItem>
+                        <SelectItem value="fixed">Fixed SOL</SelectItem>
+                        <SelectItem value="percent_wallet">% of Wallet</SelectItem>
+                        <SelectItem value="proportional">Proportional to Signal</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {wallet.copyMirrorBuyMode && wallet.copyMirrorBuyMode !== "same" && (
+                    <div className="space-y-2">
+                      <Label className="text-sm">
+                        {wallet.copyMirrorBuyMode === "fixed" ? "SOL Amount" : 
+                         wallet.copyMirrorBuyMode === "percent_wallet" ? "Wallet %" :
+                         "Max % to Mirror"}
+                      </Label>
+                      <Input
+                        type="number"
+                        value={wallet.copyMirrorBuyAmount ?? ""}
+                        onChange={(e) => handleUpdate("copyMirrorBuyAmount", e.target.value ? parseFloat(e.target.value) : null)}
+                        placeholder={wallet.copyMirrorBuyMode === "proportional" ? "e.g., 100 (mirror up to 100%)" : ""}
+                        data-testid="input-mirror-buy-amount"
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Position Cap (USD)</Label>
+                  <Input
+                    type="number"
+                    value={wallet.copyPositionCapUsd ?? ""}
+                    onChange={(e) => handleUpdate("copyPositionCapUsd", e.target.value ? parseFloat(e.target.value) : null)}
+                    placeholder={
+                      wallet.copyBuyType === "fixed_usd" 
+                        ? `Suggested: $${wallet.copyBuyAmount || 10}` 
+                        : wallet.copyBuyType === "fixed_sol"
+                        ? `Suggested: ~$${((wallet.copyBuyAmount || 0.1) * 150).toFixed(0)} (${wallet.copyBuyAmount || 0.1} SOL)`
+                        : `Suggested: based on ${wallet.copyBuyAmount || 10}% allocation`
+                    }
+                    data-testid="input-position-cap"
+                  />
+                  <p className="text-xs text-muted-foreground">Stop mirroring repeat buys if position exceeds this USD value. Leave empty for no cap.</p>
+                </div>
+              </div>
+            )}
           </div>
-          <div className="flex items-center justify-between gap-4 p-3 rounded-lg border">
-            <div className="min-w-0">
-              <Label>Mirror Sells</Label>
-              <p className="text-xs text-muted-foreground">Also sell when signal wallet sells a token you hold</p>
+          <div className="p-3 rounded-lg border space-y-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <Label>Mirror Sells</Label>
+                <p className="text-xs text-muted-foreground">Sell when signal wallet sells a token you hold</p>
+              </div>
+              <Switch
+                checked={wallet.copyMirrorSells ?? wallet.copyAutoMirror ?? false}
+                onCheckedChange={(v) => handleUpdate("copyMirrorSells", v)}
+                data-testid="switch-mirror-sells"
+                className="shrink-0"
+              />
             </div>
-            <Switch
-              checked={wallet.copyMirrorSells ?? wallet.copyAutoMirror ?? false}
-              onCheckedChange={(v) => handleUpdate("copyMirrorSells", v)}
-              data-testid="switch-mirror-sells"
-              className="shrink-0"
-            />
+            {(wallet.copyMirrorSells ?? wallet.copyAutoMirror) && (
+              <div className="pl-4 border-l-2 border-primary/20 space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-sm">Sell Mode</Label>
+                    <Select
+                      value={wallet.copyMirrorSellMode || "match_percent"}
+                      onValueChange={(v) => handleUpdate("copyMirrorSellMode", v)}
+                      data-testid="select-mirror-sell-mode"
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="match_percent">Match Signal % (Proportional)</SelectItem>
+                        <SelectItem value="fixed_percent">Fixed % of Position</SelectItem>
+                        <SelectItem value="fixed_amount">Fixed SOL Amount</SelectItem>
+                        <SelectItem value="full_exit_only">Full Exit Only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {wallet.copyMirrorSellMode === "fixed_percent" && (
+                    <div className="space-y-2">
+                      <Label className="text-sm">Sell %</Label>
+                      <Input
+                        type="number"
+                        value={wallet.copyMirrorSellPercent ?? ""}
+                        onChange={(e) => handleUpdate("copyMirrorSellPercent", e.target.value ? parseFloat(e.target.value) : null)}
+                        placeholder="e.g., 25"
+                        data-testid="input-mirror-sell-percent"
+                      />
+                    </div>
+                  )}
+                  {wallet.copyMirrorSellMode === "fixed_amount" && (
+                    <div className="space-y-2">
+                      <Label className="text-sm">SOL Amount</Label>
+                      <Input
+                        type="number"
+                        value={wallet.copyMirrorSellAmount ?? ""}
+                        onChange={(e) => handleUpdate("copyMirrorSellAmount", e.target.value ? parseFloat(e.target.value) : null)}
+                        placeholder="e.g., 0.5"
+                        data-testid="input-mirror-sell-amount"
+                      />
+                    </div>
+                  )}
+                </div>
+                {wallet.copyMirrorSellMode === "match_percent" && (
+                  <p className="text-xs text-muted-foreground">If signal sells 10% of their holding, you sell 10% of yours</p>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
