@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink } from "lucide-react";
 import { Link, useLocation } from "wouter";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 import { RuleBuilder, RuleValues, RuleSummary } from "@/components/rule-builder";
 import { RuleConfirmDialog } from "@/components/rule-confirm-dialog";
+import { useWalletNavigation, touchToken } from "@/hooks/use-wallet-navigation";
 import type { TokenSnapshot, Holding } from "@shared/schema";
 
 interface SignalSource {
@@ -58,12 +59,21 @@ export default function TokenPage() {
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
   const [, navigate] = useLocation();
+  const { navigateToWallet, isNavigating } = useWalletNavigation();
+
+  // Touch token on mount to record user view for discovery signals
+  useEffect(() => {
+    if (tokenMint) {
+      touchToken(tokenMint);
+    }
+  }, [tokenMint]);
 
   const handleWalletClick = (holder: TopHolder) => {
     if (holder.isTracked && holder.signalId) {
       navigate(`/signal/${holder.signalId}`);
     } else {
-      window.open(`https://solscan.io/account/${holder.address}`, "_blank");
+      // Create temporary wallet and navigate in-app
+      navigateToWallet(holder.address);
     }
   };
 

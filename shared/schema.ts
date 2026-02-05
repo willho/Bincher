@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, boolean, integer, real, jsonb, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // Token metadata schema (from DexScreener)
@@ -113,6 +113,10 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   dedupMaxBuysPerTokenDaily: integer("dedup_max_buys_per_token_daily"), // Max buys per token per day
   dedupMaxBuysPerTokenWeekly: integer("dedup_max_buys_per_token_weekly"), // Max buys per token per week
   dedupPriceProtectionPercent: real("dedup_price_protection_percent"), // Skip if price moved more than X% since signal
+  
+  // Temporary wallet tracking
+  temporary: boolean("temporary").default(false), // Auto-created from UI navigation
+  lastViewedAt: integer("last_viewed_at"), // Unix timestamp, resets on page view
 });
 
 // Wallet rule defaults - per-wallet default rules for positions
@@ -3287,3 +3291,20 @@ export const systemInsights = pgTable("system_insights", {
 export const insertSystemInsightSchema = createInsertSchema(systemInsights).omit({ id: true });
 export type SystemInsight = typeof systemInsights.$inferSelect;
 export type InsertSystemInsight = z.infer<typeof insertSystemInsightSchema>;
+
+// User token views - tracks user attention for discovery signals (deduped per user)
+export const userTokenViews = pgTable("user_token_views", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  tokenMint: text("token_mint").notNull(),
+  viewedAt: integer("viewed_at").notNull(), // Unix timestamp, refreshes on revisit
+  aiAnalysisScore: integer("ai_analysis_score"), // AI score at time of view
+  pnlPercent: real("pnl_percent"), // User's P&L on this token at view time
+  sourceWalletId: integer("source_wallet_id"), // If navigated from a signal wallet
+}, (table) => ({
+  userTokenUnique: uniqueIndex("user_token_unique").on(table.userId, table.tokenMint),
+}));
+
+export const insertUserTokenViewSchema = createInsertSchema(userTokenViews).omit({ id: true });
+export type UserTokenView = typeof userTokenViews.$inferSelect;
+export type InsertUserTokenView = z.infer<typeof insertUserTokenViewSchema>;

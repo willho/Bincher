@@ -3,6 +3,9 @@ import { runWhaleReputationScan } from "./whale-reputation";
 import { discoverSocialSourcesFromWinners } from "./social-discovery";
 import { runDailyAggregation, runWeeklyReview } from "./timeframe-analysis";
 import { runBestTheoryValidationCycle } from "./paper-experiments";
+import { db } from "./db";
+import { monitoredWallets, userTokenViews } from "@shared/schema";
+import { eq, and, lt } from "drizzle-orm";
 
 interface JobStatus {
   lastRun: number | null;
@@ -23,7 +26,67 @@ const JOB_INTERVALS = {
   weeklyReview: 7 * 24 * 3600 * 1000,
   theoryValidation: 8 * 3600 * 1000,
   vectorAggregation: 8 * 3600 * 1000,
+  viewCleanup: 10 * 60 * 1000, // 10 minutes
 };
+
+// Cleanup constants
+const TEMP_WALLET_TTL_MINUTES = 30;
+const VIEW_SIGNAL_TTL_HOURS = 48;
+
+/**
+ * Clean up temporary wallets that haven't been viewed in 30 minutes
+ */
+export async function cleanupTemporaryWallets(): Promise<{ deleted: number }> {
+  const cutoff = Math.floor(Date.now() / 1000) - (TEMP_WALLET_TTL_MINUTES * 60);
+  
+  const result = await db.delete(monitoredWallets)
+    .where(and(
+      eq(monitoredWallets.temporary, true),
+      lt(monitoredWallets.lastViewedAt, cutoff)
+    ))
+    .returning({ id: monitoredWallets.id });
+  
+  if (result.length > 0) {
+    console.log(`[Cleanup] Removed ${result.length} stale temporary wallets`);
+  }
+  
+  return { deleted: result.length };
+}
+
+/**
+ * Clean up old token view records that have fully decayed (>48h)
+ */
+export async function cleanupOldTokenViews(): Promise<{ deleted: number }> {
+  const cutoff = Math.floor(Date.now() / 1000) - (VIEW_SIGNAL_TTL_HOURS * 3600);
+  
+  const result = await db.delete(userTokenViews)
+    .where(lt(userTokenViews.viewedAt, cutoff))
+    .returning({ id: userTokenViews.id });
+  
+  if (result.length > 0) {
+    console.log(`[Cleanup] Removed ${result.length} old token view records`);
+  }
+  
+  return { deleted: result.length };
+}
+
+/**
+ * Run all view-related cleanup tasks
+ */
+export async function runViewCleanup(): Promise<{
+  tempWallets: number;
+  oldViews: number;
+}> {
+  const [walletResult, viewResult] = await Promise.all([
+    cleanupTemporaryWallets(),
+    cleanupOldTokenViews(),
+  ]);
+  
+  return {
+    tempWallets: walletResult.deleted,
+    oldViews: viewResult.deleted,
+  };
+}
 
 function initJobStatus(jobName: string, intervalMs: number): void {
   const now = Date.now();
@@ -132,6 +195,7 @@ let hourlyInterval: NodeJS.Timeout | null = null;
 let dailyInterval: NodeJS.Timeout | null = null;
 let weeklyInterval: NodeJS.Timeout | null = null;
 let eightHourInterval: NodeJS.Timeout | null = null;
+let cleanupInterval: NodeJS.Timeout | null = null;
 
 export function startBackgroundJobs(): void {
   console.log("[BackgroundJobs] Initializing background job scheduler...");
@@ -156,6 +220,11 @@ export function startBackgroundJobs(): void {
     run8HourJobs().catch(console.error);
   }, 8 * 3600 * 1000);
   
+  // Cleanup runs every 10 minutes
+  cleanupInterval = setInterval(() => {
+    runJobWithTracking("viewCleanup", runViewCleanup).catch(console.error);
+  }, JOB_INTERVALS.viewCleanup);
+  
   setTimeout(() => {
     runHourlyJobs().catch(console.error);
   }, 60 * 1000);
@@ -168,11 +237,13 @@ export function stopBackgroundJobs(): void {
   if (dailyInterval) clearInterval(dailyInterval);
   if (weeklyInterval) clearInterval(weeklyInterval);
   if (eightHourInterval) clearInterval(eightHourInterval);
+  if (cleanupInterval) clearInterval(cleanupInterval);
   
   hourlyInterval = null;
   dailyInterval = null;
   weeklyInterval = null;
   eightHourInterval = null;
+  cleanupInterval = null;
   
   console.log("[BackgroundJobs] Scheduler stopped");
 }
@@ -199,6 +270,8 @@ export async function runJobManually(jobName: string): Promise<any> {
       return runJobWithTracking("weeklyReview", runWeeklyReview);
     case "theoryValidation":
       return runJobWithTracking("theoryValidation", runBestTheoryValidationCycle);
+    case "viewCleanup":
+      return runJobWithTracking("viewCleanup", runViewCleanup);
     default:
       throw new Error(`Unknown job: ${jobName}`);
   }

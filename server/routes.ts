@@ -45,7 +45,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -4837,6 +4837,104 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error looking up wallet:", error);
       res.status(500).json({ error: "Failed to lookup wallet" });
+    }
+  });
+
+  // Create temporary wallet for in-app navigation (auto-created when viewing untracked wallet)
+  app.post("/api/wallet/temporary", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { address, label } = req.body;
+      if (!address) {
+        return res.status(400).json({ error: "Address is required" });
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+
+      // Check if wallet already exists for this user
+      const existing = await db.query.monitoredWallets.findFirst({
+        where: and(
+          eq(monitoredWallets.userId, req.userId!),
+          eq(monitoredWallets.walletAddress, address)
+        )
+      });
+
+      if (existing) {
+        // Update lastViewedAt to reset decay timer
+        await db.update(monitoredWallets)
+          .set({ lastViewedAt: now })
+          .where(eq(monitoredWallets.id, existing.id));
+        return res.json({ id: existing.id, created: false });
+      }
+
+      // Create temporary wallet
+      const [newWallet] = await db.insert(monitoredWallets).values({
+        userId: req.userId!,
+        walletAddress: address,
+        label: label || `Temp: ${address.slice(0, 6)}...`,
+        enabled: false, // Not for copy trading
+        temporary: true,
+        lastViewedAt: now,
+        createdAt: now,
+      }).returning({ id: monitoredWallets.id });
+
+      res.json({ id: newWallet.id, created: true });
+    } catch (error) {
+      console.error("Error creating temporary wallet:", error);
+      res.status(500).json({ error: "Failed to create temporary wallet" });
+    }
+  });
+
+  // Touch signal wallet - refresh lastViewedAt to reset decay timer
+  app.put("/api/signal/:id/touch", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const walletId = parseInt(req.params.id);
+      const now = Math.floor(Date.now() / 1000);
+
+      await db.update(monitoredWallets)
+        .set({ lastViewedAt: now })
+        .where(and(
+          eq(monitoredWallets.id, walletId),
+          eq(monitoredWallets.userId, req.userId!)
+        ));
+
+      res.json({ success: true, viewedAt: now });
+    } catch (error) {
+      console.error("Error touching signal wallet:", error);
+      res.status(500).json({ error: "Failed to touch signal wallet" });
+    }
+  });
+
+  // Touch token - record/refresh user view for discovery signals
+  app.put("/api/token/:mint/touch", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tokenMint = req.params.mint;
+      const { aiAnalysisScore, pnlPercent, sourceWalletId } = req.body;
+      const now = Math.floor(Date.now() / 1000);
+
+      // Upsert user token view (unique per user+token)
+      await db.insert(userTokenViews)
+        .values({
+          userId: req.userId!,
+          tokenMint,
+          viewedAt: now,
+          aiAnalysisScore: aiAnalysisScore ?? null,
+          pnlPercent: pnlPercent ?? null,
+          sourceWalletId: sourceWalletId ?? null,
+        })
+        .onConflictDoUpdate({
+          target: [userTokenViews.userId, userTokenViews.tokenMint],
+          set: {
+            viewedAt: now,
+            aiAnalysisScore: aiAnalysisScore ?? sql`${userTokenViews.aiAnalysisScore}`,
+            pnlPercent: pnlPercent ?? sql`${userTokenViews.pnlPercent}`,
+            sourceWalletId: sourceWalletId ?? sql`${userTokenViews.sourceWalletId}`,
+          },
+        });
+
+      res.json({ success: true, viewedAt: now });
+    } catch (error) {
+      console.error("Error touching token:", error);
+      res.status(500).json({ error: "Failed to touch token" });
     }
   });
 

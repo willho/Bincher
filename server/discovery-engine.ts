@@ -4,7 +4,7 @@ import {
   marketRegimes, discoveryJobRuns,
   tokenDataPool, swaps, holderCache,
   discoverySources, discoveryExperiments, discoveryConfig,
-  emergentPatterns, vectorUpdates,
+  emergentPatterns, vectorUpdates, userTokenViews,
   DiscoveryTrigger, DiscoveryEvent
 } from "@shared/schema";
 import { eq, and, desc, gte, lte, sql, gt, lt, isNull } from "drizzle-orm";
@@ -1762,4 +1762,111 @@ export async function processDiscoverySourceUpdates(bucketId: string): Promise<n
     ));
   
   return sourceUpdates.size;
+}
+
+// View signal constants
+const VIEW_SIGNAL_DECAY_HOURS = 48;
+const VIEW_SIGNAL_MAX_SCORE = 3; // log scale cap
+
+/**
+ * Calculate decay factor for a view signal based on time since view
+ * Returns 0-1, where 1 = fresh view, 0 = fully decayed (>48h)
+ */
+export function calculateViewDecay(viewedAt: number): number {
+  const now = Math.floor(Date.now() / 1000);
+  const ageSeconds = now - viewedAt;
+  const ageHours = ageSeconds / 3600;
+  
+  if (ageHours >= VIEW_SIGNAL_DECAY_HOURS) return 0;
+  return 1 - (ageHours / VIEW_SIGNAL_DECAY_HOURS);
+}
+
+/**
+ * Calculate view signal score for a token based on unique user views
+ * Uses log scale: min(log(signal + 1), 3) where signal = sum of decayed views
+ */
+export async function calculateTokenViewSignal(tokenMint: string): Promise<{
+  rawSignal: number;
+  score: number;
+  uniqueUsers: number;
+}> {
+  const views = await db.query.userTokenViews.findMany({
+    where: eq(userTokenViews.tokenMint, tokenMint)
+  });
+  
+  if (views.length === 0) {
+    return { rawSignal: 0, score: 0, uniqueUsers: 0 };
+  }
+  
+  // Sum decayed signals across unique users
+  const rawSignal = views.reduce((sum, view) => {
+    const decay = calculateViewDecay(view.viewedAt);
+    return sum + decay;
+  }, 0);
+  
+  // Apply log scale with cap
+  const score = Math.min(Math.log(rawSignal + 1), VIEW_SIGNAL_MAX_SCORE);
+  
+  return {
+    rawSignal,
+    score,
+    uniqueUsers: views.length
+  };
+}
+
+/**
+ * Get tokens with highest view signals for discovery consideration
+ */
+export async function getTopViewedTokens(limit: number = 20): Promise<Array<{
+  tokenMint: string;
+  score: number;
+  uniqueUsers: number;
+  avgAiScore: number | null;
+  avgPnl: number | null;
+}>> {
+  // Get all token views from last 48 hours
+  const cutoff = Math.floor(Date.now() / 1000) - (VIEW_SIGNAL_DECAY_HOURS * 3600);
+  
+  const recentViews = await db.query.userTokenViews.findMany({
+    where: gte(userTokenViews.viewedAt, cutoff)
+  });
+  
+  // Group by token
+  const tokenMap = new Map<string, typeof recentViews>();
+  for (const view of recentViews) {
+    const existing = tokenMap.get(view.tokenMint) || [];
+    existing.push(view);
+    tokenMap.set(view.tokenMint, existing);
+  }
+  
+  // Calculate scores
+  const results: Array<{
+    tokenMint: string;
+    score: number;
+    uniqueUsers: number;
+    avgAiScore: number | null;
+    avgPnl: number | null;
+  }> = [];
+  
+  for (const [tokenMint, views] of tokenMap.entries()) {
+    const rawSignal = views.reduce((sum, v) => sum + calculateViewDecay(v.viewedAt), 0);
+    const score = Math.min(Math.log(rawSignal + 1), VIEW_SIGNAL_MAX_SCORE);
+    
+    // Calculate averages for AI score and PnL
+    const aiScores = views.filter(v => v.aiAnalysisScore !== null).map(v => v.aiAnalysisScore!);
+    const pnls = views.filter(v => v.pnlPercent !== null).map(v => v.pnlPercent!);
+    
+    results.push({
+      tokenMint,
+      score,
+      uniqueUsers: views.length,
+      avgAiScore: aiScores.length > 0 ? aiScores.reduce((a, b) => a + b, 0) / aiScores.length : null,
+      avgPnl: pnls.length > 0 ? pnls.reduce((a, b) => a + b, 0) / pnls.length : null,
+    });
+  }
+  
+  // Sort by score descending
+  results.sort((a, b) => b.score - a.score);
+  
+  return results.slice(0, limit);
 }

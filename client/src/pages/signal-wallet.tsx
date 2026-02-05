@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useParams, Link, useLocation } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { touchSignalWallet } from "@/hooks/use-wallet-navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -197,6 +198,13 @@ export default function SignalWalletPage() {
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
   const wsRef = useRef<WebSocket | null>(null);
+
+  // Touch wallet on mount to refresh lastViewedAt (resets decay timer)
+  useEffect(() => {
+    if (walletId) {
+      touchSignalWallet(parseInt(walletId));
+    }
+  }, [walletId]);
 
   const { data: holdingsData, isLoading: holdingsLoading, refetch: refetchHoldings } = useQuery<{ holdings: TokenHolding[] }>({
     queryKey: ["/api/signal-wallets", walletId, "holdings"],
