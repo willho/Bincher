@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer, Settings, ChevronDown, ChevronUp, Sparkles, Brain, Zap, Shield, AlertTriangle } from "lucide-react";
+import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer, Settings, ChevronDown, ChevronUp, Sparkles, Brain, Zap, Shield, AlertTriangle, FileText, Users } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 import { SignalWalletActivityChart } from "@/components/portfolio-charts";
@@ -548,6 +548,16 @@ export default function SignalWalletPage() {
             <Copy className="h-4 w-4 mr-2" />
             {wallet.copyTradeEnabled ? "Copy Trading Active" : "Configure Copy Trading"}
           </Button>
+          <Link href={`/paper?wallet=${wallet.address}&mode=copy`}>
+            <Button 
+              variant="secondary"
+              size="sm"
+              data-testid="button-paper-copy"
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Paper Copy
+            </Button>
+          </Link>
           <Button 
             variant="ghost" 
             size="icon"
@@ -644,10 +654,8 @@ export default function SignalWalletPage() {
           </CardHeader>
           <CardContent>
             {bestToken ? (
-              <a
-                href={`https://solscan.io/token/${bestToken.mint}`}
-                target="_blank"
-                rel="noopener noreferrer"
+              <Link
+                href={`/trading/${bestToken.mint}`}
                 className="hover:underline"
                 data-testid="link-best-token"
               >
@@ -660,7 +668,7 @@ export default function SignalWalletPage() {
                 <p className="text-xs text-muted-foreground mt-1">
                   <span className="text-green-500">+{bestToken.pnlPercent.toFixed(0)}%</span> return
                 </p>
-              </a>
+              </Link>
             ) : (
               <div className="flex items-center gap-2">
                 <Trophy className="h-5 w-5 text-yellow-500" />
@@ -962,6 +970,26 @@ export default function SignalWalletPage() {
         )}
       </Card>
 
+      {walletAddress && (
+        <Card data-testid="card-bubblemaps">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              Wallet Activity (Bubblemaps)
+            </CardTitle>
+            <CardDescription>Visualize wallet transaction patterns</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0 overflow-hidden rounded-b-lg">
+            <iframe
+              src={`https://app.bubblemaps.io/sol/wallet/${walletAddress}?embed=1`}
+              className="w-full h-[350px] border-0"
+              title="Bubblemaps Wallet Activity"
+              data-testid="iframe-bubblemaps"
+            />
+          </CardContent>
+        </Card>
+      )}
+
       {stats.mostTradedTokens.length > 0 && (
         <Card data-testid="card-most-traded">
           <CardHeader>
@@ -970,204 +998,20 @@ export default function SignalWalletPage() {
           <CardContent>
             <div className="flex flex-wrap gap-2">
               {stats.mostTradedTokens.map((token) => (
-                <a 
+                <Link 
                   key={token.mint}
-                  href={`https://solscan.io/token/${token.mint}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                  href={`/trading/${token.mint}`}
                   data-testid={`link-token-${token.symbol}`}
                 >
                   <Badge variant="secondary" className="hover:bg-secondary/80 cursor-pointer">
                     {token.symbol} ({token.tradeCount})
                   </Badge>
-                </a>
+                </Link>
               ))}
             </div>
           </CardContent>
         </Card>
       )}
-
-      <Card data-testid="card-holdings">
-        <CardHeader>
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <div className="flex items-center gap-2">
-              <Coins className="h-5 w-5" />
-              <CardTitle>Holdings</CardTitle>
-            </div>
-            <div className="flex items-center gap-2">
-              <Tabs value={holdingsTab} onValueChange={(v) => setHoldingsTab(v as HoldingsTab)}>
-                <TabsList>
-                  <TabsTrigger value="signal" data-testid="tab-signal-holdings">
-                    Signal Wallet
-                  </TabsTrigger>
-                  <TabsTrigger value="copied" data-testid="tab-copied-holdings">
-                    My Copies ({myCopiedHoldings.length})
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-              {holdingsTab === "signal" && (
-                <>
-                  <Select value={holdingsSort} onValueChange={(v) => setHoldingsSort(v as HoldingsSortOption)}>
-                    <SelectTrigger className="w-32" data-testid="select-holdings-sort">
-                      <ArrowUpDown className="h-3 w-3 mr-1" />
-                      <SelectValue placeholder="Sort by" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="value" data-testid="select-sort-value">By Value</SelectItem>
-                      <SelectItem value="name" data-testid="select-sort-name">By Name</SelectItem>
-                      <SelectItem value="change" data-testid="select-sort-change">By 24h %</SelectItem>
-                      <SelectItem value="age" data-testid="select-sort-age">By Age</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button 
-                    variant="ghost" 
-                    size="icon"
-                    onClick={() => refetchHoldings()}
-                    disabled={holdingsLoading}
-                    data-testid="button-refresh-holdings"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${holdingsLoading ? "animate-spin" : ""}`} />
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {holdingsTab === "signal" ? (
-            holdingsLoading ? (
-              <div className="space-y-2">
-                <Skeleton className="h-12" />
-                <Skeleton className="h-12" />
-                <Skeleton className="h-12" />
-              </div>
-            ) : sortedHoldings.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                No token holdings found for this wallet.
-              </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b text-left text-sm text-muted-foreground">
-                    <th className="pb-3 font-medium">Token</th>
-                    <th className="pb-3 font-medium text-right">Amount</th>
-                    <th className="pb-3 font-medium text-right">Price</th>
-                    <th className="pb-3 font-medium text-right">Value</th>
-                    <th className="pb-3 font-medium text-right">24h</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedHoldings.map((holding) => (
-                    <tr 
-                      key={holding.mint} 
-                      className="border-b last:border-0 hover-elevate"
-                      data-testid={`row-holding-${holding.mint.slice(0, 8)}`}
-                    >
-                      <td className="py-3">
-                        <a 
-                          href={`https://solscan.io/token/${holding.mint}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:underline"
-                          data-testid={`link-holding-${holding.mint.slice(0, 8)}`}
-                        >
-                          <div className="font-medium">{holding.symbol || "Unknown"}</div>
-                          <div className="text-xs text-muted-foreground">{holding.name || truncateAddress(holding.mint)}</div>
-                        </a>
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm">
-                        {holding.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm">
-                        {holding.priceUsd ? `$${holding.priceUsd.toFixed(6)}` : "-"}
-                      </td>
-                      <td className="py-3 text-right font-mono text-sm font-medium">
-                        {holding.valueUsd ? formatUsd(holding.valueUsd) : "-"}
-                      </td>
-                      <td className="py-3 text-right">
-                        {holding.priceChange24h !== undefined ? (
-                          <span className={holding.priceChange24h >= 0 ? "text-green-500" : "text-red-500"}>
-                            {holding.priceChange24h >= 0 ? "+" : ""}{holding.priceChange24h.toFixed(1)}%
-                          </span>
-                        ) : "-"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )
-          ) : (
-            // My Copied Holdings tab
-            myCopiedHoldings.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                You haven't copied any positions from this wallet yet.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b text-left text-sm text-muted-foreground">
-                      <th className="pb-3 font-medium">Token</th>
-                      <th className="pb-3 font-medium text-right">Amount</th>
-                      <th className="pb-3 font-medium text-right">Entry</th>
-                      <th className="pb-3 font-medium text-right">Current</th>
-                      <th className="pb-3 font-medium text-right">P&L</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {myCopiedHoldings.map((holding) => {
-                      // Entry value: SOL spent converted to USD using solToUsd
-                      const entryValueUsd = solToUsd(holding.solSpent);
-                      // Current value: current token price * amount
-                      const currentValueUsd = (holding.lastPrice || 0) * holding.currentAmount;
-                      // Calculate P&L percentage
-                      const pnlPercent = entryValueUsd > 0 ? ((currentValueUsd - entryValueUsd) / entryValueUsd) * 100 : 0;
-                      
-                      return (
-                        <tr 
-                          key={holding.id} 
-                          className="border-b last:border-0 hover-elevate"
-                          data-testid={`row-copied-${holding.id}`}
-                        >
-                          <td className="py-3">
-                            <a 
-                              href={`https://solscan.io/token/${holding.tokenMint}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="hover:underline"
-                            >
-                              <div className="font-medium">{holding.tokenSymbol}</div>
-                              <div className="text-xs text-muted-foreground">{holding.tokenName || truncateAddress(holding.tokenMint)}</div>
-                            </a>
-                          </td>
-                          <td className="py-3 text-right font-mono text-sm">
-                            {holding.currentAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
-                          </td>
-                          <td className="py-3 text-right font-mono text-sm">
-                            {entryValueUsd > 0 ? formatUsd(entryValueUsd) : `${holding.solSpent.toFixed(4)} SOL`}
-                          </td>
-                          <td className="py-3 text-right font-mono text-sm">
-                            {currentValueUsd > 0 ? formatUsd(currentValueUsd) : "-"}
-                          </td>
-                          <td className="py-3 text-right">
-                            {entryValueUsd > 0 && currentValueUsd > 0 ? (
-                              <span className={pnlPercent >= 0 ? "text-green-500" : "text-red-500"}>
-                                {pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%
-                              </span>
-                            ) : "-"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )
-          )}
-        </CardContent>
-      </Card>
 
       <Card data-testid="card-trades-list">
         <CardHeader>
@@ -1237,10 +1081,8 @@ export default function SignalWalletPage() {
                         </Badge>
                       </td>
                       <td className="py-3">
-                        <a
-                          href={`https://solscan.io/token/${trade.isBuy ? trade.toToken : trade.fromToken}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <Link
+                          href={`/trading/${trade.isBuy ? trade.toToken : trade.fromToken}`}
                           className="hover:underline"
                           data-testid={`link-trade-token-${trade.id}`}
                         >
@@ -1254,7 +1096,7 @@ export default function SignalWalletPage() {
                             {trade.isBuy && trade.toAmount > 0 && ` · ${trade.toAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
                             {!trade.isBuy && trade.fromAmount > 0 && ` · ${trade.fromAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
                           </div>
-                        </a>
+                        </Link>
                       </td>
                       <td className="py-3 text-right">
                         <div className="font-medium">
@@ -1360,6 +1202,184 @@ export default function SignalWalletPage() {
                 </tbody>
               </table>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card data-testid="card-holdings">
+        <CardHeader>
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              <Coins className="h-5 w-5" />
+              <CardTitle>Holdings</CardTitle>
+            </div>
+            <div className="flex items-center gap-2">
+              <Tabs value={holdingsTab} onValueChange={(v) => setHoldingsTab(v as HoldingsTab)}>
+                <TabsList>
+                  <TabsTrigger value="signal" data-testid="tab-signal-holdings">
+                    Signal Wallet
+                  </TabsTrigger>
+                  <TabsTrigger value="copied" data-testid="tab-copied-holdings">
+                    My Copies ({myCopiedHoldings.length})
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              {holdingsTab === "signal" && (
+                <>
+                  <Select value={holdingsSort} onValueChange={(v) => setHoldingsSort(v as HoldingsSortOption)}>
+                    <SelectTrigger className="w-32" data-testid="select-holdings-sort">
+                      <ArrowUpDown className="h-3 w-3 mr-1" />
+                      <SelectValue placeholder="Sort by" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="value" data-testid="select-sort-value">By Value</SelectItem>
+                      <SelectItem value="name" data-testid="select-sort-name">By Name</SelectItem>
+                      <SelectItem value="change" data-testid="select-sort-change">By 24h %</SelectItem>
+                      <SelectItem value="age" data-testid="select-sort-age">By Age</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button 
+                    variant="ghost" 
+                    size="icon"
+                    onClick={() => refetchHoldings()}
+                    disabled={holdingsLoading}
+                    data-testid="button-refresh-holdings"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${holdingsLoading ? "animate-spin" : ""}`} />
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {holdingsTab === "signal" ? (
+            holdingsLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12" />
+                <Skeleton className="h-12" />
+                <Skeleton className="h-12" />
+              </div>
+            ) : sortedHoldings.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No token holdings found for this wallet.
+              </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b text-left text-sm text-muted-foreground">
+                    <th className="pb-3 font-medium">Token</th>
+                    <th className="pb-3 font-medium text-right">Amount</th>
+                    <th className="pb-3 font-medium text-right">Price</th>
+                    <th className="pb-3 font-medium text-right">Value</th>
+                    <th className="pb-3 font-medium text-right">24h</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedHoldings.map((holding) => (
+                    <tr 
+                      key={holding.mint} 
+                      className="border-b last:border-0 hover-elevate"
+                      data-testid={`row-holding-${holding.mint.slice(0, 8)}`}
+                    >
+                      <td className="py-3">
+                        <Link 
+                          href={`/trading/${holding.mint}`}
+                          className="hover:underline"
+                          data-testid={`link-holding-${holding.mint.slice(0, 8)}`}
+                        >
+                          <div className="font-medium">{holding.symbol || "Unknown"}</div>
+                          <div className="text-xs text-muted-foreground">{holding.name || truncateAddress(holding.mint)}</div>
+                        </Link>
+                      </td>
+                      <td className="py-3 text-right font-mono text-sm">
+                        {holding.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                      </td>
+                      <td className="py-3 text-right font-mono text-sm">
+                        {holding.priceUsd ? `$${holding.priceUsd.toFixed(6)}` : "-"}
+                      </td>
+                      <td className="py-3 text-right font-mono text-sm font-medium">
+                        {holding.valueUsd ? formatUsd(holding.valueUsd) : "-"}
+                      </td>
+                      <td className="py-3 text-right">
+                        {holding.priceChange24h !== undefined ? (
+                          <span className={holding.priceChange24h >= 0 ? "text-green-500" : "text-red-500"}>
+                            {holding.priceChange24h >= 0 ? "+" : ""}{holding.priceChange24h.toFixed(1)}%
+                          </span>
+                        ) : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+          ) : (
+            // My Copied Holdings tab
+            myCopiedHoldings.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                You haven't copied any positions from this wallet yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b text-left text-sm text-muted-foreground">
+                      <th className="pb-3 font-medium">Token</th>
+                      <th className="pb-3 font-medium text-right">Amount</th>
+                      <th className="pb-3 font-medium text-right">Entry</th>
+                      <th className="pb-3 font-medium text-right">Current</th>
+                      <th className="pb-3 font-medium text-right">P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {myCopiedHoldings.map((holding) => {
+                      // Entry value: SOL spent converted to USD using solToUsd
+                      const entryValueUsd = solToUsd(holding.solSpent);
+                      // Current value: current token price * amount
+                      const currentValueUsd = (holding.lastPrice || 0) * holding.currentAmount;
+                      // Calculate P&L percentage
+                      const pnlPercent = entryValueUsd > 0 ? ((currentValueUsd - entryValueUsd) / entryValueUsd) * 100 : 0;
+                      
+                      return (
+                        <tr 
+                          key={holding.id} 
+                          className="border-b last:border-0 hover-elevate"
+                          data-testid={`row-copied-${holding.id}`}
+                        >
+                          <td className="py-3">
+                            <Link 
+                              href={`/trading/${holding.tokenMint}`}
+                              className="hover:underline"
+                            >
+                              <div className="font-medium">{holding.tokenSymbol}</div>
+                              <div className="text-xs text-muted-foreground">{holding.tokenName || truncateAddress(holding.tokenMint)}</div>
+                            </Link>
+                          </td>
+                          <td className="py-3 text-right font-mono text-sm">
+                            {holding.currentAmount.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                          </td>
+                          <td className="py-3 text-right font-mono text-sm">
+                            {entryValueUsd > 0 ? formatUsd(entryValueUsd) : `${holding.solSpent.toFixed(4)} SOL`}
+                          </td>
+                          <td className="py-3 text-right font-mono text-sm">
+                            {currentValueUsd > 0 ? formatUsd(currentValueUsd) : "-"}
+                          </td>
+                          <td className="py-3 text-right">
+                            {entryValueUsd > 0 && currentValueUsd > 0 ? (
+                              <span className={pnlPercent >= 0 ? "text-green-500" : "text-red-500"}>
+                                {pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%
+                              </span>
+                            ) : "-"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
           )}
         </CardContent>
       </Card>

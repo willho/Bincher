@@ -1,5 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useSearch } from "wouter";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -73,12 +74,42 @@ function truncateAddress(address: string): string {
 }
 
 export default function PaperTradingPage() {
+  const searchString = useSearch();
+  const searchParams = new URLSearchParams(searchString);
+  const urlToken = searchParams.get("token");
+  const urlWallet = searchParams.get("wallet");
+  const urlAction = searchParams.get("action");
+  const urlMode = searchParams.get("mode");
+  
   const [selectedWallet, setSelectedWallet] = useState<string>("");
+  const [tokenMint, setTokenMint] = useState<string>("");
   const [solAmount, setSolAmount] = useState<string>("0.1");
   const [takeProfit, setTakeProfit] = useState<string>("50");
   const [stopLoss, setStopLoss] = useState<string>("20");
   const [tab, setTab] = useState<string>("positions");
+  const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
+  const [copyMode, setCopyMode] = useState<boolean>(false);
   const { toast } = useToast();
+  
+  // Initialize state from URL parameters
+  useEffect(() => {
+    if (urlToken) {
+      setTokenMint(urlToken);
+      setTab("new-trade");
+    }
+    if (urlWallet) {
+      setSelectedWallet(urlWallet);
+      setTab("new-trade");
+    }
+    if (urlAction === "sell") {
+      setTradeType("sell");
+    } else if (urlAction === "buy") {
+      setTradeType("buy");
+    }
+    if (urlMode === "copy") {
+      setCopyMode(true);
+    }
+  }, [urlToken, urlWallet, urlAction, urlMode]);
 
   const { data: positions, isLoading: positionsLoading, refetch: refetchPositions } = useQuery<PaperPosition[]>({
     queryKey: ["/api/paper/positions"],
@@ -262,6 +293,9 @@ export default function PaperTradingPage() {
           <TabsTrigger value="history" data-testid="tab-history">
             History ({closedPositions.length})
           </TabsTrigger>
+          <TabsTrigger value="new-trade" data-testid="tab-new-trade">
+            New Trade
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="positions" className="mt-4 space-y-4">
@@ -405,6 +439,169 @@ export default function PaperTradingPage() {
               ))}
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="new-trade" className="mt-4 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Play className="h-5 w-5 text-primary" />
+                Open Paper Trade
+              </CardTitle>
+              <CardDescription>
+                Create a simulated trade to test strategies without risking real funds
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {copyMode && (
+                <div className="flex items-center gap-2 p-3 rounded-md bg-primary/10 border border-primary/30">
+                  <Wallet className="h-4 w-4 text-primary" />
+                  <span className="text-sm">Paper Copy Mode - simulating copy trading from signal wallet</span>
+                </div>
+              )}
+              
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="space-y-2">
+                  <Label>Trade Type</Label>
+                  <Select value={tradeType} onValueChange={(v) => setTradeType(v as "buy" | "sell")}>
+                    <SelectTrigger data-testid="select-trade-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="buy">
+                        <div className="flex items-center gap-2">
+                          <TrendingUp className="h-4 w-4 text-green-500" />
+                          Buy
+                        </div>
+                      </SelectItem>
+                      <SelectItem value="sell">
+                        <div className="flex items-center gap-2">
+                          <TrendingDown className="h-4 w-4 text-red-500" />
+                          Sell
+                        </div>
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Token Mint Address</Label>
+                  <Input
+                    placeholder="Enter token mint address..."
+                    value={tokenMint}
+                    onChange={(e) => setTokenMint(e.target.value)}
+                    data-testid="input-token-mint"
+                  />
+                  {urlToken && (
+                    <p className="text-xs text-muted-foreground">Pre-filled from token page</p>
+                  )}
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Copy from Signal Wallet (optional)</Label>
+                  <Select value={selectedWallet} onValueChange={setSelectedWallet}>
+                    <SelectTrigger data-testid="select-wallet">
+                      <SelectValue placeholder="Select wallet..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">No wallet (manual trade)</SelectItem>
+                      {wallets?.map((w) => (
+                        <SelectItem key={w.id} value={w.address}>
+                          {w.label || truncateAddress(w.address)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {urlWallet && (
+                    <p className="text-xs text-muted-foreground">Pre-filled from signal wallet page</p>
+                  )}
+                </div>
+              </div>
+              
+              <div className="grid gap-4 md:grid-cols-3">
+                <div className="space-y-2">
+                  <Label>Amount (SOL)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={solAmount}
+                    onChange={(e) => setSolAmount(e.target.value)}
+                    data-testid="input-amount"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Take Profit (%)</Label>
+                  <Input
+                    type="number"
+                    step="5"
+                    min="0"
+                    value={takeProfit}
+                    onChange={(e) => setTakeProfit(e.target.value)}
+                    data-testid="input-take-profit"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label>Stop Loss (%)</Label>
+                  <Input
+                    type="number"
+                    step="5"
+                    min="0"
+                    value={stopLoss}
+                    onChange={(e) => setStopLoss(e.target.value)}
+                    data-testid="input-stop-loss"
+                  />
+                </div>
+              </div>
+              
+              <div className="flex gap-3 pt-2">
+                <Button 
+                  variant={tradeType === "sell" ? "destructive" : "default"}
+                  onClick={() => {
+                    if (!tokenMint) {
+                      toast({ description: "Please enter a token mint address", variant: "destructive" });
+                      return;
+                    }
+                    openPositionMutation.mutate({
+                      tokenMint,
+                      entrySol: parseFloat(solAmount) || 0.1,
+                      takeProfit: parseFloat(takeProfit),
+                      stopLoss: parseFloat(stopLoss),
+                      signalWallet: selectedWallet || undefined,
+                    });
+                  }}
+                  disabled={openPositionMutation.isPending}
+                  data-testid="button-open-trade"
+                >
+                  {openPositionMutation.isPending ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : tradeType === "buy" ? (
+                    <TrendingUp className="h-4 w-4 mr-2" />
+                  ) : (
+                    <TrendingDown className="h-4 w-4 mr-2" />
+                  )}
+                  {openPositionMutation.isPending ? "Opening..." : `Paper ${tradeType === "buy" ? "Buy" : "Sell"}`}
+                </Button>
+                <Button 
+                  variant="outline"
+                  onClick={() => {
+                    setTokenMint("");
+                    setSelectedWallet("");
+                    setSolAmount("0.1");
+                    setTakeProfit("50");
+                    setTradeType("buy");
+                    setCopyMode(false);
+                    setStopLoss("20");
+                  }}
+                  data-testid="button-reset"
+                >
+                  Reset
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>

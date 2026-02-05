@@ -271,13 +271,39 @@ export default function TokenPage() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Trading Options</CardTitle>
-            <CardDescription>Execute trades on this token</CardDescription>
+            <CardTitle className="flex items-center gap-2">
+              <Target className="h-5 w-5" />
+              Trading Options
+            </CardTitle>
+            <CardDescription>Execute real or paper trades on this token</CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex gap-3">
-              <Button data-testid="button-swap">Swap</Button>
-              <Button variant="outline" data-testid="button-send">Send</Button>
+          <CardContent className="space-y-4">
+            <div className="flex gap-3 flex-wrap">
+              <Button data-testid="button-swap">
+                <Zap className="h-4 w-4 mr-2" />
+                Swap
+              </Button>
+              <Button variant="outline" data-testid="button-send">
+                <Wallet className="h-4 w-4 mr-2" />
+                Send
+              </Button>
+            </div>
+            <div className="pt-3 border-t">
+              <p className="text-xs text-muted-foreground mb-2">Paper Trading (risk-free simulation)</p>
+              <div className="flex gap-2 flex-wrap">
+                <Link href={`/paper?token=${tokenMint}&action=buy`}>
+                  <Button variant="secondary" size="sm" data-testid="button-paper-buy">
+                    <TrendingUp className="h-4 w-4 mr-2 text-green-500" />
+                    Paper Buy
+                  </Button>
+                </Link>
+                <Link href={`/paper?token=${tokenMint}&action=sell`}>
+                  <Button variant="secondary" size="sm" data-testid="button-paper-sell">
+                    <TrendingUp className="h-4 w-4 mr-2 rotate-180 text-red-500" />
+                    Paper Sell
+                  </Button>
+                </Link>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -408,6 +434,95 @@ export default function TokenPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* External Links & Charts */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card data-testid="card-external-links">
+          <CardHeader>
+            <CardTitle className="text-base">External Resources</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              <a 
+                href={`https://solscan.io/token/${tokenMint}`} 
+                target="_blank" 
+                rel="noopener noreferrer"
+              >
+                <Button variant="outline" size="sm" data-testid="link-solscan">
+                  <Shell className="h-4 w-4 mr-2" />
+                  Solscan
+                </Button>
+              </a>
+              <a 
+                href={`https://dexscreener.com/solana/${tokenMint}`} 
+                target="_blank" 
+                rel="noopener noreferrer"
+              >
+                <Button variant="outline" size="sm" data-testid="link-dexscreener">
+                  <BarChart3 className="h-4 w-4 mr-2" />
+                  DexScreener
+                </Button>
+              </a>
+              <a 
+                href={`https://app.bubblemaps.io/sol/token/${tokenMint}`} 
+                target="_blank" 
+                rel="noopener noreferrer"
+              >
+                <Button variant="outline" size="sm" data-testid="link-bubblemaps">
+                  <Users className="h-4 w-4 mr-2" />
+                  Bubblemaps
+                </Button>
+              </a>
+              <a 
+                href={`https://birdeye.so/token/${tokenMint}?chain=solana`} 
+                target="_blank" 
+                rel="noopener noreferrer"
+              >
+                <Button variant="outline" size="sm" data-testid="link-birdeye">
+                  <Activity className="h-4 w-4 mr-2" />
+                  Birdeye
+                </Button>
+              </a>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="card-dexscreener-chart">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <BarChart3 className="h-4 w-4" />
+              Price Chart
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 overflow-hidden rounded-b-lg">
+            <iframe
+              src={`https://dexscreener.com/solana/${tokenMint}?embed=1&theme=dark&trades=0&info=0`}
+              className="w-full h-[300px] border-0"
+              title="DexScreener Chart"
+              data-testid="iframe-dexscreener"
+            />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Bubblemaps Holder Distribution */}
+      <Card data-testid="card-bubblemaps">
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            Holder Distribution (Bubblemaps)
+          </CardTitle>
+          <CardDescription>Visualize token holder concentration</CardDescription>
+        </CardHeader>
+        <CardContent className="p-0 overflow-hidden rounded-b-lg">
+          <iframe
+            src={`https://app.bubblemaps.io/sol/token/${tokenMint}?embed=1`}
+            className="w-full h-[400px] border-0"
+            title="Bubblemaps Token Distribution"
+            data-testid="iframe-bubblemaps"
+          />
+        </CardContent>
+      </Card>
 
       {/* Trade History */}
       <Card data-testid="card-trade-history">
