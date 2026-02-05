@@ -21,6 +21,19 @@ interface AiRecommendation {
   priority: "high" | "medium" | "low";
 }
 
+interface DiscoveryContext {
+  behaviorType: string;
+  behaviorConfidence: number;
+  followsLeaders: string[];
+  leadsFollowers: string[];
+  recentInsights: Array<{
+    title: string;
+    type: string;
+    source: string;
+    confidence: number;
+  }>;
+}
+
 interface StrategyAnalysis {
   strategyType: string;
   tradingStyle: string;
@@ -42,6 +55,8 @@ interface StrategyAnalysis {
   insights: string[];
   lastUpdatedAt?: number;
   aiRecommendations?: AiRecommendation[];
+  discoveryContext?: DiscoveryContext;
+  fromCache?: boolean;
 }
 
 interface Trade {
@@ -266,7 +281,7 @@ export default function SignalWalletPage() {
       }
       return null;
     },
-    enabled: !!walletAddress && showStrategyPanel,
+    enabled: !!walletAddress, // Auto-fetch when wallet is available
     staleTime: 300000,
   });
 
@@ -842,6 +857,41 @@ export default function SignalWalletPage() {
                     </div>
                   </div>
                 </div>
+
+                {strategyData.analysis.discoveryContext && (
+                  <div className="p-3 rounded-md border border-muted bg-muted/30">
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <Activity className="h-4 w-4" />
+                      Discovery Classification
+                    </h4>
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <Badge 
+                        variant={
+                          strategyData.analysis.discoveryContext.behaviorType === 'leader' ? 'default' :
+                          strategyData.analysis.discoveryContext.behaviorType === 'bot' ? 'destructive' :
+                          strategyData.analysis.discoveryContext.behaviorType === 'follower' ? 'secondary' :
+                          'outline'
+                        }
+                        className="capitalize"
+                      >
+                        {strategyData.analysis.discoveryContext.behaviorType}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        ({Math.round(strategyData.analysis.discoveryContext.behaviorConfidence * 100)}% confidence)
+                      </span>
+                      {strategyData.analysis.discoveryContext.leadsFollowers.length > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          • {strategyData.analysis.discoveryContext.leadsFollowers.length} followers
+                        </span>
+                      )}
+                      {strategyData.analysis.discoveryContext.followsLeaders.length > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          • follows {strategyData.analysis.discoveryContext.followsLeaders.length} wallets
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {strategyData.analysis.insights && strategyData.analysis.insights.length > 0 && (
                   <div className="p-3 rounded-md border border-primary/30 bg-primary/5">

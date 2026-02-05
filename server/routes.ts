@@ -6054,9 +6054,64 @@ export async function registerRoutes(
 
   app.get("/api/paper/strategies/:wallet", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { getWalletStrategy } = await import("./paper-trading");
-      const strategy = await getWalletStrategy(req.params.wallet, req.userId!);
-      res.json(strategy || { walletAddress: req.params.wallet, sampleSize: 0 });
+      const { getWalletStrategy, analyzeWalletStrategy, saveWalletStrategy, generateAiRecommendations } = await import("./paper-trading");
+      const walletAddress = req.params.wallet;
+      const userId = req.userId!;
+      
+      // Get cached strategy if exists
+      const cached = await getWalletStrategy(walletAddress, userId);
+      
+      // Check if we need to re-analyze
+      // Re-analyze if: no cache, cache older than 1 hour, or significant new swaps
+      const now = Math.floor(Date.now() / 1000);
+      const cacheAge = cached?.lastUpdatedAt ? now - cached.lastUpdatedAt : Infinity;
+      const isStale = cacheAge > 3600; // 1 hour cache TTL
+      
+      // Count current swaps for this wallet to check if new activity
+      const [swapCountResult] = await db.select({ count: count() }).from(swaps).where(eq(swaps.source, walletAddress));
+      const currentSwapCount = Number(swapCountResult?.count) || 0;
+      const hasNewSwaps = cached?.swapCountAtAnalysis ? currentSwapCount > cached.swapCountAtAnalysis + 2 : true;
+      
+      // Return cached if valid
+      if (cached && cached.sampleSize && cached.sampleSize > 0 && !isStale && !hasNewSwaps) {
+        // Parse stored JSON fields for response
+        let aiRecommendations: any = cached.aiRecommendations;
+        if (typeof aiRecommendations === 'string') {
+          try { aiRecommendations = JSON.parse(aiRecommendations); } catch { aiRecommendations = null; }
+        }
+        let discoveryInsights: any = cached.discoveryInsights;
+        if (typeof discoveryInsights === 'string') {
+          try { discoveryInsights = JSON.parse(discoveryInsights); } catch { discoveryInsights = null; }
+        }
+        
+        res.json({
+          ...cached,
+          aiRecommendations,
+          discoveryContext: cached.behaviorType ? {
+            behaviorType: cached.behaviorType,
+            behaviorConfidence: cached.behaviorConfidence,
+            recentInsights: discoveryInsights || [],
+            followsLeaders: [],
+            leadsFollowers: [],
+          } : undefined,
+          fromCache: true,
+        });
+        return;
+      }
+      
+      // Trigger fresh analysis
+      console.log(`[StrategyAnalyze] Auto-analyzing wallet: ${walletAddress} (stale: ${isStale}, hasNewSwaps: ${hasNewSwaps})`);
+      const analysis = await analyzeWalletStrategy(walletAddress, userId);
+      
+      if (analysis.sampleSize >= 5) {
+        const recommendations = await generateAiRecommendations(walletAddress, analysis);
+        analysis.aiRecommendations = recommendations;
+      }
+      
+      // Save to cache
+      await saveWalletStrategy(walletAddress, userId, analysis);
+      
+      res.json({ ...analysis, fromCache: false });
     } catch (error) {
       console.error("Error fetching wallet strategy:", error);
       res.status(500).json({ error: "Failed to fetch strategy" });

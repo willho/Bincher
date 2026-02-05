@@ -1,12 +1,13 @@
 import { db } from "./db";
 import { 
-  paperPositions, walletStrategies, strategyExperiments, swaps,
+  paperPositions, walletStrategies, strategyExperiments, swaps, systemInsights,
   PaperPosition, WalletStrategy, StrategyExperiment,
   InsertPaperPosition, InsertWalletStrategy, InsertStrategyExperiment
 } from "@shared/schema";
-import { eq, and, desc, sql, gte, lte, count } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, count, or, like } from "drizzle-orm";
 import { fetchTokenWithFallback } from "./data-pool";
 import OpenAI from "openai";
+import { classifyWalletBehavior, type WalletBehaviorType } from "./cluster-detection";
 
 // =====================
 // PAPER POSITION MANAGEMENT
@@ -475,6 +476,19 @@ export interface AiRecommendation {
   priority: "high" | "medium" | "low";
 }
 
+export interface DiscoveryContext {
+  behaviorType: WalletBehaviorType;
+  behaviorConfidence: number;
+  followsLeaders: string[];
+  leadsFollowers: string[];
+  recentInsights: Array<{
+    title: string;
+    type: string;
+    source: string;
+    confidence: number;
+  }>;
+}
+
 export interface StrategyAnalysis {
   strategyType: string;
   tradingStyle: string;
@@ -495,6 +509,46 @@ export interface StrategyAnalysis {
   sampleSize: number;
   insights: string[];
   aiRecommendations?: AiRecommendation[];
+  discoveryContext?: DiscoveryContext;
+  swapCountAtAnalysis?: number;
+}
+
+export async function fetchDiscoveryContext(walletAddress: string): Promise<DiscoveryContext | null> {
+  try {
+    // Get wallet behavior classification
+    const behavior = await classifyWalletBehavior(walletAddress, 14);
+    
+    // Query recent system insights related to this wallet
+    const now = Math.floor(Date.now() / 1000);
+    const insightCutoff = now - 7 * 86400; // 7 days
+    
+    const relevantInsights = await db.select().from(systemInsights)
+      .where(and(
+        gte(systemInsights.createdAt, insightCutoff),
+        or(
+          like(systemInsights.title, `%${walletAddress.slice(0, 12)}%`),
+          sql`${systemInsights.payload}::text LIKE ${'%' + walletAddress.slice(0, 12) + '%'}`
+        )
+      ))
+      .orderBy(desc(systemInsights.confidence))
+      .limit(10);
+    
+    return {
+      behaviorType: behavior.behaviorType,
+      behaviorConfidence: behavior.confidence,
+      followsLeaders: behavior.signals.followsLeaders || [],
+      leadsFollowers: behavior.signals.leadsFollowers || [],
+      recentInsights: relevantInsights.map(i => ({
+        title: i.title,
+        type: i.insightType,
+        source: i.sourceSystem,
+        confidence: i.confidence ?? 0,
+      })),
+    };
+  } catch (error: any) {
+    console.error("[Discovery Context] Error fetching:", error.message);
+    return null;
+  }
 }
 
 export async function generateAiRecommendations(
@@ -503,6 +557,19 @@ export async function generateAiRecommendations(
 ): Promise<AiRecommendation[]> {
   try {
     const openai = new OpenAI();
+    
+    // Build discovery context section if available
+    let discoverySection = "";
+    if (analysis.discoveryContext) {
+      const dc = analysis.discoveryContext;
+      discoverySection = `
+DISCOVERY INSIGHTS:
+- Behavior Classification: ${dc.behaviorType} (${(dc.behaviorConfidence * 100).toFixed(0)}% confidence)
+${dc.followsLeaders.length > 0 ? `- Follows Leaders: ${dc.followsLeaders.slice(0, 3).map(w => w.slice(0, 8) + '...').join(', ')}` : ''}
+${dc.leadsFollowers.length > 0 ? `- Has Followers: ${dc.leadsFollowers.slice(0, 3).map(w => w.slice(0, 8) + '...').join(', ')} (${dc.leadsFollowers.length} total)` : ''}
+${dc.recentInsights.length > 0 ? `- Recent System Insights:\n${dc.recentInsights.slice(0, 5).map(i => `  * [${i.type}] ${i.title}`).join('\n')}` : ''}
+`;
+    }
     
     const prompt = `You are Miss Pincher, a friendly Solana trading AI assistant. Analyze this signal wallet's trading strategy and provide actionable recommendations.
 
@@ -520,7 +587,7 @@ TRADING METRICS:
 - Risk Level: ${analysis.riskLevel}/10
 - Sample Size: ${analysis.sampleSize} trades
 - Confidence Score: ${(analysis.confidenceScore * 100).toFixed(0)}%
-
+${discoverySection}
 Provide 4-6 specific recommendations in JSON format. Each recommendation should be actionable and help the user maximize value from copy trading this wallet.
 
 Categories to use:
@@ -797,7 +864,25 @@ export async function analyzeWalletStrategy(
     return val;
   };
 
-  const result = {
+  // Fetch discovery context (behavior classification and system insights)
+  const discoveryContext = await fetchDiscoveryContext(walletAddress) || undefined;
+  
+  // Add discovery-based insights
+  if (discoveryContext) {
+    if (discoveryContext.behaviorType === 'leader' && discoveryContext.behaviorConfidence > 0.6) {
+      insights.push(`Market leader - other wallets follow this wallet's trades`);
+    } else if (discoveryContext.behaviorType === 'follower' && discoveryContext.behaviorConfidence > 0.6) {
+      insights.push(`Likely copies other wallets (follower behavior detected)`);
+    } else if (discoveryContext.behaviorType === 'bot' && discoveryContext.behaviorConfidence > 0.6) {
+      insights.push(`Bot-like trading patterns detected`);
+    }
+    
+    if (discoveryContext.leadsFollowers.length > 3) {
+      insights.push(`Influential: ${discoveryContext.leadsFollowers.length} wallets follow this trader`);
+    }
+  }
+
+  const result: StrategyAnalysis = {
     strategyType,
     tradingStyle,
     avgHoldDuration: Math.round(safeNumber(avgHoldDuration)),
@@ -816,6 +901,8 @@ export async function analyzeWalletStrategy(
     confidenceScore: safeNumber(confidenceScore),
     sampleSize,
     insights,
+    discoveryContext,
+    swapCountAtAnalysis: walletSwaps.length,
   };
   
   console.log(`[StrategyAnalyze] Result for wallet analysis:`, JSON.stringify(result, null, 2));
@@ -857,6 +944,10 @@ export async function saveWalletStrategy(
           confidenceScore: analysis.confidenceScore,
           sampleSize: analysis.sampleSize,
           aiRecommendations: analysis.aiRecommendations ? JSON.stringify(analysis.aiRecommendations) : null,
+          swapCountAtAnalysis: analysis.swapCountAtAnalysis,
+          behaviorType: analysis.discoveryContext?.behaviorType,
+          behaviorConfidence: analysis.discoveryContext?.behaviorConfidence,
+          discoveryInsights: analysis.discoveryContext ? JSON.stringify(analysis.discoveryContext.recentInsights) : null,
           lastUpdatedAt: now,
           version: sql`${walletStrategies.version} + 1`,
         })
@@ -893,6 +984,10 @@ export async function saveWalletStrategy(
       confidenceScore: analysis.confidenceScore,
       sampleSize: analysis.sampleSize,
       aiRecommendations: analysis.aiRecommendations ? JSON.stringify(analysis.aiRecommendations) : null,
+      swapCountAtAnalysis: analysis.swapCountAtAnalysis,
+      behaviorType: analysis.discoveryContext?.behaviorType,
+      behaviorConfidence: analysis.discoveryContext?.behaviorConfidence,
+      discoveryInsights: analysis.discoveryContext ? JSON.stringify(analysis.discoveryContext.recentInsights) : null,
       lastUpdatedAt: now,
       createdAt: now,
     }).returning();

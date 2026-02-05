@@ -2284,6 +2284,14 @@ export const walletStrategies = pgTable("wallet_strategies", {
   
   // AI-generated recommendations from Miss Pincher
   aiRecommendations: text("ai_recommendations"),
+  
+  // Cache invalidation - track swap count at time of analysis
+  swapCountAtAnalysis: integer("swap_count_at_analysis"),
+  
+  // Discovery insights context
+  behaviorType: text("behavior_type"), // bot, leader, follower, organic, unknown
+  behaviorConfidence: real("behavior_confidence"),
+  discoveryInsights: text("discovery_insights"), // JSON array of relevant insights
 });
 
 export const insertWalletStrategiesSchema = createInsertSchema(walletStrategies).omit({ id: true });
