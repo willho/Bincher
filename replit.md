@@ -63,7 +63,8 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 
 ## External Dependencies
 
-- **Helius**: Real-time Solana blockchain data, swap transaction webhooks, dynamic priority fee estimation.
+- **Helius**: Real-time Solana blockchain data, swap transaction webhooks, dynamic priority fee estimation (1M calls/month free tier).
+- **Chainstack**: Primary RPC provider for raw Solana calls (3M calls/month free tier), with automatic failover to Helius.
 - **Resend**: Sending email notifications.
 - **Jupiter**: Executing token swaps on the Solana blockchain, fallback for token symbol/name lookup.
 - **PostgreSQL**: Primary database for persistent storage.
