@@ -6198,6 +6198,117 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/paper/experiment-stats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getPaperExperimentStats } = await import("./paper-experiments");
+      const stats = await getPaperExperimentStats(req.userId!);
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting experiment stats:", error);
+      res.status(500).json({ error: "Failed to get experiment stats" });
+    }
+  });
+
+  app.get("/api/paper/theories", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getActiveTheories, getBestTheory } = await import("./paper-experiments");
+      const [theories, best] = await Promise.all([
+        getActiveTheories(),
+        getBestTheory()
+      ]);
+      res.json({ theories, best });
+    } catch (error) {
+      console.error("Error getting theories:", error);
+      res.status(500).json({ error: "Failed to get theories" });
+    }
+  });
+
+  app.get("/api/paper/theories/:id/validate", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { validateTheory } = await import("./paper-experiments");
+      const validation = await validateTheory(req.params.id);
+      res.json(validation);
+    } catch (error) {
+      console.error("Error validating theory:", error);
+      res.status(500).json({ error: "Failed to validate theory" });
+    }
+  });
+
+  app.get("/api/paper/trading-gate", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { checkRealTradingGate } = await import("./paper-experiments");
+      const signalWallet = req.query.wallet as string | undefined;
+      const gate = await checkRealTradingGate(req.userId!, signalWallet);
+      res.json(gate);
+    } catch (error) {
+      console.error("Error checking trading gate:", error);
+      res.status(500).json({ error: "Failed to check trading gate" });
+    }
+  });
+
+  app.post("/api/paper/experiment-trade", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { openExperimentTrade } = await import("./paper-experiments");
+      const { experimentId, tokenMint, tokenSymbol, entrySol, signalWallet, takeProfitMultiplier, stopLossPercent, isVariant } = req.body;
+      
+      if (!experimentId || !tokenMint || !entrySol) {
+        return res.status(400).json({ error: "Missing required fields: experimentId, tokenMint, entrySol" });
+      }
+      
+      const position = await openExperimentTrade(
+        req.userId!,
+        experimentId,
+        { tokenMint, tokenSymbol, entrySol, signalWallet, takeProfitMultiplier, stopLossPercent },
+        isVariant || false
+      );
+      res.json(position);
+    } catch (error: any) {
+      console.error("Error opening experiment trade:", error);
+      res.status(500).json({ error: error.message || "Failed to open experiment trade" });
+    }
+  });
+
+  app.post("/api/paper/best-theory-trade", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { openBestTheoryTrade, getBestTheory } = await import("./paper-experiments");
+      const { tokenMint, tokenSymbol, entrySol, signalWallet, takeProfitMultiplier, stopLossPercent, theoryId } = req.body;
+      
+      if (!tokenMint || !entrySol) {
+        return res.status(400).json({ error: "Missing required fields: tokenMint, entrySol" });
+      }
+      
+      let targetTheoryId = theoryId;
+      if (!targetTheoryId) {
+        const best = await getBestTheory();
+        if (!best) {
+          return res.status(400).json({ error: "No active theories available" });
+        }
+        targetTheoryId = best.id;
+      }
+      
+      const position = await openBestTheoryTrade(
+        req.userId!,
+        targetTheoryId,
+        { tokenMint, tokenSymbol, entrySol, signalWallet, takeProfitMultiplier, stopLossPercent }
+      );
+      res.json(position);
+    } catch (error: any) {
+      console.error("Error opening best theory trade:", error);
+      res.status(500).json({ error: error.message || "Failed to open best theory trade" });
+    }
+  });
+
+  app.post("/api/paper/validate-theories", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { runBestTheoryValidationCycle } = await import("./paper-experiments");
+      const result = await runBestTheoryValidationCycle();
+      res.json(result);
+    } catch (error) {
+      console.error("Error validating theories:", error);
+      res.status(500).json({ error: "Failed to validate theories" });
+    }
+  });
+
   // =====================
   // DISCOVERY ENGINE API ROUTES
   // =====================

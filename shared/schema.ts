@@ -2333,6 +2333,12 @@ export const paperPositions = pgTable("paper_positions", {
   signalWallet: text("signal_wallet"),
   experimentId: integer("experiment_id"),
   
+  // Paper trade type for learning system
+  paperTradeType: text("paper_trade_type").default("manual"), // "manual" | "experiment" | "best_theory"
+  metaExperimentId: text("meta_experiment_id"), // Links to meta_experiments for experiment types
+  theoryId: text("theory_id"), // Links to winning theories for best_theory type
+  experimentVariant: text("experiment_variant"), // "control" | "variant" for A/B experiments
+  
   // Config at entry
   takeProfitMultiplier: real("take_profit_multiplier"),
   stopLossPercent: real("stop_loss_percent"),

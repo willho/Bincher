@@ -21,6 +21,12 @@ function getOpenAI(): OpenAI {
 const WEIGHTS = {
   trade_win: 3.0,
   trade_loss: 2.0,
+  paper_trade_win: 1.0,
+  paper_trade_loss: 0.7,
+  paper_experiment_win: 0.8,
+  paper_experiment_loss: 0.5,
+  paper_best_theory_win: 1.2,
+  paper_best_theory_loss: 0.9,
   route_correction: 2.0,
   route_success: 1.0,
   chat_interaction: 1.0,
@@ -178,7 +184,17 @@ export async function processStrategyClusterUpdates(bucketId: string): Promise<n
     for (const update of clusterUpdates) {
       const signalData = update.signalData as Record<string, any> | null;
       
-      if (update.signalType === "trade_win") {
+      const isWinType = update.signalType === "trade_win" || 
+        update.signalType === "paper_trade_win" ||
+        update.signalType === "paper_experiment_win" ||
+        update.signalType === "paper_best_theory_win";
+      
+      const isLossType = update.signalType === "trade_loss" ||
+        update.signalType === "paper_trade_loss" ||
+        update.signalType === "paper_experiment_loss" ||
+        update.signalType === "paper_best_theory_loss";
+      
+      if (isWinType) {
         outcomes.totalTrades++;
         outcomes.wins++;
         if (signalData?.pnlPercent) {
@@ -195,7 +211,7 @@ export async function processStrategyClusterUpdates(bucketId: string): Promise<n
             timestamp: now
           };
         }
-      } else if (update.signalType === "trade_loss") {
+      } else if (isLossType) {
         outcomes.totalTrades++;
         outcomes.losses++;
         if (signalData?.pnlPercent) {
@@ -275,9 +291,19 @@ export async function processBehaviorVectorUpdates(bucketId: string): Promise<nu
       const weight = WEIGHTS[update.signalType as keyof typeof WEIGHTS] || 1.0;
       const signalData = update.signalData as Record<string, any> | null;
       
-      if (update.signalType === "trade_win") {
+      const isWinType = update.signalType === "trade_win" || 
+        update.signalType === "paper_trade_win" ||
+        update.signalType === "paper_experiment_win" ||
+        update.signalType === "paper_best_theory_win";
+      
+      const isLossType = update.signalType === "trade_loss" ||
+        update.signalType === "paper_trade_loss" ||
+        update.signalType === "paper_experiment_loss" ||
+        update.signalType === "paper_best_theory_loss";
+      
+      if (isWinType) {
         tradingCautionDelta -= 2 * weight;
-      } else if (update.signalType === "trade_loss") {
+      } else if (isLossType) {
         tradingCautionDelta += 3 * weight;
       }
       

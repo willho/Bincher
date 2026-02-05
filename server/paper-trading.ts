@@ -122,6 +122,15 @@ async function closePositionInternal(
     await updateExperimentResults(experimentId, realizedPnl, realizedPnl >= 0);
   }
   
+  if (updated) {
+    try {
+      const { recordPaperTradeOutcome } = await import("./paper-experiments");
+      await recordPaperTradeOutcome(updated);
+    } catch (err) {
+      console.error("[PaperTrading] Failed to record paper trade outcome:", err);
+    }
+  }
+  
   return updated;
 }
 
