@@ -2242,6 +2242,36 @@ export const insertSurplusPoolSchema = createInsertSchema(surplusPool).omit({ id
 export type SurplusPoolEntry = typeof surplusPool.$inferSelect;
 export type InsertSurplusPoolEntry = z.infer<typeof insertSurplusPoolSchema>;
 
+// Discovery tasks - browser-based distributed task queue for token metadata lookups
+export const discoveryTasks = pgTable("discovery_tasks", {
+  id: serial("id").primaryKey(),
+  
+  // Task details
+  taskType: text("task_type").notNull(), // token_metadata, wallet_scan
+  payload: jsonb("payload").$type<{ mint?: string; walletAddress?: string }>().notNull(),
+  
+  // Assignment tracking (60s TTL for auto-requeue)
+  status: text("status").notNull().default("pending"), // pending, assigned, completed, failed
+  assignedTo: integer("assigned_to"), // userId of browser worker
+  assignedAt: integer("assigned_at"), // timestamp when assigned
+  ttlSeconds: integer("ttl_seconds").notNull().default(60), // task timeout
+  
+  // Result
+  result: jsonb("result").$type<{ name?: string; symbol?: string; decimals?: number; image?: string }>(),
+  errorMessage: text("error_message"),
+  
+  // Priority and ordering
+  priority: integer("priority").notNull().default(10), // lower = lower priority
+  
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  completedAt: integer("completed_at"),
+});
+
+export const insertDiscoveryTaskSchema = createInsertSchema(discoveryTasks).omit({ id: true });
+export type DiscoveryTask = typeof discoveryTasks.$inferSelect;
+export type InsertDiscoveryTask = z.infer<typeof insertDiscoveryTaskSchema>;
+
 // =====================
 // PAPER TRADING SCHEMA
 // =====================

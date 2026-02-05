@@ -1,8 +1,9 @@
 import { Connection, PublicKey, ParsedTransactionWithMeta, GetProgramAccountsFilter } from "@solana/web3.js";
 import { getNetworkMode } from "./network-mode";
-import { recordRpcCall } from "./budget-manager";
+import { recordRpcCall, isProviderExhausted } from "./budget-manager";
 
 export type RpcProvider = "chainstack" | "quicknode" | "helius";
+export type OperationType = "raw_rpc" | "token_metadata";
 
 interface RpcStats {
   calls: number;
@@ -19,6 +20,12 @@ const providerStats: Map<RpcProvider, RpcStats> = new Map([
 
 const ERROR_COOLDOWN_MS = 60 * 1000;
 const MAX_CONSECUTIVE_ERRORS = 3;
+
+const TOKEN_METADATA_OPERATIONS = new Set([
+  "getTokenMetadata",
+  "getAsset",
+  "getAssetsByOwner",
+]);
 
 async function getChainstackRpcUrl(): Promise<string | null> {
   const apiKey = process.env.CHAINSTACK_API_KEY;
@@ -74,14 +81,47 @@ async function shouldUseProvider(provider: RpcProvider): Promise<boolean> {
   return true;
 }
 
-async function getPreferredProvider(): Promise<RpcProvider> {
+function getOperationType(operation: string): OperationType {
+  if (TOKEN_METADATA_OPERATIONS.has(operation)) {
+    return "token_metadata";
+  }
+  return "raw_rpc";
+}
+
+async function getPreferredProvider(operation?: string): Promise<RpcProvider> {
+  if (operation && getOperationType(operation) === "token_metadata") {
+    if (await shouldUseProvider("helius")) {
+      return "helius";
+    }
+    console.warn("[RpcProvider] Helius unavailable for token metadata, will fail gracefully");
+    return "helius";
+  }
+  
+  if (isProviderExhausted("chainstack")) {
+    console.log("[RpcProvider] Chainstack at 95%+ exhaustion, falling back to Helius for raw RPC");
+    return "helius";
+  }
+  
   if (await shouldUseProvider("chainstack")) {
     return "chainstack";
   }
+  
   if (await shouldUseProvider("quicknode")) {
     return "quicknode";
   }
   return "helius";
+}
+
+async function getFallbackOrder(operation?: string): Promise<RpcProvider[]> {
+  if (operation && getOperationType(operation) === "token_metadata") {
+    return ["helius"];
+  }
+  
+  if (isProviderExhausted("chainstack")) {
+    return ["helius"];
+  }
+  
+  return ["chainstack", "quicknode", "helius"];
 }
 
 function recordSuccess(provider: RpcProvider, latencyMs: number): void {
@@ -123,15 +163,17 @@ export async function getConnection(provider?: RpcProvider): Promise<Connection>
   return new Connection(await getHeliusRpcUrl(), "confirmed");
 }
 
-const FALLBACK_ORDER: RpcProvider[] = ["chainstack", "quicknode", "helius"];
-
 export async function rpcCall<T>(
   operation: string,
   fn: (connection: Connection) => Promise<T>,
   fallbackOnError: boolean = true
 ): Promise<T> {
-  const primary = await getPreferredProvider();
+  const operationType = getOperationType(operation);
+  const primary = await getPreferredProvider(operation);
+  const fallbackOrder = await getFallbackOrder(operation);
   const start = Date.now();
+  
+  console.log(`[RpcProvider] ${operation} (${operationType}) → ${primary}`);
   
   try {
     const connection = await getConnection(primary);
@@ -143,10 +185,10 @@ export async function rpcCall<T>(
     console.error(`[RpcProvider] ${primary} failed for ${operation}:`, error);
     
     if (fallbackOnError) {
-      const primaryIndex = FALLBACK_ORDER.indexOf(primary);
+      const primaryIndex = fallbackOrder.indexOf(primary);
       
-      for (let i = primaryIndex + 1; i < FALLBACK_ORDER.length; i++) {
-        const fallbackProvider = FALLBACK_ORDER[i];
+      for (let i = primaryIndex + 1; i < fallbackOrder.length; i++) {
+        const fallbackProvider = fallbackOrder[i];
         
         if (!(await shouldUseProvider(fallbackProvider))) {
           continue;
@@ -268,3 +310,65 @@ export function resetProviderStats(): void {
 export async function getCurrentProvider(): Promise<RpcProvider> {
   return getPreferredProvider();
 }
+
+export interface TokenMetadata {
+  mint: string;
+  name: string;
+  symbol: string;
+  decimals?: number;
+  image?: string;
+}
+
+export async function getTokenMetadataViaHelius(mintAddress: string): Promise<TokenMetadata | null> {
+  const apiKey = process.env.HELIUS_API_KEY;
+  if (!apiKey) {
+    console.error("[RpcProvider] No Helius API key for token metadata");
+    return null;
+  }
+  
+  const mode = await getNetworkMode();
+  const baseUrl = mode === "devnet" 
+    ? "https://devnet.helius-rpc.com"
+    : "https://mainnet.helius-rpc.com";
+  
+  const start = Date.now();
+  
+  try {
+    const response = await fetch(`${baseUrl}/?api-key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: "token-metadata",
+        method: "getAsset",
+        params: { id: mintAddress },
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const data = await response.json();
+    recordSuccess("helius", Date.now() - start);
+    
+    if (data.result) {
+      const asset = data.result;
+      return {
+        mint: mintAddress,
+        name: asset.content?.metadata?.name || "Unknown",
+        symbol: asset.content?.metadata?.symbol || "???",
+        decimals: asset.token_info?.decimals,
+        image: asset.content?.links?.image,
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    recordError("helius");
+    console.error(`[RpcProvider] getTokenMetadata failed for ${mintAddress}:`, error);
+    return null;
+  }
+}
+
+export { getOperationType };

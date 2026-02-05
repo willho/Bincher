@@ -17,6 +17,13 @@ const TOTAL_RPC_POOL_CREDITS = HELIUS_FREE_TIER_CREDITS + CHAINSTACK_FREE_TIER_C
 const MAX_SIGNAL_WALLETS_PER_KEY = 100;
 const DEFAULT_USER_BUDGET = HELIUS_FREE_TIER_CREDITS;
 
+const POOL_EXHAUSTION_THRESHOLD = 0.95;
+
+const PROVIDER_LIMITS: Record<string, number> = {
+  chainstack: CHAINSTACK_FREE_TIER_CREDITS,
+  helius: HELIUS_FREE_TIER_CREDITS,
+};
+
 const rpcProviderUsage: Map<string, { calls: number; creditsUsed: number; lastResetAt: number }> = new Map([
   ["chainstack", { calls: 0, creditsUsed: 0, lastResetAt: Date.now() }],
   ["helius", { calls: 0, creditsUsed: 0, lastResetAt: Date.now() }],
@@ -618,4 +625,59 @@ export function getProviderCapacities(): Record<string, number> {
     chainstack: CHAINSTACK_FREE_TIER_CREDITS,
     helius: HELIUS_FREE_TIER_CREDITS,
   };
+}
+
+export function isProviderExhausted(provider: string): boolean {
+  const usage = rpcProviderUsage.get(provider);
+  const limit = PROVIDER_LIMITS[provider];
+  if (!usage || !limit) return false;
+  
+  return usage.creditsUsed >= limit * POOL_EXHAUSTION_THRESHOLD;
+}
+
+export function getProviderExhaustionLevel(provider: string): number {
+  const usage = rpcProviderUsage.get(provider);
+  const limit = PROVIDER_LIMITS[provider];
+  if (!usage || !limit) return 0;
+  
+  return Math.min(1, usage.creditsUsed / limit);
+}
+
+export function getPoolExhaustionStatus(): {
+  totalUsed: number;
+  totalCapacity: number;
+  exhaustionLevel: number;
+  isExhausted: boolean;
+  providers: Record<string, { used: number; limit: number; exhaustionLevel: number; isExhausted: boolean }>;
+} {
+  let totalUsed = 0;
+  const providers: Record<string, { used: number; limit: number; exhaustionLevel: number; isExhausted: boolean }> = {};
+  
+  rpcProviderUsage.forEach((usage, provider) => {
+    const limit = PROVIDER_LIMITS[provider] || 0;
+    const exhaustionLevel = limit > 0 ? usage.creditsUsed / limit : 0;
+    
+    providers[provider] = {
+      used: usage.creditsUsed,
+      limit,
+      exhaustionLevel,
+      isExhausted: exhaustionLevel >= POOL_EXHAUSTION_THRESHOLD,
+    };
+    
+    totalUsed += usage.creditsUsed;
+  });
+  
+  const exhaustionLevel = totalUsed / TOTAL_RPC_POOL_CREDITS;
+  
+  return {
+    totalUsed,
+    totalCapacity: TOTAL_RPC_POOL_CREDITS,
+    exhaustionLevel,
+    isExhausted: exhaustionLevel >= POOL_EXHAUSTION_THRESHOLD,
+    providers,
+  };
+}
+
+export function shouldFallbackToPool(): boolean {
+  return isProviderExhausted("chainstack");
 }

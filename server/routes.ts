@@ -2045,6 +2045,88 @@ export async function registerRoutes(
     }
   });
 
+  // Discovery Worker: Get next task for browser worker
+  app.get("/api/discovery/task", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { assignTaskToWorker } = await import("./discovery-worker");
+      const task = await assignTaskToWorker(req.userId!);
+      
+      if (!task) {
+        return res.json({ task: null, message: "No tasks available" });
+      }
+      
+      res.json({
+        task: {
+          id: task.id,
+          type: task.taskType,
+          payload: task.payload,
+          ttlSeconds: task.ttlSeconds,
+        },
+      });
+    } catch (error) {
+      console.error("Error getting discovery task:", error);
+      res.status(500).json({ error: "Failed to get discovery task" });
+    }
+  });
+
+  // Discovery Worker: Submit task result
+  app.post("/api/discovery/task/:taskId/complete", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const taskId = parseInt(req.params.taskId);
+      const { result, error: errorMessage } = req.body;
+      
+      const { completeTask, failTask } = await import("./discovery-worker");
+      
+      if (errorMessage) {
+        const failed = await failTask(taskId, errorMessage);
+        return res.json({ success: !!failed, task: failed });
+      }
+      
+      const completed = await completeTask(taskId, result || {});
+      res.json({ success: !!completed, task: completed });
+    } catch (error) {
+      console.error("Error completing discovery task:", error);
+      res.status(500).json({ error: "Failed to complete discovery task" });
+    }
+  });
+
+  // Discovery Worker: Get task stats (admin only)
+  app.get("/api/admin/discovery/stats", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { getTaskStats } = await import("./discovery-worker");
+      const stats = await getTaskStats();
+      
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting discovery stats:", error);
+      res.status(500).json({ error: "Failed to get discovery stats" });
+    }
+  });
+
+  // Discovery Worker: Queue token metadata task (admin only)
+  app.post("/api/admin/discovery/queue-token", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { mint, priority } = req.body;
+      if (!mint) {
+        return res.status(400).json({ error: "mint is required" });
+      }
+
+      const { createTokenMetadataTask } = await import("./discovery-worker");
+      const task = await createTokenMetadataTask(mint, priority || 10);
+      
+      res.json({ success: true, task });
+    } catch (error) {
+      console.error("Error queuing discovery task:", error);
+      res.status(500).json({ error: "Failed to queue discovery task" });
+    }
+  });
+
   // Admin: Data pool status
   app.get("/api/admin/data-pool-status", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {

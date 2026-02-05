@@ -66,6 +66,9 @@ app.use((req, res, next) => {
     await storage.initialize();
     console.log("Database initialized");
     dbAvailable = true;
+    
+    const { startCleanupScheduler } = await import("./discovery-worker");
+    startCleanupScheduler();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");
