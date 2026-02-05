@@ -49,7 +49,7 @@ import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signal
 import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
-import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs, logWebhook, logErrorToTable } from "./system-logger";
+import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs, logWebhook, logErrorToTable, logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
 import { scoreToken, refreshScore, chatWithAI, getChatHistory, clearChatHistory, getAIInsights, getSnapshot, getAllSnapshots, getPincherWelcomeMessage, getFilteredEventsForUser, getUserPreferences, updateUserPreferences, setAdminInstructions, logTokenEvent, generateAndCacheAlert, reviewTradingRules } from "./ai";
 import { 
   isWalletInTop100, 
@@ -1059,18 +1059,27 @@ export async function registerRoutes(
         // Per-wallet copy trading - no global toggle required
         const walletCopyEnabled = sourceWallet?.copyTradeEnabled === true;
         
-        // Log copy trading decision to system_logs for debugging (fail-safe)
-        logInfo("copy_trade", "decision_start", `Copy trade check: ${isBuy ? 'BUY' : 'SELL'} ${swap.toTokenSymbol}`, {
-          isBuy,
-          walletCopyEnabled,
-          walletLabel: sourceWallet?.label,
-          walletAddress: swapWalletAddress,
-          sourceWalletFound: !!sourceWallet,
-        }, userId).catch(() => {});
-        
         // Skip stablecoin swaps (SOL -> USDC or USDC -> SOL)
         // These are cash-out operations, not token buys
         const isStablecoinSwap = isBaseCurrency(swap.fromToken) && isBaseCurrency(swap.toToken);
+        
+        // Build copy settings for logging
+        const copySettingsForLog = sourceWallet ? {
+          copyTradeEnabled: sourceWallet.copyTradeEnabled ?? false,
+          copyMirrorBuys: sourceWallet.copyMirrorBuys,
+          copyMirrorSells: sourceWallet.copyMirrorSells,
+          copyBuyType: sourceWallet.copyBuyType || undefined,
+          copyBuyAmount: sourceWallet.copyBuyAmount || undefined,
+          dedupSkipIfHolding: sourceWallet.dedupSkipIfHolding ?? true,
+          dedupSkipIfEverHeld: sourceWallet.dedupSkipIfEverHeld ?? false,
+          dedupSkipIfPending: sourceWallet.dedupSkipIfPending ?? true,
+          dedupFirstBuyOnly: sourceWallet.dedupFirstBuyOnly ?? false,
+          dedupCrossSignalPrevention: sourceWallet.dedupCrossSignalPrevention ?? false,
+        } : {
+          copyTradeEnabled: false,
+          copyMirrorBuys: null,
+          copyMirrorSells: null,
+        };
         
         // Log copy trading decision for debugging
         console.log(`[CopyTrade] Swap detected: ${isBuy ? 'BUY' : 'SELL'} ${swap.toTokenSymbol || swap.toToken.slice(0,8)} | walletCopyEnabled=${walletCopyEnabled} | wallet=${sourceWallet?.label || swapWalletAddress.slice(0,8)}${isStablecoinSwap ? ' | STABLECOIN_SWAP' : ''}`);
@@ -1097,12 +1106,44 @@ export async function registerRoutes(
         // Check token blacklist before copy trading
         const tokenForBlacklistCheck = swap.toToken;
         const isBlacklisted = await isTokenBlacklisted(userId, tokenForBlacklistCheck);
-        if (isBlacklisted) {
-          console.log(`[CopyTrade] SKIPPED: Token ${swap.toTokenSymbol || swap.toToken.slice(0,8)} is blacklisted`);
-        }
+        
+        // Calculate source trade USD value for filtering and logging
+        const sourceTradeUsd = toTokenMetadata?.priceUsd && swap.toAmount 
+          ? parseFloat(swap.toAmount) * toTokenMetadata.priceUsd 
+          : undefined;
+        const signalAmountSol = isBuy ? (swap.fromAmount ? parseFloat(swap.fromAmount) : undefined) : (swap.toAmount ? parseFloat(swap.toAmount) : undefined);
+        
+        // Build base log details for all decision paths
+        const baseLogDetails = {
+          userId,
+          signalWalletId: sourceWallet?.id || 0,
+          signalWalletLabel: sourceWallet?.label || swapWalletAddress.slice(0,8),
+          tokenMint: swap.toToken,
+          tokenSymbol: swap.toTokenSymbol || undefined,
+          swapType: isBuy ? "buy" as const : "sell" as const,
+          signalAmountSol,
+          signalAmountUsd: sourceTradeUsd,
+          copySettings: copySettingsForLog,
+          checks: {
+            isStablecoinSwap,
+            isBlacklisted,
+          },
+        };
         
         // Per-wallet copy trading enabled check (skip stablecoin swaps and blacklisted tokens)
-        if (walletCopyEnabled && isBuy && !isStablecoinSwap && !isBlacklisted) {
+        if (!isBuy) {
+          // Log sell transactions (not processed for initial copy)
+          logCopyTradeDecision("skipped_sell", baseLogDetails).catch(() => {});
+        } else if (!walletCopyEnabled) {
+          // Log disabled wallet
+          logCopyTradeDecision("skipped_disabled", baseLogDetails).catch(() => {});
+        } else if (isStablecoinSwap) {
+          // Log stablecoin swap
+          logCopyTradeDecision("skipped_stablecoin", baseLogDetails).catch(() => {});
+        } else if (isBlacklisted) {
+          // Log blacklisted token
+          logCopyTradeDecision("skipped_blacklist", baseLogDetails).catch(() => {});
+        } else if (walletCopyEnabled && isBuy && !isStablecoinSwap && !isBlacklisted) {
             // Build per-wallet copy config
             const walletCopyConfig = sourceWallet ? {
               copyBuyType: sourceWallet.copyBuyType || undefined,
@@ -1117,11 +1158,6 @@ export async function registerRoutes(
               dedupSkipIfEverHeld: sourceWallet.dedupSkipIfEverHeld ?? false,
               dedupSkipIfPending: sourceWallet.dedupSkipIfPending ?? true,
             } : undefined;
-            
-            // Calculate source trade USD value for filtering
-            const sourceTradeUsd = toTokenMetadata?.priceUsd && swap.toAmount 
-              ? parseFloat(swap.toAmount) * toTokenMetadata.priceUsd 
-              : undefined;
             
             console.log(`[CopyTrade] Attempting to queue pending buy for ${swap.toTokenSymbol || swap.toToken.slice(0,8)}...`);
             
@@ -1144,24 +1180,11 @@ export async function registerRoutes(
             );
             if (pendingBuy) {
               console.log(`[CopyTrade] SUCCESS: Queued pending buy for ${swap.toTokenSymbol} for user ${userId} from wallet ${sourceWallet?.label || swapWalletAddress}`);
-              logSuccess("copy_trade", "pending_buy_queued", `Queued ${swap.toTokenSymbol} buy from ${sourceWallet?.label || 'unknown'}`, {
-                tokenMint: swap.toToken,
-                tokenSymbol: swap.toTokenSymbol,
-                walletLabel: sourceWallet?.label,
-                walletAddress: swapWalletAddress,
-              }, userId).catch(() => {});
+              logCopyTradeDecision("queued", baseLogDetails).catch(() => {});
             } else {
-              console.log(`[CopyTrade] SKIPPED: addPendingBuy returned null (check dedup/balance/filters)`);
-              logWarn("copy_trade", "pending_buy_skipped", `Skipped ${swap.toTokenSymbol} - dedup/balance/filter`, {
-                tokenMint: swap.toToken,
-                tokenSymbol: swap.toTokenSymbol,
-                walletLabel: sourceWallet?.label,
-              }, userId).catch(() => {});
+              console.log(`[CopyTrade] SKIPPED: addPendingBuy returned null (check trade_logs for specific reason)`);
+              // addPendingBuy logs the specific skip reason (dedup, score, balance, etc.)
             }
-        } else if (isBuy && !walletCopyEnabled) {
-          console.log(`[CopyTrade] SKIPPED: Wallet ${sourceWallet?.label || swapWalletAddress.slice(0,8)} has copyTradeEnabled=false`);
-        } else if (!isBuy) {
-          console.log(`[CopyTrade] SKIPPED: Transaction is a SELL, not a BUY`);
         }
         
         // Get trade config for other settings (budget limits, timing, etc.)
@@ -1871,11 +1894,13 @@ export async function registerRoutes(
       if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
 
       const { queryTradeLogs } = await import("./system-logger");
-      const { userId, status, limit, hoursAgo } = req.query;
+      const { userId, signalWalletId, status, action, limit, hoursAgo } = req.query;
       
       const logs = await queryTradeLogs({
         userId: userId ? parseInt(userId as string) : undefined,
+        signalWalletId: signalWalletId ? parseInt(signalWalletId as string) : undefined,
         status: status as string,
+        action: action as string,
         limit: limit ? parseInt(limit as string) : 50,
         hoursAgo: hoursAgo ? parseInt(hoursAgo as string) : undefined,
       });

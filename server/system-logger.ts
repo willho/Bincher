@@ -246,6 +246,101 @@ export async function logTrade(
   }
 }
 
+// Log copy trade decisions with detailed context for debugging
+export type CopyTradeDecision = 
+  | "queued"           // Successfully queued for execution
+  | "skipped_disabled" // copyTradeEnabled is false
+  | "skipped_sell"     // Transaction was a sell, not a buy
+  | "skipped_stablecoin" // Stablecoin-to-stablecoin swap
+  | "skipped_blacklist"  // Token is blacklisted
+  | "skipped_holding"    // Already holding from this signal (dedup)
+  | "skipped_ever_held"  // Ever held this token before (dedup)
+  | "skipped_pending"    // Already have pending buy (dedup)
+  | "skipped_first_only" // First buy only and not first buy
+  | "skipped_cross_signal" // Cross-signal prevention
+  | "skipped_daily_limit"  // Daily buy limit reached
+  | "skipped_weekly_limit" // Weekly buy limit reached
+  | "skipped_price_protection" // Price moved too much
+  | "skipped_score"      // AI score below threshold
+  | "skipped_min_trade"  // Trade below minimum USD
+  | "skipped_budget"     // Budget exceeded
+  | "error";             // Error during processing
+
+export async function logCopyTradeDecision(
+  decision: CopyTradeDecision,
+  details: {
+    userId: number;
+    signalWalletId: number;
+    signalWalletLabel: string;
+    tokenMint: string;
+    tokenSymbol?: string;
+    swapType: "buy" | "sell";
+    signalAmountSol?: number;
+    signalAmountUsd?: number;
+    copySettings: {
+      copyTradeEnabled: boolean;
+      copyMirrorBuys: boolean | null;
+      copyMirrorSells: boolean | null;
+      copyBuyType?: string;
+      copyBuyAmount?: number;
+      dedupSkipIfHolding?: boolean;
+      dedupSkipIfEverHeld?: boolean;
+      dedupSkipIfPending?: boolean;
+      dedupFirstBuyOnly?: boolean;
+      dedupCrossSignalPrevention?: boolean;
+    };
+    checks?: {
+      isStablecoinSwap?: boolean;
+      isBlacklisted?: boolean;
+      alreadyHolding?: boolean;
+      everHeld?: boolean;
+      hasPendingBuy?: boolean;
+      isFirstBuy?: boolean;
+      crossSignalBlocked?: boolean;
+      dailyBuysCount?: number;
+      weeklyBuysCount?: number;
+      priceChangePercent?: number;
+      aiScore?: number;
+      tradeValueUsd?: number;
+    };
+    errorMessage?: string;
+  }
+): Promise<void> {
+  try {
+    // Log to trade_logs with comprehensive context
+    const tradeLogEntry: InsertTradeLog = {
+      userId: details.userId,
+      signalWalletId: details.signalWalletId,
+      tokenMint: details.tokenMint,
+      tokenSymbol: details.tokenSymbol || null,
+      action: details.swapType === "buy" ? "buy" : "sell",
+      status: decision === "queued" ? "queued" : "skipped",
+      amountSol: details.signalAmountSol || null,
+      amountUsd: details.signalAmountUsd || null,
+      priceAtExecution: null,
+      txSignature: null,
+      failureReason: decision !== "queued" ? decision : null,
+      latencyMs: null,
+      context: {
+        decision,
+        signalWalletLabel: details.signalWalletLabel,
+        copySettings: details.copySettings,
+        checks: details.checks,
+        errorMessage: details.errorMessage,
+        timestamp: new Date().toISOString(),
+      },
+      createdAt: Date.now(),
+    };
+    await db.insert(tradeLogs).values(tradeLogEntry);
+    
+    // Also log to console for real-time debugging
+    const prefix = decision === "queued" ? "[OK]" : "[SKIP]";
+    console.log(`[CopyTrade] ${prefix} ${decision.toUpperCase()} | ${details.signalWalletLabel} | ${details.tokenSymbol || details.tokenMint.slice(0,8)} | ${details.swapType}`);
+  } catch (err) {
+    console.error("[CopyTradeLogger] Failed to write decision log:", err);
+  }
+}
+
 // Log errors to dedicated error_logs table
 export async function logErrorToTable(
   service: string,
@@ -579,18 +674,20 @@ export async function queryWebhookLogs(options: { status?: string; limit?: numbe
   });
 }
 
-export async function queryTradeLogs(options: { userId?: number; status?: string; limit?: number; hoursAgo?: number } = {}) {
-  const { userId, status, limit = 50, hoursAgo } = options;
-  const logs = await db.select().from(tradeLogs).orderBy(desc(tradeLogs.createdAt)).limit(limit);
+export async function queryTradeLogs(options: { userId?: number; signalWalletId?: number; status?: string; action?: string; limit?: number; hoursAgo?: number } = {}) {
+  const { userId, signalWalletId, status, action, limit = 50, hoursAgo } = options;
+  const logs = await db.select().from(tradeLogs).orderBy(desc(tradeLogs.createdAt)).limit(limit * 2); // Get more and filter
   return logs.filter(log => {
     if (userId && log.userId !== userId) return false;
+    if (signalWalletId && log.signalWalletId !== signalWalletId) return false;
     if (status && log.status !== status) return false;
+    if (action && log.action !== action) return false;
     if (hoursAgo) {
       const cutoff = Date.now() - hoursAgo * 60 * 60 * 1000;
       if (log.createdAt < cutoff) return false;
     }
     return true;
-  });
+  }).slice(0, limit);
 }
 
 export async function queryErrorLogs(options: { service?: string; resolved?: boolean; limit?: number; hoursAgo?: number } = {}) {

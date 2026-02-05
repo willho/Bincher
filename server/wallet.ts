@@ -6,6 +6,7 @@ import { eq, and, or } from "drizzle-orm";
 import * as crypto from "crypto";
 import { fetchTopHolders } from "./helius";
 import { createSnapshot, getSnapshotByToken } from "./ai";
+import { logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
 
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
   console.error("CRITICAL: SESSION_SECRET must be set and at least 32 characters for secure key encryption");
@@ -381,6 +382,35 @@ export async function addPendingBuy(
   const signalWalletId = sourceWalletData?.signalWalletId;
   const sourceAddress = sourceWalletData?.walletAddress;
   
+  // Helper to log skip decisions with full context
+  const logSkip = (decision: CopyTradeDecision, checks?: Record<string, unknown>) => {
+    if (!signalWalletId) return; // Only log for copy trades from signal wallets
+    logCopyTradeDecision(decision, {
+      userId,
+      signalWalletId,
+      signalWalletLabel: sourceWalletData?.walletLabel || sourceAddress?.slice(0,8) || "unknown",
+      tokenMint,
+      tokenSymbol,
+      swapType: "buy",
+      signalAmountUsd: sourceTradeUsd,
+      copySettings: {
+        copyTradeEnabled: true,
+        copyMirrorBuys: null,
+        copyMirrorSells: null,
+        copyBuyType: walletCopyConfig?.copyBuyType,
+        copyBuyAmount: walletCopyConfig?.copyBuyAmount,
+        dedupSkipIfHolding: dedupSkipHolding,
+        dedupSkipIfEverHeld: dedupSkipEverHeld,
+        dedupSkipIfPending: dedupSkipPending,
+      },
+      checks: {
+        aiScore: tokenAiScore,
+        tradeValueUsd: sourceTradeUsd,
+        ...checks,
+      },
+    }).catch(() => {});
+  };
+  
   // Check if already holding from THIS source
   if (dedupSkipHolding) {
     const holdingConditions = [
@@ -398,6 +428,7 @@ export async function addPendingBuy(
     const existingHolding = await db.select({ id: holdings.id }).from(holdings).where(and(...holdingConditions)).limit(1);
     if (existingHolding.length > 0) {
       console.log(`Token ${tokenSymbol} already held from same source (signalWalletId: ${signalWalletId}), skipping`);
+      logSkip("skipped_holding", { alreadyHolding: true });
       return null;
     }
   }
@@ -418,6 +449,7 @@ export async function addPendingBuy(
     const existingPending = await db.select({ id: pendingBuys.id }).from(pendingBuys).where(and(...pendingConditions)).limit(1);
     if (existingPending.length > 0) {
       console.log(`Token ${tokenSymbol} already pending from same source (signalWalletId: ${signalWalletId}), skipping`);
+      logSkip("skipped_pending", { hasPendingBuy: true });
       return null;
     }
   }
@@ -437,6 +469,7 @@ export async function addPendingBuy(
     const everHeld = await db.select({ id: holdings.id }).from(holdings).where(and(...everHeldConditions)).limit(1);
     if (everHeld.length > 0) {
       console.log(`Token ${tokenSymbol} was previously held from same source (signalWalletId: ${signalWalletId}), skipping`);
+      logSkip("skipped_ever_held", { everHeld: true });
       return null;
     }
   }
@@ -445,6 +478,7 @@ export async function addPendingBuy(
   const scoreThreshold = walletCopyConfig?.copyScoreThreshold;
   if (scoreThreshold && tokenAiScore !== undefined && tokenAiScore < scoreThreshold) {
     console.log(`Token ${tokenSymbol} AI score ${tokenAiScore} below threshold ${scoreThreshold}, skipping`);
+    logSkip("skipped_score", { aiScore: tokenAiScore, threshold: scoreThreshold });
     return null;
   }
   
@@ -452,12 +486,14 @@ export async function addPendingBuy(
   const minTradeUsd = walletCopyConfig?.copyMinTradeUsd;
   if (minTradeUsd && sourceTradeUsd !== undefined && sourceTradeUsd < minTradeUsd) {
     console.log(`Source trade $${sourceTradeUsd.toFixed(2)} below minimum $${minTradeUsd}, skipping`);
+    logSkip("skipped_min_trade", { tradeValueUsd: sourceTradeUsd, minRequired: minTradeUsd });
     return null;
   }
   
   const balance = await getHotWalletBalance(userId);
   if (balance <= 0) {
     console.log(`User ${userId} has no SOL balance, skipping pending buy`);
+    logSkip("skipped_budget", { balance: 0 });
     return null;
   }
   
@@ -465,6 +501,7 @@ export async function addPendingBuy(
   const minBalance = walletCopyConfig?.copyMinBalance;
   if (minBalance && balance < minBalance) {
     console.log(`User ${userId} balance ${balance.toFixed(4)} SOL below minimum ${minBalance}, skipping`);
+    logSkip("skipped_budget", { balance, minRequired: minBalance });
     return null;
   }
   
