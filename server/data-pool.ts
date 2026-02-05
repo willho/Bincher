@@ -1174,3 +1174,264 @@ export function bumpTokensBatch(tokenMints: string[], level: PriorityLevel): voi
     bumpTokenPriority(mint, level);
   }
 }
+
+// =====================
+// BATCHED DEXSCREENER REFRESH SYSTEM
+// Targets 80% of daily DexScreener budget (345,600 calls/day)
+// Uses batching (up to 30 tokens per call) for efficiency
+// =====================
+
+const DEXSCREENER_DAILY_BUDGET = 432000; // ~300/min
+const TARGET_USAGE_PERCENT = 0.80;
+const TARGET_DAILY_CALLS = Math.floor(DEXSCREENER_DAILY_BUDGET * TARGET_USAGE_PERCENT);
+const MAX_BATCH_SIZE = 30;
+const MIN_REFRESH_INTERVAL_MS = 1000; // Minimum 1 second between batches
+const MAX_REFRESH_INTERVAL_MS = 60000; // Maximum 1 minute between batches
+
+interface BatchedRefreshState {
+  isRunning: boolean;
+  lastRunAt: number;
+  currentIntervalMs: number;
+  tokensRefreshedToday: number;
+  callsMadeToday: number;
+  lastDayReset: string;
+  intervalHandle: NodeJS.Timeout | null;
+}
+
+const batchRefreshState: BatchedRefreshState = {
+  isRunning: false,
+  lastRunAt: 0,
+  currentIntervalMs: 5000, // Start with 5 second interval
+  tokensRefreshedToday: 0,
+  callsMadeToday: 0,
+  lastDayReset: new Date().toISOString().split('T')[0],
+  intervalHandle: null,
+};
+
+export interface TokenPriceData {
+  tokenMint: string;
+  tokenSymbol?: string;
+  tokenName?: string;
+  priceUsd?: number;
+  marketCap?: number;
+  fdv?: number;
+  liquidity?: number;
+  volume24h?: number;
+  priceChange24h?: number;
+  pairAddress?: string;
+  dexId?: string;
+}
+
+export async function batchFetchFromDexScreener(tokenMints: string[]): Promise<Map<string, TokenPriceData>> {
+  const results = new Map<string, TokenPriceData>();
+  
+  if (tokenMints.length === 0) return results;
+  
+  // DexScreener supports comma-separated token addresses
+  const batchedMints = tokenMints.slice(0, MAX_BATCH_SIZE).join(',');
+  
+  try {
+    const { shouldAllowApiCall, trackApiCall } = await import("./api-budget");
+    
+    const budgetCheck = await shouldAllowApiCall("dexscreener");
+    if (!budgetCheck.allowed) {
+      console.warn(`[DexScreener Batch] API blocked: ${budgetCheck.reason}`);
+      return results;
+    }
+    
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${batchedMints}`);
+    
+    // Track the API call (1 call for the batch)
+    await trackApiCall("dexscreener", "batchTokens", 1);
+    batchRefreshState.callsMadeToday++;
+    
+    if (!response.ok) {
+      console.error(`[DexScreener Batch] API error: ${response.status}`);
+      return results;
+    }
+    
+    const data = await response.json();
+    if (!data.pairs || data.pairs.length === 0) {
+      return results;
+    }
+    
+    // Group pairs by base token mint
+    const pairsByMint = new Map<string, any[]>();
+    for (const pair of data.pairs) {
+      const mint = pair.baseToken?.address;
+      if (!mint) continue;
+      
+      if (!pairsByMint.has(mint)) {
+        pairsByMint.set(mint, []);
+      }
+      pairsByMint.get(mint)!.push(pair);
+    }
+    
+    // Select best pair for each token (highest liquidity)
+    const pairEntries = Array.from(pairsByMint.entries());
+    for (const [mint, pairs] of pairEntries) {
+      const bestPair = pairs.reduce((best: any, current: any) => {
+        const bestLiq = best.liquidity?.usd || 0;
+        const currLiq = current.liquidity?.usd || 0;
+        return currLiq > bestLiq ? current : best;
+      });
+      
+      results.set(mint, {
+        tokenMint: mint,
+        tokenSymbol: bestPair.baseToken?.symbol,
+        tokenName: bestPair.baseToken?.name,
+        priceUsd: bestPair.priceUsd ? parseFloat(bestPair.priceUsd) : undefined,
+        marketCap: bestPair.marketCap,
+        fdv: bestPair.fdv,
+        liquidity: bestPair.liquidity?.usd,
+        volume24h: bestPair.volume?.h24,
+        priceChange24h: bestPair.priceChange?.h24,
+        pairAddress: bestPair.pairAddress,
+        dexId: bestPair.dexId,
+      });
+      
+      batchRefreshState.tokensRefreshedToday++;
+    }
+    
+    return results;
+  } catch (error) {
+    console.error("[DexScreener Batch] Fetch error:", error);
+    return results;
+  }
+}
+
+export async function refreshTokenBatch(): Promise<{ tokensRefreshed: number; callsMade: number }> {
+  // Reset counters if new day
+  const today = new Date().toISOString().split('T')[0];
+  if (batchRefreshState.lastDayReset !== today) {
+    batchRefreshState.tokensRefreshedToday = 0;
+    batchRefreshState.callsMadeToday = 0;
+    batchRefreshState.lastDayReset = today;
+  }
+  
+  // Get tokens that need refreshing (stale first, then by priority)
+  const staleTokens = await getStaleTokensForRefresh(MAX_BATCH_SIZE * 2);
+  const highPriorityTokens = getHighPriorityTokens();
+  
+  // Combine and dedupe, prioritizing high-priority tokens
+  const combinedTokens = [...highPriorityTokens, ...staleTokens];
+  const tokensToRefresh = Array.from(new Set(combinedTokens)).slice(0, MAX_BATCH_SIZE);
+  
+  if (tokensToRefresh.length === 0) {
+    return { tokensRefreshed: 0, callsMade: 0 };
+  }
+  
+  // Fetch batch
+  const results = await batchFetchFromDexScreener(tokensToRefresh);
+  
+  // Update tokenDataPool for each result
+  const resultEntries = Array.from(results.entries());
+  for (const [mint, data] of resultEntries) {
+    await upsertTokenData(mint, {
+      tokenSymbol: data.tokenSymbol,
+      tokenName: data.tokenName,
+      priceUsd: data.priceUsd,
+      marketCap: data.marketCap,
+      fdv: data.fdv,
+      liquidity: data.liquidity,
+      volume24h: data.volume24h,
+      priceChange24h: data.priceChange24h,
+      pairAddress: data.pairAddress,
+      dexId: data.dexId,
+    }, 'dexscreener_batch');
+  }
+  
+  batchRefreshState.lastRunAt = Date.now();
+  
+  return { tokensRefreshed: results.size, callsMade: 1 };
+}
+
+function calculateOptimalInterval(): number {
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msElapsedToday = now.getTime() - startOfDay.getTime();
+  const msRemainingToday = 86400000 - msElapsedToday;
+  
+  // Calculate how many calls we can still make today to hit 80% target
+  const callsRemaining = TARGET_DAILY_CALLS - batchRefreshState.callsMadeToday;
+  
+  if (callsRemaining <= 0) {
+    // Already hit target, slow down significantly
+    return MAX_REFRESH_INTERVAL_MS;
+  }
+  
+  // Calculate interval to spread remaining calls evenly
+  const intervalMs = Math.floor(msRemainingToday / callsRemaining);
+  
+  // Clamp to reasonable bounds
+  return Math.max(MIN_REFRESH_INTERVAL_MS, Math.min(intervalMs, MAX_REFRESH_INTERVAL_MS));
+}
+
+async function runBatchRefreshCycle(): Promise<void> {
+  if (batchRefreshState.isRunning) return;
+  
+  batchRefreshState.isRunning = true;
+  
+  try {
+    const result = await refreshTokenBatch();
+    
+    if (result.tokensRefreshed > 0) {
+      console.log(`[DexScreener Batch] Refreshed ${result.tokensRefreshed} tokens (${batchRefreshState.callsMadeToday}/${TARGET_DAILY_CALLS} daily calls)`);
+    }
+    
+    // Adjust interval dynamically
+    batchRefreshState.currentIntervalMs = calculateOptimalInterval();
+  } catch (error) {
+    console.error("[DexScreener Batch] Cycle error:", error);
+  } finally {
+    batchRefreshState.isRunning = false;
+  }
+}
+
+export function startBatchedDexScreenerRefresh(): void {
+  if (batchRefreshState.intervalHandle) {
+    console.log("[DexScreener Batch] Already running");
+    return;
+  }
+  
+  console.log(`[DexScreener Batch] Starting with ${batchRefreshState.currentIntervalMs}ms interval, targeting ${TARGET_DAILY_CALLS} calls/day`);
+  
+  // Run immediately
+  runBatchRefreshCycle();
+  
+  // Set up dynamic interval
+  const dynamicInterval = async () => {
+    await runBatchRefreshCycle();
+    
+    // Schedule next run with updated interval
+    batchRefreshState.intervalHandle = setTimeout(dynamicInterval, batchRefreshState.currentIntervalMs);
+  };
+  
+  batchRefreshState.intervalHandle = setTimeout(dynamicInterval, batchRefreshState.currentIntervalMs);
+}
+
+export function stopBatchedDexScreenerRefresh(): void {
+  if (batchRefreshState.intervalHandle) {
+    clearTimeout(batchRefreshState.intervalHandle);
+    batchRefreshState.intervalHandle = null;
+    console.log("[DexScreener Batch] Stopped");
+  }
+}
+
+export function getBatchRefreshStats(): {
+  isRunning: boolean;
+  currentIntervalMs: number;
+  tokensRefreshedToday: number;
+  callsMadeToday: number;
+  targetDailyCalls: number;
+  usagePercent: number;
+} {
+  return {
+    isRunning: batchRefreshState.intervalHandle !== null,
+    currentIntervalMs: batchRefreshState.currentIntervalMs,
+    tokensRefreshedToday: batchRefreshState.tokensRefreshedToday,
+    callsMadeToday: batchRefreshState.callsMadeToday,
+    targetDailyCalls: TARGET_DAILY_CALLS,
+    usagePercent: Math.round((batchRefreshState.callsMadeToday / TARGET_DAILY_CALLS) * 100 * 10) / 10,
+  };
+}

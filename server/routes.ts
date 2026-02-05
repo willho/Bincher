@@ -822,6 +822,44 @@ export async function registerRoutes(
 
         // Wrap all post-swap processing in try/catch to capture errors
         try {
+          // Store swap-derived price in tokenDataPool (primary price source)
+          const isBuy = isBaseCurrency(swap.fromToken);
+          const swapTokenMint = isBuy ? swap.toToken : swap.fromToken;
+          const swapTokenSymbol = isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol;
+          const baseAmount = isBuy ? swap.fromAmount : swap.toAmount; // SOL/USDC amount
+          const tokenAmount = isBuy ? swap.toAmount : swap.fromAmount;
+          
+          if (tokenAmount && tokenAmount > 0 && baseAmount && baseAmount > 0 && solPrice) {
+            const pricePerTokenSol = baseAmount / tokenAmount;
+            const pricePerTokenUsd = pricePerTokenSol * solPrice;
+            
+            // Store in tokenDataPool as primary price source
+            const { upsertTokenData, getTokenData } = await import("./data-pool");
+            
+            // Check for price discrepancy against cached DexScreener price (>10% difference)
+            const cachedData = await getTokenData(swapTokenMint);
+            if (cachedData?.priceUsd && cachedData.priceSource === 'dexscreener_batch') {
+              const discrepancyPercent = Math.abs((pricePerTokenUsd - cachedData.priceUsd) / cachedData.priceUsd) * 100;
+              if (discrepancyPercent > 10) {
+                console.error(`[Price Discrepancy] ${swapTokenSymbol}: Swap price $${pricePerTokenUsd.toFixed(10)} differs from DexScreener $${cachedData.priceUsd.toFixed(10)} by ${discrepancyPercent.toFixed(1)}%`);
+                logError("price_monitor", "discrepancy", `${swapTokenSymbol} price discrepancy: ${discrepancyPercent.toFixed(1)}%`, {
+                  tokenMint: swapTokenMint,
+                  swapPriceUsd: pricePerTokenUsd,
+                  dexscreenerPriceUsd: cachedData.priceUsd,
+                  discrepancyPercent,
+                }).catch(() => {});
+              }
+            }
+            
+            await upsertTokenData(swapTokenMint, {
+              tokenSymbol: swapTokenSymbol || undefined,
+              tokenName: swap.toTokenMetadata?.name || undefined,
+              priceUsd: pricePerTokenUsd,
+            }, 'swap');
+            
+            console.log(`[Swap Price] ${swapTokenSymbol}: $${pricePerTokenUsd.toFixed(10)} (${pricePerTokenSol.toFixed(10)} SOL)`);
+          }
+
           // Log that we're starting post-swap processing (fail-safe)
           logInfo("webhook", "post_swap_start", `Processing swap ${savedSwap.id} for user ${userId}`, {
             swapId: savedSwap.id,
@@ -859,7 +897,7 @@ export async function registerRoutes(
         // Whale detection: Check if the swapper is in top 100 holders of the token
         // For BUYs (SOL/USDC -> Token), check the toToken; for SELLs (Token -> SOL/USDC), check the fromToken
         // Use mint-based detection for robustness (doesn't depend on symbol mapping)
-        const isBuy = isBaseCurrency(swap.fromToken);
+        // Note: isBuy is already defined above for swap price persistence
         const tokenForWhaleCheck = isBuy ? swap.toToken : swap.fromToken;
         let whaleCheck = isWalletInTop100(tokenForWhaleCheck, swapWalletAddress);
         
@@ -4903,7 +4941,7 @@ export async function registerRoutes(
       const { getHoldersCached } = await import("./price-aggregator");
       
       const holderCache = await getHoldersCached(tokenMint, false);
-      if (!holderCache || holderCache.holders.length === 0) {
+      if (!holderCache || !holderCache.holders || holderCache.holders.length === 0) {
         return res.json({
           holders: [],
           totalCount: 0,
