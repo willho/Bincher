@@ -14,6 +14,13 @@ import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 import { SignalWalletActivityChart } from "@/components/portfolio-charts";
 
+interface AiRecommendation {
+  category: "strength" | "weakness" | "copy_setting" | "risk_warning" | "optimization";
+  title: string;
+  description: string;
+  priority: "high" | "medium" | "low";
+}
+
 interface StrategyAnalysis {
   strategyType: string;
   tradingStyle: string;
@@ -34,6 +41,7 @@ interface StrategyAnalysis {
   sampleSize: number;
   insights: string[];
   lastUpdatedAt?: number;
+  aiRecommendations?: AiRecommendation[];
 }
 
 interface Trade {
@@ -245,7 +253,16 @@ export default function SignalWalletPage() {
       if (!response.ok) return null;
       const data = await response.json();
       if (data.sampleSize && data.sampleSize > 0) {
-        return { analysis: data as StrategyAnalysis };
+        // Parse aiRecommendations if stored as JSON string
+        let aiRecommendations = data.aiRecommendations;
+        if (typeof aiRecommendations === 'string') {
+          try {
+            aiRecommendations = JSON.parse(aiRecommendations);
+          } catch {
+            aiRecommendations = undefined;
+          }
+        }
+        return { analysis: { ...data, aiRecommendations } as StrategyAnalysis };
       }
       return null;
     },
@@ -840,6 +857,53 @@ export default function SignalWalletPage() {
                         </li>
                       ))}
                     </ul>
+                  </div>
+                )}
+                
+                {strategyData.analysis.aiRecommendations && strategyData.analysis.aiRecommendations.length > 0 && (
+                  <div className="p-4 rounded-md border border-accent/30 bg-accent/5 space-y-3">
+                    <h4 className="text-sm font-medium flex items-center gap-2">
+                      <Brain className="h-4 w-4 text-accent-foreground" />
+                      Miss Pincher's Recommendations
+                    </h4>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {strategyData.analysis.aiRecommendations.map((rec, idx) => {
+                        const categoryIcons: Record<string, typeof Trophy> = {
+                          strength: Trophy,
+                          weakness: AlertTriangle,
+                          copy_setting: Settings,
+                          risk_warning: Shield,
+                          optimization: TrendingUp,
+                        };
+                        const categoryColors: Record<string, string> = {
+                          strength: "text-green-500",
+                          weakness: "text-orange-500",
+                          copy_setting: "text-blue-500",
+                          risk_warning: "text-red-500",
+                          optimization: "text-purple-500",
+                        };
+                        const priorityBadgeVariant = rec.priority === "high" ? "destructive" : rec.priority === "medium" ? "default" : "secondary";
+                        const Icon = categoryIcons[rec.category] || Brain;
+                        const iconColor = categoryColors[rec.category] || "text-muted-foreground";
+                        
+                        return (
+                          <div key={idx} className="p-3 rounded-md border bg-card">
+                            <div className="flex items-start gap-2">
+                              <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${iconColor}`} />
+                              <div className="space-y-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-medium text-sm">{rec.title}</span>
+                                  <Badge variant={priorityBadgeVariant} className="text-xs capitalize">
+                                    {rec.priority}
+                                  </Badge>
+                                </div>
+                                <p className="text-xs text-muted-foreground">{rec.description}</p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

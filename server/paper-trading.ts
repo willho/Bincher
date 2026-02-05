@@ -6,6 +6,7 @@ import {
 } from "@shared/schema";
 import { eq, and, desc, sql, gte, lte, count } from "drizzle-orm";
 import { fetchTokenWithFallback } from "./data-pool";
+import OpenAI from "openai";
 
 // =====================
 // PAPER POSITION MANAGEMENT
@@ -467,6 +468,13 @@ export async function getPaperTradingStats(userId: number): Promise<{
 
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
+export interface AiRecommendation {
+  category: "strength" | "weakness" | "copy_setting" | "risk_warning" | "optimization";
+  title: string;
+  description: string;
+  priority: "high" | "medium" | "low";
+}
+
 export interface StrategyAnalysis {
   strategyType: string;
   tradingStyle: string;
@@ -486,6 +494,70 @@ export interface StrategyAnalysis {
   confidenceScore: number;
   sampleSize: number;
   insights: string[];
+  aiRecommendations?: AiRecommendation[];
+}
+
+export async function generateAiRecommendations(
+  walletAddress: string,
+  analysis: Omit<StrategyAnalysis, 'aiRecommendations'>
+): Promise<AiRecommendation[]> {
+  try {
+    const openai = new OpenAI();
+    
+    const prompt = `You are Miss Pincher, a friendly Solana trading AI assistant. Analyze this signal wallet's trading strategy and provide actionable recommendations.
+
+WALLET: ${walletAddress.slice(0, 8)}...${walletAddress.slice(-4)}
+
+TRADING METRICS:
+- Strategy Type: ${analysis.strategyType}
+- Trading Style: ${analysis.tradingStyle}
+- Win Rate: ${(analysis.winRate * 100).toFixed(1)}%
+- Profit Factor: ${analysis.profitFactor.toFixed(2)}x
+- Avg Hold Duration: ${Math.round(analysis.avgHoldDuration / 60)} minutes
+- Avg Position Size: ${analysis.avgPositionSize.toFixed(2)} SOL
+- Take Profit Target: ${((analysis.takeProfitMultiplier - 1) * 100).toFixed(0)}%
+- Stop Loss: ${(analysis.stopLossPercent * 100).toFixed(0)}%
+- Risk Level: ${analysis.riskLevel}/10
+- Sample Size: ${analysis.sampleSize} trades
+- Confidence Score: ${(analysis.confidenceScore * 100).toFixed(0)}%
+
+Provide 4-6 specific recommendations in JSON format. Each recommendation should be actionable and help the user maximize value from copy trading this wallet.
+
+Categories to use:
+- "strength": What this wallet does well
+- "weakness": Areas of concern or caution
+- "copy_setting": Specific copy trade settings to use (buy amounts, thresholds)
+- "risk_warning": Important risks to be aware of
+- "optimization": How to best take advantage of this wallet's patterns
+
+Priority levels: "high", "medium", "low"
+
+Respond ONLY with a JSON array of recommendations:
+[{"category": "...", "title": "...", "description": "...", "priority": "..."}]`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 800,
+      temperature: 0.7,
+    });
+    
+    const content = response.choices[0]?.message?.content?.trim() || "[]";
+    
+    // Extract JSON array from response
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      console.log("[AI Recommendations] No valid JSON array in response");
+      return [];
+    }
+    
+    const recommendations = JSON.parse(jsonMatch[0]) as AiRecommendation[];
+    console.log(`[AI Recommendations] Generated ${recommendations.length} recommendations`);
+    return recommendations;
+  } catch (error: any) {
+    console.error("[AI Recommendations] Error generating:", error.message);
+    return [];
+  }
 }
 
 export async function analyzeWalletStrategy(
@@ -784,6 +856,7 @@ export async function saveWalletStrategy(
           maxConcurrentPositions: analysis.maxConcurrentPositions,
           confidenceScore: analysis.confidenceScore,
           sampleSize: analysis.sampleSize,
+          aiRecommendations: analysis.aiRecommendations ? JSON.stringify(analysis.aiRecommendations) : null,
           lastUpdatedAt: now,
           version: sql`${walletStrategies.version} + 1`,
         })
@@ -819,6 +892,7 @@ export async function saveWalletStrategy(
       maxConcurrentPositions: analysis.maxConcurrentPositions,
       confidenceScore: analysis.confidenceScore,
       sampleSize: analysis.sampleSize,
+      aiRecommendations: analysis.aiRecommendations ? JSON.stringify(analysis.aiRecommendations) : null,
       lastUpdatedAt: now,
       createdAt: now,
     }).returning();

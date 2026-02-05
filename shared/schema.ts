@@ -2281,6 +2281,9 @@ export const walletStrategies = pgTable("wallet_strategies", {
   lastUpdatedAt: integer("last_updated_at"),
   version: integer("version").default(1),
   createdAt: integer("created_at").notNull(),
+  
+  // AI-generated recommendations from Miss Pincher
+  aiRecommendations: text("ai_recommendations"),
 });
 
 export const insertWalletStrategiesSchema = createInsertSchema(walletStrategies).omit({ id: true });

@@ -6066,11 +6066,19 @@ export async function registerRoutes(
   app.post("/api/paper/strategies/:wallet/analyze", requireAuth, async (req: Request, res: Response) => {
     try {
       console.log(`[StrategyAnalyze] Starting analysis for wallet: ${req.params.wallet}, userId: ${req.userId!}`);
-      const { analyzeWalletStrategy, saveWalletStrategy } = await import("./paper-trading");
+      const { analyzeWalletStrategy, saveWalletStrategy, generateAiRecommendations } = await import("./paper-trading");
       
       console.log(`[StrategyAnalyze] Running analyzeWalletStrategy...`);
       const analysis = await analyzeWalletStrategy(req.params.wallet, req.userId!);
       console.log(`[StrategyAnalyze] Analysis complete, sampleSize: ${analysis.sampleSize}`);
+      
+      // Generate AI recommendations if we have enough data
+      if (analysis.sampleSize >= 5) {
+        console.log(`[StrategyAnalyze] Generating AI recommendations...`);
+        const recommendations = await generateAiRecommendations(req.params.wallet, analysis);
+        analysis.aiRecommendations = recommendations;
+        console.log(`[StrategyAnalyze] Generated ${recommendations.length} AI recommendations`);
+      }
       
       console.log(`[StrategyAnalyze] Saving strategy...`);
       const saved = await saveWalletStrategy(req.params.wallet, req.userId!, analysis);
