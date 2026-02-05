@@ -1994,6 +1994,45 @@ export async function registerRoutes(
     }
   });
 
+  // Admin: RPC provider stats
+  app.get("/api/admin/rpc-stats", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { getProviderStats, getCurrentProvider, resetProviderStats } = await import("./rpc-provider");
+      
+      const stats = getProviderStats();
+      const currentProvider = await getCurrentProvider();
+      const chainstackConfigured = !!process.env.CHAINSTACK_API_KEY;
+
+      res.json({
+        currentProvider,
+        chainstackConfigured,
+        providers: stats,
+      });
+    } catch (error) {
+      console.error("Error getting RPC stats:", error);
+      res.status(500).json({ error: "Failed to get RPC stats" });
+    }
+  });
+
+  // Admin: Reset RPC provider stats
+  app.post("/api/admin/rpc-stats/reset", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const user = await storage.getUserById(req.userId!);
+      if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
+
+      const { resetProviderStats } = await import("./rpc-provider");
+      resetProviderStats();
+
+      res.json({ success: true, message: "RPC stats reset" });
+    } catch (error) {
+      console.error("Error resetting RPC stats:", error);
+      res.status(500).json({ error: "Failed to reset RPC stats" });
+    }
+  });
+
   // Admin: Data pool status
   app.get("/api/admin/data-pool-status", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
