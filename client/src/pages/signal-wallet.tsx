@@ -33,6 +33,7 @@ interface StrategyAnalysis {
   confidenceScore: number;
   sampleSize: number;
   insights: string[];
+  lastUpdatedAt?: number;
 }
 
 interface Trade {
@@ -707,8 +708,13 @@ export default function SignalWalletPage() {
                       {strategyData.analysis.strategyType}
                     </Badge>
                   </div>
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
                     <span>Based on {strategyData.analysis.sampleSize} trades</span>
+                    {strategyData.analysis.lastUpdatedAt && (
+                      <span className="text-xs">
+                        (analyzed {formatRelativeTime(strategyData.analysis.lastUpdatedAt)})
+                      </span>
+                    )}
                     <Button 
                       variant="ghost" 
                       size="icon" 
