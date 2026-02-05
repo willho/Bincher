@@ -1,5 +1,6 @@
 import { Connection, PublicKey, ParsedTransactionWithMeta, GetProgramAccountsFilter } from "@solana/web3.js";
 import { getNetworkMode } from "./network-mode";
+import { recordRpcCall } from "./budget-manager";
 
 export type RpcProvider = "chainstack" | "quicknode" | "helius";
 
@@ -90,6 +91,7 @@ function recordSuccess(provider: RpcProvider, latencyMs: number): void {
     stats.errors = 0;
     stats.avgLatencyMs = (stats.avgLatencyMs * 0.9) + (latencyMs * 0.1);
   }
+  recordRpcCall(provider, 1);
 }
 
 function recordError(provider: RpcProvider): void {

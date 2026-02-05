@@ -2001,17 +2001,27 @@ export async function registerRoutes(
       if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
 
       const { getProviderStats, getCurrentProvider } = await import("./rpc-provider");
+      const { getRpcProviderUsage, getTotalRpcPoolCapacity, getProviderCapacities } = await import("./budget-manager");
       
       const stats = getProviderStats();
       const currentProvider = await getCurrentProvider();
       const chainstackConfigured = !!process.env.CHAINSTACK_API_KEY;
       const quicknodeConfigured = !!process.env.QUICKNODE_API_KEY;
+      
+      const budgetUsage = getRpcProviderUsage();
+      const totalCapacity = getTotalRpcPoolCapacity();
+      const providerCapacities = getProviderCapacities();
 
       res.json({
         currentProvider,
         chainstackConfigured,
         quicknodeConfigured,
         providers: stats,
+        budget: {
+          totalCapacity,
+          providerCapacities,
+          usage: budgetUsage,
+        },
       });
     } catch (error) {
       console.error("Error getting RPC stats:", error);

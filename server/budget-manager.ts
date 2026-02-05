@@ -12,7 +12,15 @@ import {
 } from "@shared/schema";
 
 const HELIUS_FREE_TIER_CREDITS = 1_000_000;
+const CHAINSTACK_FREE_TIER_CREDITS = 3_000_000;
+const TOTAL_RPC_POOL_CREDITS = HELIUS_FREE_TIER_CREDITS + CHAINSTACK_FREE_TIER_CREDITS;
 const MAX_SIGNAL_WALLETS_PER_KEY = 100;
+const DEFAULT_USER_BUDGET = HELIUS_FREE_TIER_CREDITS;
+
+const rpcProviderUsage: Map<string, { calls: number; creditsUsed: number; lastResetAt: number }> = new Map([
+  ["chainstack", { calls: 0, creditsUsed: 0, lastResetAt: Date.now() }],
+  ["helius", { calls: 0, creditsUsed: 0, lastResetAt: Date.now() }],
+]);
 
 export const REQUEST_PRIORITY: Record<string, number> = {
   COPY_TRADE: 100,
@@ -573,5 +581,41 @@ export async function getPoolSummary(): Promise<{
     discoveryUsed: pool.discoveryUsed ?? 0,
     contributorCount: pool.contributorCount ?? 0,
     borrowerCount: pool.borrowerCount ?? 0,
+  };
+}
+
+export function recordRpcCall(provider: string, credits: number = 1): void {
+  const usage = rpcProviderUsage.get(provider);
+  if (usage) {
+    usage.calls++;
+    usage.creditsUsed += credits;
+  }
+}
+
+export function getRpcProviderUsage(): Record<string, { calls: number; creditsUsed: number; lastResetAt: number }> {
+  const result: Record<string, { calls: number; creditsUsed: number; lastResetAt: number }> = {};
+  rpcProviderUsage.forEach((stats, provider) => {
+    result[provider] = { ...stats };
+  });
+  return result;
+}
+
+export function resetRpcProviderUsage(): void {
+  const now = Date.now();
+  rpcProviderUsage.forEach((stats) => {
+    stats.calls = 0;
+    stats.creditsUsed = 0;
+    stats.lastResetAt = now;
+  });
+}
+
+export function getTotalRpcPoolCapacity(): number {
+  return TOTAL_RPC_POOL_CREDITS;
+}
+
+export function getProviderCapacities(): Record<string, number> {
+  return {
+    chainstack: CHAINSTACK_FREE_TIER_CREDITS,
+    helius: HELIUS_FREE_TIER_CREDITS,
   };
 }
