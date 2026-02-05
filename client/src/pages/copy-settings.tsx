@@ -331,8 +331,8 @@ export default function CopySettingsPage() {
               </div>
             )}
           </div>
-          <div className="flex items-center justify-between p-3 rounded-lg border">
-            <div>
+          <div className="flex items-center justify-between gap-4 p-3 rounded-lg border">
+            <div className="min-w-0">
               <Label>Mirror Buys</Label>
               <p className="text-xs text-muted-foreground">Also copy when signal wallet buys more of a token you hold</p>
             </div>
@@ -340,10 +340,11 @@ export default function CopySettingsPage() {
               checked={wallet.copyMirrorBuys ?? wallet.copyAutoMirror ?? false}
               onCheckedChange={(v) => handleUpdate("copyMirrorBuys", v)}
               data-testid="switch-mirror-buys"
+              className="shrink-0"
             />
           </div>
-          <div className="flex items-center justify-between p-3 rounded-lg border">
-            <div>
+          <div className="flex items-center justify-between gap-4 p-3 rounded-lg border">
+            <div className="min-w-0">
               <Label>Mirror Sells</Label>
               <p className="text-xs text-muted-foreground">Also sell when signal wallet sells a token you hold</p>
             </div>
@@ -351,6 +352,7 @@ export default function CopySettingsPage() {
               checked={wallet.copyMirrorSells ?? wallet.copyAutoMirror ?? false}
               onCheckedChange={(v) => handleUpdate("copyMirrorSells", v)}
               data-testid="switch-mirror-sells"
+              className="shrink-0"
             />
           </div>
         </CardContent>
@@ -368,8 +370,8 @@ export default function CopySettingsPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="flex items-center justify-between p-3 rounded-lg border">
-            <div>
+          <div className="flex items-center justify-between gap-4 p-3 rounded-lg border">
+            <div className="min-w-0">
               <Label>Skip if Already Holding</Label>
               <p className="text-xs text-muted-foreground">Don't buy tokens you already own</p>
             </div>
@@ -377,10 +379,11 @@ export default function CopySettingsPage() {
               checked={wallet.dedupSkipIfHolding ?? true}
               onCheckedChange={(v) => handleUpdate("dedupSkipIfHolding", v)}
               data-testid="switch-skip-holding"
+              className="shrink-0"
             />
           </div>
-          <div className="flex items-center justify-between p-3 rounded-lg border">
-            <div>
+          <div className="flex items-center justify-between gap-4 p-3 rounded-lg border">
+            <div className="min-w-0">
               <Label>Skip if Ever Held</Label>
               <p className="text-xs text-muted-foreground">Don't re-buy tokens you've sold</p>
             </div>
@@ -388,10 +391,11 @@ export default function CopySettingsPage() {
               checked={wallet.dedupSkipIfEverHeld ?? false}
               onCheckedChange={(v) => handleUpdate("dedupSkipIfEverHeld", v)}
               data-testid="switch-skip-ever-held"
+              className="shrink-0"
             />
           </div>
-          <div className="flex items-center justify-between p-3 rounded-lg border">
-            <div>
+          <div className="flex items-center justify-between gap-4 p-3 rounded-lg border">
+            <div className="min-w-0">
               <Label>Skip if Pending</Label>
               <p className="text-xs text-muted-foreground">Don't buy if a buy is already in progress</p>
             </div>
@@ -399,6 +403,7 @@ export default function CopySettingsPage() {
               checked={wallet.dedupSkipIfPending ?? true}
               onCheckedChange={(v) => handleUpdate("dedupSkipIfPending", v)}
               data-testid="switch-skip-pending"
+              className="shrink-0"
             />
           </div>
         </CardContent>
