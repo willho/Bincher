@@ -4,8 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff } from "lucide-react";
-import { Link } from "wouter";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink } from "lucide-react";
+import { Link, useLocation } from "wouter";
 import { useState, useRef } from "react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -36,11 +36,36 @@ interface TokenTrade {
   source: string;
 }
 
+interface TopHolder {
+  rank: number;
+  address: string;
+  percent: number;
+  amount: number;
+  isTracked?: boolean;
+  signalId?: number | null;
+}
+
+interface TopHoldersData {
+  holders: TopHolder[];
+  totalCount: number;
+  lastFetchedAt: number | null;
+  top10Concentration: number;
+}
+
 export default function TokenPage() {
   const [, params] = useRoute("/trading/:token");
   const tokenMint = params?.token;
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
+  const [, navigate] = useLocation();
+
+  const handleWalletClick = (holder: TopHolder) => {
+    if (holder.isTracked && holder.signalId) {
+      navigate(`/signal/${holder.signalId}`);
+    } else {
+      window.open(`https://solscan.io/account/${holder.address}`, "_blank");
+    }
+  };
 
   const { data: snapshot, isLoading } = useQuery<TokenSnapshot>({
     queryKey: [`/api/snapshots/token/${tokenMint}`],
@@ -59,6 +84,11 @@ export default function TokenPage() {
 
   const { data: tradeHistory, isLoading: isLoadingTrades } = useQuery<TokenTrade[]>({
     queryKey: [`/api/token/${tokenMint}/trades`],
+    enabled: !!tokenMint,
+  });
+
+  const { data: topHolders, isLoading: isLoadingHolders } = useQuery<TopHoldersData>({
+    queryKey: [`/api/token/${tokenMint}/top-holders`],
     enabled: !!tokenMint,
   });
 
@@ -393,6 +423,85 @@ export default function TokenPage() {
               <Wallet className="h-8 w-8 mx-auto mb-2 opacity-50" />
               <p className="text-sm">No signal sources found</p>
               <p className="text-xs mt-1">This token wasn't copy-traded from a signal wallet</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card data-testid="card-top-holders">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5" />
+            Top Holders
+          </CardTitle>
+          <CardDescription className="flex items-center justify-between">
+            <span>Largest token holders from on-chain data</span>
+            {topHolders?.top10Concentration !== undefined && topHolders.top10Concentration > 0 && (
+              <Badge variant={topHolders.top10Concentration > 50 ? "destructive" : topHolders.top10Concentration > 30 ? "secondary" : "outline"}>
+                Top 10: {topHolders.top10Concentration.toFixed(1)}%
+              </Badge>
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoadingHolders ? (
+            <div className="space-y-2">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : topHolders && topHolders.holders.length > 0 ? (
+            <div className="space-y-2">
+              {topHolders.holders.map((holder) => (
+                <div 
+                  key={holder.address}
+                  onClick={() => handleWalletClick(holder)}
+                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover-elevate cursor-pointer"
+                  data-testid={`holder-${holder.rank}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`h-8 w-8 rounded-full flex items-center justify-center ${
+                      holder.rank <= 3 ? "bg-yellow-500/10" : holder.rank <= 10 ? "bg-primary/10" : "bg-muted"
+                    }`}>
+                      <span className={`text-sm font-bold ${
+                        holder.rank <= 3 ? "text-yellow-500" : holder.rank <= 10 ? "text-primary" : "text-muted-foreground"
+                      }`}>
+                        #{holder.rank}
+                      </span>
+                    </div>
+                    <div>
+                      <p className="font-mono text-sm flex items-center gap-1">
+                        {holder.address.slice(0, 6)}...{holder.address.slice(-4)}
+                        {holder.isTracked ? (
+                          <Wallet className="h-3 w-3 text-primary" />
+                        ) : (
+                          <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                        )}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {holder.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })} tokens
+                        {holder.isTracked && <span className="text-primary ml-1">(tracked)</span>}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <Badge variant={holder.percent > 10 ? "destructive" : holder.percent > 5 ? "secondary" : "outline"}>
+                      {holder.percent.toFixed(2)}%
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+              {topHolders.lastFetchedAt && (
+                <p className="text-xs text-muted-foreground text-center pt-2">
+                  Last updated: {formatTimeAgo(Math.floor(topHolders.lastFetchedAt / 1000))}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-4 text-muted-foreground">
+              <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No holder data available</p>
+              <p className="text-xs mt-1">Holder data may take time to cache</p>
             </div>
           )}
         </CardContent>

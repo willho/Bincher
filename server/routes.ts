@@ -4763,6 +4763,83 @@ export async function registerRoutes(
     }
   });
 
+  // Get top holders for a specific token
+  app.get("/api/token/:tokenMint/top-holders", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tokenMint = req.params.tokenMint as string;
+      const { getHoldersCached } = await import("./price-aggregator");
+      
+      const holderCache = await getHoldersCached(tokenMint, false);
+      if (!holderCache || holderCache.holders.length === 0) {
+        return res.json({
+          holders: [],
+          totalCount: 0,
+          lastFetchedAt: null,
+          top10Concentration: 0,
+        });
+      }
+
+      // Calculate top 10 concentration
+      const top10Concentration = holderCache.holders.slice(0, 10).reduce((sum, h) => sum + h.percent, 0);
+
+      // Get user's monitored wallets to check which holders are tracked
+      const userWallets = await db.select({
+        id: monitoredWallets.id,
+        address: monitoredWallets.address,
+      }).from(monitoredWallets).where(eq(monitoredWallets.userId, req.userId!));
+      
+      const walletMap = new Map(userWallets.map(w => [w.address.toLowerCase(), w.id]));
+
+      // Return top 20 holders with formatted data and tracking status
+      const holders = holderCache.holders.slice(0, 20).map((holder, index) => {
+        const signalId = walletMap.get(holder.address.toLowerCase());
+        return {
+          rank: index + 1,
+          address: holder.address,
+          percent: holder.percent,
+          amount: holder.amount,
+          isTracked: signalId !== undefined,
+          signalId: signalId ?? null,
+        };
+      });
+
+      res.json({
+        holders,
+        totalCount: holderCache.totalCount,
+        lastFetchedAt: holderCache.lastFetchedAt,
+        top10Concentration,
+      });
+    } catch (error) {
+      console.error("Error getting top holders:", error);
+      res.status(500).json({ error: "Failed to get top holders" });
+    }
+  });
+
+  // Lookup monitored wallet by address (read-only, no auto-creation)
+  app.get("/api/wallet-lookup/:address", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const address = req.params.address as string;
+      
+      // Try to find existing monitored wallet for this user
+      const wallet = await db.query.monitoredWallets.findFirst({
+        where: and(
+          eq(monitoredWallets.userId, req.userId!),
+          eq(monitoredWallets.address, address)
+        )
+      });
+
+      if (wallet) {
+        return res.json({ id: wallet.id, exists: true, label: wallet.label });
+      }
+
+      // Not found - return exists: false without creating
+      res.json({ id: null, exists: false, label: null });
+    } catch (error) {
+      console.error("Error looking up wallet:", error);
+      res.status(500).json({ error: "Failed to lookup wallet" });
+    }
+  });
+
   // Get trade history for a specific token
   app.get("/api/token/:tokenMint/trades", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
