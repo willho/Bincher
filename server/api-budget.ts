@@ -2,12 +2,13 @@ import { db } from "./db";
 import { apiUsage, apiBudgetConfig } from "@shared/schema";
 import { eq, and, gte, sql } from "drizzle-orm";
 
-export type ApiService = "helius" | "dexscreener" | "openai";
+export type ApiService = "helius" | "dexscreener" | "openai" | "geckoterminal";
 
 const DEFAULT_LIMITS: Record<ApiService, { monthly: number; daily: number }> = {
   helius: { monthly: 10000, daily: 500 },
   dexscreener: { monthly: 20000, daily: 1000 },
   openai: { monthly: 5000, daily: 250 },
+  geckoterminal: { monthly: 43200, daily: 1440 },
 };
 
 const usageCache: Map<string, { count: number; cachedAt: number }> = new Map();
@@ -194,7 +195,7 @@ export async function getBudgetStatus(service: ApiService): Promise<{
 }
 
 export async function getAllBudgetStatuses(): Promise<Array<ReturnType<typeof getBudgetStatus> extends Promise<infer T> ? T : never>> {
-  const services: ApiService[] = ["helius", "dexscreener", "openai"];
+  const services: ApiService[] = ["helius", "dexscreener", "openai", "geckoterminal"];
   return Promise.all(services.map(getBudgetStatus));
 }
 

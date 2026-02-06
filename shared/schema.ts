@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // Token metadata schema (from DexScreener)
@@ -2155,6 +2155,21 @@ export const tokenDataPool = pgTable("token_data_pool", {
   pumpfunGraduationTime: integer("pumpfun_graduation_time"),
   pumpfunAgeAtGraduation: integer("pumpfun_age_at_graduation"), // seconds from creation to graduation
   pumpfunBondingCurveProgress: real("pumpfun_bonding_curve_progress"), // 0-100%
+  
+  // Discovery ranking
+  boostRank: integer("boost_rank"), // DexScreener boost rank (null = not boosted)
+  boostUpdatedAt: integer("boost_updated_at"),
+  trendingRank: integer("trending_rank"), // GeckoTerminal trending rank (null = not trending)
+  trendingSource: text("trending_source"), // geckoterminal, dexscreener
+  trendingUpdatedAt: integer("trending_updated_at"),
+  
+  // Multi-timeframe price changes
+  priceChange7d: real("price_change_7d"),
+  priceChange14d: real("price_change_14d"),
+  priceChange30d: real("price_change_30d"),
+  
+  // Deployer tracking
+  deployerAddress: text("deployer_address"),
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
@@ -3338,3 +3353,272 @@ export const userTokenViews = pgTable("user_token_views", {
 export const insertUserTokenViewSchema = createInsertSchema(userTokenViews).omit({ id: true });
 export type UserTokenView = typeof userTokenViews.$inferSelect;
 export type InsertUserTokenView = z.infer<typeof insertUserTokenViewSchema>;
+
+// =====================
+// PHASE 1: DATA FOUNDATION
+// =====================
+
+// Price snapshots - daily snapshots with tiered retention
+export const priceSnapshots = pgTable("price_snapshots", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  
+  // Snapshot data
+  snapshotDate: text("snapshot_date").notNull(), // YYYY-MM-DD
+  snapshotType: text("snapshot_type").notNull().default("daily"), // daily, 3day, weekly, monthly, yearly
+  
+  // OHLC data
+  open: real("open").notNull(),
+  high: real("high").notNull(),
+  low: real("low").notNull(),
+  close: real("close").notNull(),
+  volume: real("volume"),
+  
+  // Time-of-day volume buckets (6 x 4hr blocks, preserved through compression)
+  volumeBuckets: jsonb("volume_buckets").$type<number[]>(), // [0-4h, 4-8h, 8-12h, 12-16h, 16-20h, 20-24h]
+  
+  // Market data at snapshot
+  marketCap: real("market_cap"),
+  liquidity: real("liquidity"),
+  holderCount: integer("holder_count"),
+  
+  // Metadata
+  dataPointCount: integer("data_point_count").default(1), // How many raw points compressed into this
+  createdAt: integer("created_at").notNull(),
+}, (table) => ({
+  mintDateUnique: uniqueIndex("price_snapshot_mint_date").on(table.tokenMint, table.snapshotDate, table.snapshotType),
+  mintTypeIdx: index("price_snapshot_mint_type").on(table.tokenMint, table.snapshotType),
+}));
+
+export const insertPriceSnapshotSchema = createInsertSchema(priceSnapshots).omit({ id: true });
+export type PriceSnapshot = typeof priceSnapshots.$inferSelect;
+export type InsertPriceSnapshot = z.infer<typeof insertPriceSnapshotSchema>;
+
+// Pre-computed wallet summaries
+export const walletSummaries = pgTable("wallet_summaries", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull().unique(),
+  
+  // Performance metrics
+  hitRate: real("hit_rate"), // Win percentage
+  avgHoldTimeMinutes: integer("avg_hold_time_minutes"),
+  avgReturnPercent: real("avg_return_percent"),
+  totalTrades: integer("total_trades").default(0),
+  winningTrades: integer("winning_trades").default(0),
+  losingTrades: integer("losing_trades").default(0),
+  
+  // Timing patterns
+  bestHourUtc: integer("best_hour_utc"), // 0-23, hour with best avg returns
+  bestDayOfWeek: integer("best_day_of_week"), // 0-6, day with best avg returns
+  timingPatterns: jsonb("timing_patterns").$type<{ hourlyReturns: number[]; dailyReturns: number[] }>(),
+  
+  // Sector preferences
+  sectorPreference: text("sector_preference"), // meme, defi, gaming, etc.
+  sectorBreakdown: jsonb("sector_breakdown").$type<Record<string, { trades: number; winRate: number }>>(),
+  
+  // Market cap preferences
+  avgEntryMarketCap: real("avg_entry_market_cap"),
+  marketCapSuccessRates: jsonb("market_cap_success_rates").$type<Record<string, { trades: number; winRate: number }>>(),
+  
+  // Buy-sell behavior
+  buySellRatio: real("buy_sell_ratio"), // buys/sells, >1 = accumulating
+  avgBuySize: real("avg_buy_size"), // in SOL
+  
+  // Trust scoring (for browser compute)
+  computeTrustScore: real("compute_trust_score").default(0.5),
+  computeTasksCompleted: integer("compute_tasks_completed").default(0),
+  computeTasksFailed: integer("compute_tasks_failed").default(0),
+  
+  // Timestamps
+  lastTradeAt: integer("last_trade_at"),
+  updatedAt: integer("updated_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertWalletSummarySchema = createInsertSchema(walletSummaries).omit({ id: true });
+export type WalletSummary = typeof walletSummaries.$inferSelect;
+export type InsertWalletSummary = z.infer<typeof insertWalletSummarySchema>;
+
+// Pre-computed token popularity
+export const tokenPopularity = pgTable("token_popularity", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull().unique(),
+  
+  // Cross-wallet popularity
+  signalWalletCount: integer("signal_wallet_count").default(0), // How many signal wallets traded this
+  totalBuys: integer("total_buys").default(0),
+  totalSells: integer("total_sells").default(0),
+  independentConfirmations: integer("independent_confirmations").default(0), // Wallets that found it independently
+  
+  // Performance tracking
+  avgReturnPercent: real("avg_return_percent"),
+  medianReturnPercent: real("median_return_percent"),
+  bestReturnPercent: real("best_return_percent"),
+  worstReturnPercent: real("worst_return_percent"),
+  
+  // Patterns
+  avgPumpDurationMinutes: integer("avg_pump_duration_minutes"),
+  repeatInterestCount: integer("repeat_interest_count").default(0), // How often re-bought
+  trendingAppearances: integer("trending_appearances").default(0),
+  crashRecoveryCount: integer("crash_recovery_count").default(0), // Times bounced back from 50%+ drop
+  
+  // Deployer info
+  deployerAddress: text("deployer_address"),
+  deployerTokenCount: integer("deployer_token_count"), // How many tokens this deployer created
+  deployerAvgReturn: real("deployer_avg_return"), // Avg return across deployer's tokens
+  
+  // Timestamps
+  firstSeenAt: integer("first_seen_at"),
+  lastActivityAt: integer("last_activity_at"),
+  updatedAt: integer("updated_at"),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertTokenPopularitySchema = createInsertSchema(tokenPopularity).omit({ id: true });
+export type TokenPopularity = typeof tokenPopularity.$inferSelect;
+export type InsertTokenPopularity = z.infer<typeof insertTokenPopularitySchema>;
+
+// Cross-referencing correlations (pre-computed daily)
+export const walletCorrelations = pgTable("wallet_correlations", {
+  id: serial("id").primaryKey(),
+  walletA: text("wallet_a").notNull(),
+  walletB: text("wallet_b").notNull(),
+  
+  // Correlation metrics
+  sharedTokenCount: integer("shared_token_count").default(0),
+  timingCorrelation: real("timing_correlation"), // -1 to 1, how closely their buy timing matches
+  sameGroupLikelihood: real("same_group_likelihood"), // 0-1 probability they're coordinated
+  
+  // Timestamps
+  updatedAt: integer("updated_at"),
+  createdAt: integer("created_at").notNull(),
+}, (table) => ({
+  walletPairUnique: uniqueIndex("wallet_pair_unique").on(table.walletA, table.walletB),
+}));
+
+export const insertWalletCorrelationSchema = createInsertSchema(walletCorrelations).omit({ id: true });
+export type WalletCorrelation = typeof walletCorrelations.$inferSelect;
+export type InsertWalletCorrelation = z.infer<typeof insertWalletCorrelationSchema>;
+
+// Scan context logging for AI-learned triggers
+export const scanContextLogs = pgTable("scan_context_logs", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  
+  // Context at scan time
+  triggerSource: text("trigger_source").notNull(), // swap, price_surge, scheduled, trending, boost
+  walletHitRate: real("wallet_hit_rate"),
+  walletAddress: text("wallet_address"),
+  tokenAge: integer("token_age"), // seconds since creation
+  signalWalletCount: integer("signal_wallet_count"),
+  timeOfDay: integer("time_of_day"), // hour 0-23 UTC
+  trendingRank: integer("trending_rank"),
+  boostRank: integer("boost_rank"),
+  priceChangePercent: real("price_change_percent"),
+  holderOverlapScore: real("holder_overlap_score"),
+  
+  // Scan result
+  discoveryEventFired: boolean("discovery_event_fired").default(false),
+  discoveryEventId: integer("discovery_event_id"),
+  
+  // Outcome (filled later)
+  priceDelta24h: real("price_delta_24h"),
+  copyTradeTriggered: boolean("copy_trade_triggered"),
+  tradeProfit: real("trade_profit"),
+  outcomeRecordedAt: integer("outcome_recorded_at"),
+  
+  // AI vector learning
+  scanUrgencyScore: real("scan_urgency_score"), // AI-computed urgency 0-1
+  
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertScanContextLogSchema = createInsertSchema(scanContextLogs).omit({ id: true });
+export type ScanContextLog = typeof scanContextLogs.$inferSelect;
+export type InsertScanContextLog = z.infer<typeof insertScanContextLogSchema>;
+
+// Compute task queue (expanded from discoveryTasks for distributed compute)
+export const computeTasks = pgTable("compute_tasks", {
+  id: serial("id").primaryKey(),
+  
+  // Task definition
+  taskType: text("task_type").notNull(), // price_slope, holder_overlap, ohlc_compression, wallet_correlation, backtest_context, token_metadata
+  payload: jsonb("payload").notNull(), // Task-specific input data
+  priority: integer("priority").default(50), // Higher = more important
+  
+  // Assignment
+  status: text("status").default("pending"), // pending, assigned, completed, failed, timeout
+  assignedTo: integer("assigned_to"), // userId
+  assignedSource: text("assigned_source"), // backend, compute-node, browser-{userId}
+  isUserRelevant: boolean("is_user_relevant").default(false), // Was this for the assigned user's own data
+  
+  // Timing
+  ttlSeconds: integer("ttl_seconds").default(3), // Dynamic per task type
+  assignedAt: integer("assigned_at"),
+  completedAt: integer("completed_at"),
+  createdAt: integer("created_at").notNull(),
+  
+  // Results
+  result: jsonb("result"),
+  errorMessage: text("error_message"),
+  
+  // Compute tracking
+  computeTimeMs: integer("compute_time_ms"), // How long the computation took
+  resultSizeBytes: integer("result_size_bytes"),
+  validationStatus: text("validation_status"), // passed, spot_check_failed, format_error
+});
+
+export const insertComputeTaskSchema = createInsertSchema(computeTasks).omit({ id: true });
+export type ComputeTask = typeof computeTasks.$inferSelect;
+export type InsertComputeTask = z.infer<typeof insertComputeTaskSchema>;
+
+// Compute source tracking
+export const computeSourceStats = pgTable("compute_source_stats", {
+  id: serial("id").primaryKey(),
+  sourceId: text("source_id").notNull(), // backend, compute-node, browser-{userId}
+  date: text("date").notNull(), // YYYY-MM-DD
+  
+  // Daily metrics
+  tasksCompleted: integer("tasks_completed").default(0),
+  tasksFailed: integer("tasks_failed").default(0),
+  totalComputeTimeMs: integer("total_compute_time_ms").default(0),
+  totalBytesProcessed: integer("total_bytes_processed").default(0),
+  spotChecksPassed: integer("spot_checks_passed").default(0),
+  spotChecksFailed: integer("spot_checks_failed").default(0),
+  
+  // Trust
+  trustScore: real("trust_score").default(0.5), // 0-1
+  
+  createdAt: integer("created_at").notNull(),
+}, (table) => ({
+  sourceDateUnique: uniqueIndex("compute_source_date_unique").on(table.sourceId, table.date),
+}));
+
+export const insertComputeSourceStatsSchema = createInsertSchema(computeSourceStats).omit({ id: true });
+export type ComputeSourceStats = typeof computeSourceStats.$inferSelect;
+export type InsertComputeSourceStats = z.infer<typeof insertComputeSourceStatsSchema>;
+
+// Storage bucketing status
+export const storageBucketStatus = pgTable("storage_bucket_status", {
+  id: serial("id").primaryKey(),
+  
+  // Current storage metrics
+  totalSizeBytes: integer("total_size_bytes"),
+  tableSizes: jsonb("table_sizes").$type<Record<string, number>>(), // table name -> bytes
+  
+  // Bucketing state
+  lastCompressionAt: integer("last_compression_at"),
+  lastCompressionLevel: text("last_compression_level"), // daily, weekly, monthly, yearly
+  oldestRawDataAt: integer("oldest_raw_data_at"),
+  
+  // Cold archive tracking
+  coldArchiveCount: integer("cold_archive_count").default(0),
+  coldArchiveSizeBytes: integer("cold_archive_size_bytes").default(0),
+  lastArchiveAt: integer("last_archive_at"),
+  
+  checkedAt: integer("checked_at").notNull(),
+});
+
+export const insertStorageBucketStatusSchema = createInsertSchema(storageBucketStatus).omit({ id: true });
+export type StorageBucketStatus = typeof storageBucketStatus.$inferSelect;
+export type InsertStorageBucketStatus = z.infer<typeof insertStorageBucketStatusSchema>;

@@ -10,24 +10,22 @@ import {
   PriceHistoryCacheEntry,
   FetchWorkQueueItem,
 } from "@shared/schema";
+import { memoryCache } from "./memory-cache";
 
 const PRICE_TTL_SECONDS = 60;
 const MARKET_DATA_TTL_SECONDS = 300;
 const HOLDER_CACHE_TTL_SECONDS = 86400;
 
 export async function getTokenData(tokenMint: string): Promise<TokenDataPoolEntry | null> {
+  const cached = memoryCache.getToken(tokenMint);
+  if (cached) return cached;
+
   const entry = await db.query.tokenDataPool.findFirst({
     where: eq(tokenDataPool.tokenMint, tokenMint),
   });
 
   if (entry) {
-    const now = Math.floor(Date.now() / 1000);
-    await db.update(tokenDataPool)
-      .set({
-        lastAccessedAt: now,
-        accessCount: (entry.accessCount ?? 0) + 1,
-      })
-      .where(eq(tokenDataPool.id, entry.id));
+    memoryCache.setToken(tokenMint, entry, false);
   }
 
   return entry ?? null;
@@ -111,54 +109,72 @@ export async function upsertTokenData(
       updateData.lastFetchedBy = fetchedBy;
     }
 
-    const [updated] = await db.update(tokenDataPool)
-      .set(updateData)
-      .where(eq(tokenDataPool.id, existing.id))
-      .returning();
-
-    return updated;
+    const mergedData = { ...existing, ...updateData } as TokenDataPoolEntry;
+    memoryCache.setToken(tokenMint, mergedData, true);
+    return mergedData;
   }
 
-  const [inserted] = await db.insert(tokenDataPool).values({
+  const newEntry: TokenDataPoolEntry = {
+    id: 0,
     tokenMint,
-    tokenSymbol: data.tokenSymbol,
-    tokenName: data.tokenName,
-    priceUsd: data.priceUsd,
+    tokenSymbol: data.tokenSymbol ?? null,
+    tokenName: data.tokenName ?? null,
+    priceUsd: data.priceUsd ?? null,
     priceUpdatedAt: data.priceUsd !== undefined ? now : null,
     priceSource: data.priceUsd !== undefined ? source : null,
-    marketCap: data.marketCap,
-    fdv: data.fdv,
-    liquidity: data.liquidity,
-    volume24h: data.volume24h,
-    priceChange24h: data.priceChange24h,
+    marketCap: data.marketCap ?? null,
+    fdv: data.fdv ?? null,
+    liquidity: data.liquidity ?? null,
+    volume24h: data.volume24h ?? null,
+    priceChange24h: data.priceChange24h ?? null,
     marketDataUpdatedAt: now,
-    pairAddress: data.pairAddress,
-    dexId: data.dexId,
-    pairCreatedAt: data.pairCreatedAt,
-    lastFetchedBy: fetchedBy,
+    pairAddress: data.pairAddress ?? null,
+    dexId: data.dexId ?? null,
+    pairCreatedAt: data.pairCreatedAt ?? null,
+    lastFetchedBy: fetchedBy ?? null,
     lastFetchSource: source,
     createdAt: now,
     updatedAt: now,
     isActive: true,
     lastAccessedAt: now,
     accessCount: 1,
-  }).returning();
+    rugcheckData: null,
+    rugcheckCheckedAt: null,
+    goplusData: null,
+    goplusCheckedAt: null,
+    safetySource: null,
+    isPumpfun: null,
+    pumpfunGraduated: null,
+    pumpfunGraduationTime: null,
+    pumpfunAgeAtGraduation: null,
+    pumpfunBondingCurveProgress: null,
+    boostRank: null,
+    boostUpdatedAt: null,
+    trendingRank: null,
+    trendingSource: null,
+    trendingUpdatedAt: null,
+    priceChange7d: null,
+    priceChange14d: null,
+    priceChange30d: null,
+    deployerAddress: null,
+  };
 
-  return inserted;
+  memoryCache.setToken(tokenMint, newEntry, true);
+  return newEntry;
 }
 
 export async function isPriceStale(tokenMint: string): Promise<boolean> {
+  if (!memoryCache.isPriceStale(tokenMint)) return false;
   const entry = await getTokenData(tokenMint);
   if (!entry || !entry.priceUpdatedAt) return true;
-
   const now = Math.floor(Date.now() / 1000);
   return (now - entry.priceUpdatedAt) > PRICE_TTL_SECONDS;
 }
 
 export async function isMarketDataStale(tokenMint: string): Promise<boolean> {
+  if (!memoryCache.isMarketDataStale(tokenMint)) return false;
   const entry = await getTokenData(tokenMint);
   if (!entry || !entry.marketDataUpdatedAt) return true;
-
   const now = Math.floor(Date.now() / 1000);
   return (now - entry.marketDataUpdatedAt) > MARKET_DATA_TTL_SECONDS;
 }
@@ -1003,14 +1019,11 @@ export async function updateTokenSafety(
   }
   
   if (existing) {
-    const [updated] = await db.update(tokenDataPool)
-      .set(updateData)
-      .where(eq(tokenDataPool.id, existing.id))
-      .returning();
-    return updated;
+    const merged = { ...existing, ...updateData } as TokenDataPoolEntry;
+    memoryCache.setToken(tokenMint, merged, true);
+    return merged;
   }
   
-  // Create new entry if doesn't exist
   const [inserted] = await db.insert(tokenDataPool).values({
     tokenMint,
     createdAt: now,
@@ -1021,6 +1034,7 @@ export async function updateTokenSafety(
     ...updateData,
   }).returning();
   
+  memoryCache.setToken(tokenMint, inserted, false);
   return inserted;
 }
 
@@ -1048,11 +1062,9 @@ export async function updatePumpfunStatus(
   if (data.bondingCurveProgress !== undefined) updateData.pumpfunBondingCurveProgress = data.bondingCurveProgress;
   
   if (existing) {
-    const [updated] = await db.update(tokenDataPool)
-      .set(updateData)
-      .where(eq(tokenDataPool.id, existing.id))
-      .returning();
-    return updated;
+    const merged = { ...existing, ...updateData } as TokenDataPoolEntry;
+    memoryCache.setToken(tokenMint, merged, true);
+    return merged;
   }
   
   const [inserted] = await db.insert(tokenDataPool).values({
@@ -1065,6 +1077,7 @@ export async function updatePumpfunStatus(
     ...updateData,
   }).returning();
   
+  memoryCache.setToken(tokenMint, inserted, false);
   return inserted;
 }
 

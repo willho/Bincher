@@ -70,9 +70,25 @@ app.use((req, res, next) => {
     const { startCleanupScheduler } = await import("./discovery-worker");
     startCleanupScheduler();
     
-    // Start batched DexScreener refresh job (targets 80% daily budget)
+    const { memoryCache } = await import("./memory-cache");
+    await memoryCache.warmUp(500);
+    memoryCache.start();
+    
     const { startBatchedDexScreenerRefresh } = await import("./data-pool");
     startBatchedDexScreenerRefresh();
+    
+    const { startCompressionScheduler } = await import("./storage-bucketing");
+    startCompressionScheduler();
+    
+    const { startGeckoScheduler } = await import("./gecko-terminal");
+    startGeckoScheduler();
+    
+    const { startBoostFetcher, startDailySnapshotJob } = await import("./dex-boosts");
+    startBoostFetcher();
+    startDailySnapshotJob();
+    
+    const { startSummaryJobs } = await import("./summary-jobs");
+    startSummaryJobs();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");
