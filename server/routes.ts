@@ -826,6 +826,26 @@ export async function registerRoutes(
           const isBuy = isBaseCurrency(swap.fromToken);
           const swapTokenMint = isBuy ? swap.toToken : swap.fromToken;
           const swapTokenSymbol = isBuy ? swap.toTokenSymbol : swap.fromTokenSymbol;
+
+          if (isBuy) {
+            try {
+              const { emit } = await import("./discovery-event-bus");
+              await emit({
+                type: "signal_buy",
+                tokenMint: swapTokenMint,
+                tokenSymbol: swapTokenSymbol || undefined,
+                source: "swap_webhook",
+                data: {
+                  walletAddress: swapWalletAddress,
+                  fromAmount: swap.fromAmount,
+                  toAmount: swap.toAmount,
+                  solPriceAtTrade: swap.solPriceAtTrade,
+                },
+                timestamp: Date.now(),
+                urgency: 6,
+              });
+            } catch (_) {}
+          }
           const baseAmount = isBuy ? swap.fromAmount : swap.toAmount; // SOL/USDC amount
           const tokenAmount = isBuy ? swap.toAmount : swap.fromAmount;
           

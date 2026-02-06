@@ -83,6 +83,9 @@ app.use((req, res, next) => {
     const { startCompressionScheduler } = await import("./storage-bucketing");
     startCompressionScheduler();
     
+    const { initEventBus } = await import("./discovery-event-bus");
+    initEventBus();
+    
     const { startGeckoScheduler } = await import("./gecko-terminal");
     startGeckoScheduler();
     
@@ -92,6 +95,9 @@ app.use((req, res, next) => {
     
     const { startSummaryJobs } = await import("./summary-jobs");
     startSummaryJobs();
+    
+    const { startOptimizer } = await import("./discovery-optimizer");
+    startOptimizer();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");

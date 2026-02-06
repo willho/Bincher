@@ -1,7 +1,7 @@
 # Penny Pincher
 
 ## Overview
-Penny Pincher is an automated Solana trading platform providing copy trading from signal wallets, manual trading, and AI-driven trading. Its core purpose is to offer a comprehensive, intelligent, and secure solution on the Solana blockchain, featuring automated risk management, adaptive AI learning, and pattern-based swing trading to enhance user profitability and experience in decentralized finance.
+Penny Pincher is an automated Solana trading platform designed for copy trading from signal wallets, manual trading, and AI-driven trading. It aims to be a comprehensive, intelligent, and secure solution on the Solana blockchain, offering automated risk management, adaptive AI learning, and pattern-based swing trading to improve user profitability and experience in decentralized finance.
 
 ## User Preferences
 - I prefer simple language.
@@ -16,24 +16,24 @@ Penny Pincher is an automated Solana trading platform providing copy trading fro
 ## System Architecture
 
 ### High-Level Design
-The application uses a client-server architecture with a React frontend, an Express.js backend, and a PostgreSQL database. Real-time communication is handled via WebSockets, and Helius webhooks are used for push-based swap detection. User data is strictly isolated.
+The application employs a client-server architecture, featuring a React frontend, an Express.js backend, and a PostgreSQL database. Real-time communication is facilitated by WebSockets, and Helius webhooks are utilized for push-based swap detection. User data is strictly isolated.
 
 ### Frontend
-The UI, built with React and Vite, features a dark theme with crypto-themed green accents. It includes a Dashboard, Watchlist, Trading (with Token sub-page), Settings, and an omnipresent AI chat component (Pincher Footer). Navigation is dashboard-centric, using panels as the primary navigation mechanism.
+The UI is built with React and Vite, featuring a dark theme with crypto-themed green accents. It includes a Dashboard, Watchlist, Trading (with Token sub-page), Settings, and an omnipresent AI chat component (Pincher Footer). Navigation is dashboard-centric, utilizing panels as the primary navigation mechanism.
 
 ### Backend
-The Express backend manages user authentication (session-based), Solana service integrations, and business logic. It processes Helius webhooks, uses Resend for email, and integrates Jupiter for token swaps. A WebSocket server broadcasts real-time updates.
+The Express backend handles user authentication (session-based), Solana service integrations, and business logic. It processes Helius webhooks, uses Resend for email, and integrates Jupiter for token swaps. A WebSocket server broadcasts real-time updates.
 
 ### Database
 PostgreSQL is used for persistent storage of user accounts, sessions, monitored wallets, swap history, settings, copy trading configurations, and AI-related data, with strict user data isolation.
 
 ### Key Features & Design Patterns
-- **Real-time Swap Monitoring**: Leverages Helius webhooks.
-- **Automated Copy Trading**: Includes a hot wallet system with AES-256-GCM encryption, dynamic priority fees, split buy systems, progressive take-profit strategies, unique disposable token wallets for each buy, and backup gas funding. Configurable initial buy modes, budget controls, mirror buy limits, mirror sell modes, and enhanced deduplication options are available.
-- **AI Token Analysis (Miss Pincher)**: A GPT-4o-mini powered AI provides dynamic token heat scoring and qualitative analysis via a chat interface, requiring explicit user confirmation for trades and copy trading configuration changes.
-- **Security**: Features robust authentication (PBKDF2, secure sessions), encrypted data storage, PIN protection, daily spend limits, withdrawal address whitelisting, and Telegram confirmation for large transfers.
+- **Real-time Swap Monitoring**: Leverages Helius webhooks for immediate transaction detection.
+- **Automated Copy Trading**: Features a hot wallet system with advanced encryption, dynamic priority fees, split buy systems, progressive take-profit, unique disposable token wallets per buy, and backup gas funding. Includes configurable initial buy modes, budget controls, and mirror trading options.
+- **AI Token Analysis (Miss Pincher)**: A GPT-4o-mini powered AI provides dynamic token heat scoring and qualitative analysis via a chat interface, requiring explicit user confirmation for trades.
+- **Security**: Robust authentication (PBKDF2, secure sessions), encrypted data, PIN protection, daily spend limits, withdrawal address whitelisting, and Telegram confirmation for large transfers.
 - **Scalability**: Achieved through user isolation and webhook-driven event processing.
-- **API Management**: Tracks API calls with limits and uses an admin API key pool for load balancing.
+- **API Management**: Tracks API usage with limits and uses an admin API key pool for load balancing across providers.
 - **Tiered Price Aggregation**: Uses OHLC+ price data with multi-tier retention for swing detection.
 - **Whale Detection**: Caches top-100 holder lists and broadcasts whale activity events.
 - **Enhanced Heat Scoring**: Token heat scores incorporate whale activity, recent buys, price volatility, user attention, and recency.
@@ -51,45 +51,36 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **Signal Wallet Detail Page**: Displays individual wallet activity, trade history, hit rate, P&L, trading style analysis, and timeframe filters, with real-time WebSocket updates.
 - **AI-Controlled Blacklist**: Miss Pincher can add, remove, and list blacklisted tokens via natural language commands.
 - **AI Relationship System**: Tracks user affinity, relationship type, trades won, and warnings followed/ignored, with auto-adjustment of relationship type.
-- **Production System Logging**: Separated logging architecture with dedicated tables for faster queries and independent retention for AI, API, webhook, trade, and error logs.
-- **Copy Trade Decision Logging**: All copy trade decisions logged to trade_logs with full context (userId, signalWalletId, tokenMint, copySettings, check results). Decision types: queued, skipped_sell, skipped_disabled, skipped_stablecoin, skipped_blacklist, skipped_holding, skipped_pending, skipped_ever_held, skipped_score, skipped_min_trade, skipped_budget. Query via /api/admin/trade-logs with signalWalletId and action filters.
-- **Budget & API Management System**: Features a unified priority queue, safety checker (RugCheck + GoPlus), behavioral analysis (bot detection, leader/follower classification), wallet fingerprinting, discovery engine, and cluster learning. Multi-provider RPC routing: Chainstack handles all raw RPC calls (3M/month), Helius reserved for token metadata only (1M/month). 95% exhaustion threshold triggers automatic fallback. Pool exhaustion tracking via `isProviderExhausted()`, `getPoolExhaustionStatus()`.
-- **Dual-Source Price System**: Primary prices derived from swap webhooks (instant, free), with batched DexScreener calls as secondary source for market data (MC, FDV, liquidity). Prices stored in `tokenDataPool` with source tracking. Price discrepancy detection logs errors when swap prices differ >10% from DexScreener.
-- **Batched DexScreener Refresh**: Background job targeting 80% of DexScreener daily budget (~345,600 calls/day). Batches up to 30 tokens per API call for efficiency. Dynamic interval adjustment spreads calls evenly across the day. Stats available via `getBatchRefreshStats()`. Started automatically on server boot.
-- **Browser-Based Discovery Worker**: Distributed task queue for token metadata lookups using user browsers. Atomic tasks with 60-second TTL, auto-requeue on browser disconnect. Frontend hook polls `/api/discovery/task`, executes using user's Helius key. Admin endpoints: `/api/admin/discovery/stats`, `/api/admin/discovery/queue-token`. Tasks stored in `discovery_tasks` table with status tracking (pending, assigned, completed, failed).
-- **Memory-First Caching** (`server/memory-cache.ts`): In-memory token data cache with 5-minute flush cycles to DB, reducing ~90% of DB writes. Warm-up loads top 500 tokens on boot. Dirty-tracking ensures only changed tokens are persisted.
-- **Storage Bucketing** (`server/storage-bucketing.ts`): Tiered data compression (1-day→3-day→weekly buckets) with daily scheduler. Tracks total storage against 500MB threshold. Targets <$1/day DB cost.
-- **GeckoTerminal Integration** (`server/gecko-terminal.ts`): Primary data source (DexScreener paused per budget). Fetches trending tokens (4s high-priority interval) and new Solana pools (12s low-priority interval), respecting 25 calls/min rate limit. Handles 429 errors gracefully.
-- **Daily Price Snapshots** (`server/summary-jobs.ts`): Midnight UTC snapshots with pre-computed 7d/14d/30d price change calculations. Pre-computed summary jobs: wallet profiles (6h cycle), token popularity (6h+1h offset), cross-wallet correlations (daily).
-- **Discovery Metrics**: 8 computed metrics per token: trending_momentum, boost_intensity, multi_wallet_convergence, deployer_track_record, price_slope, crash_recovery, repeat_interest, wallet_quality. Stored in `discoveryMetrics` table.
-- **Historical Context System**: Token history tracking (prior rugpulls, relaunch detection), wallet pattern analysis (timing, sizing, portfolio diversity), holder overlap analysis vs known winners/rugs. Data stored in `tokenHistories`, `walletPatterns`, `holderOverlaps` tables.
-- **Context-Aware Scanning**: Urgency scoring system for discovery scans. Scan context logging tracks what triggered each scan and its outcome. Self-improvement system auto-analyzes patterns daily, generates new scan triggers at 50%+ confidence threshold.
-- **Distributed Compute Framework** (`server/compute-manager.ts`): Replaces old discovery_tasks with expanded `computeTasks` table. Supports backend/compute-node/browser worker types. Trust scoring (7-day weighted history per source), task prioritization by priority level, spot-checking (5-20% of results for verification). Task generators for price_slope, holder_overlap, wallet_correlation. Dynamic TTLs (3-15s per task type). API routes: `GET /api/compute/task`, `POST /api/compute/task/:id/complete`, `POST /api/compute/task/:id/fail`, `GET /api/admin/compute/stats`, `POST /api/admin/compute/generate-tasks`.
+- **Production System Logging**: Separated logging architecture with dedicated tables for AI, API, webhook, trade, and error logs for faster queries and independent retention.
+- **Copy Trade Decision Logging**: All copy trade decisions are logged to `trade_logs` with full context, including user, signal wallet, token, copy settings, and check results.
+- **Budget & API Management System**: Implements per-minute rate limiting for all providers (GeckoTerminal, DexScreener, Helius, OpenAI) with smooth throttling and exponential backoff on 429 errors.
+- **Dual-Source Price System**: Primary prices from swap webhooks, with batched DexScreener calls as a secondary source for market data. Includes price discrepancy detection.
+- **Batched DexScreener Refresh**: Background job for refreshing DexScreener data, targeting 80% of the daily budget, with dynamic interval adjustment.
+- **Browser-Based Discovery Worker**: Distributed task queue for token metadata lookups using user browsers, with atomic tasks and auto-requeue on disconnect.
+- **Memory-First Caching**: In-memory token data cache with 5-minute flush cycles to the database, reducing DB writes by approximately 90%.
+- **Storage Bucketing**: Tiered data compression (1-day→3-day→weekly buckets) with a daily scheduler to manage database costs.
+- **GeckoTerminal Integration**: Primary data source for trending tokens and new Solana pools, with rate-limited scheduling and error handling.
+- **Daily Price Snapshots**: Midnight UTC snapshots with pre-computed 7d/14d/30d price change calculations and summary jobs for wallet profiles, token popularity, and cross-wallet correlations.
+- **Discovery Metrics**: 8 computed metrics per token: trending_momentum, boost_intensity, multi_wallet_convergence, deployer_track_record, price_slope, crash_recovery, repeat_interest, wallet_quality.
+- **Historical Context System**: Tracks token history (rugpulls, relaunches), wallet pattern analysis, and holder overlap analysis.
+- **Context-Aware Scanning**: Urgency scoring system for discovery scans with context logging and a self-improvement system for generating new scan triggers.
+- **Discovery Event Bus**: Reactive event bus connecting all data sources, with event types like `trending_spotted`, `signal_buy`, `new_token`, and combo detection. Triggers immediate discovery scans and generates vector updates.
+- **Discovery Optimizer**: Adaptive review scheduler, LLM graduation system to skip LLM when rules exceed confidence, and self-adjusting thresholds based on win/loss outcomes.
+- **Distributed Compute Framework**: Expanded `computeTasks` table supporting backend, compute-node, and browser worker types. Includes trust scoring, task prioritization, spot-checking, and dynamic TTLs.
 - **Vector Learning**: Incorporates multi-dimensional personality and trading vectors, strategy clustering, unified vector routing, and 8-hour bucket aggregation for self-optimization.
-- **System Insight Bus**: Cross-system knowledge sharing via `systemInsights` table. LLM→Trigger flow auto-creates rules from repeated high-confidence AI patterns (5+ occurrences, 60%+ confidence). Trigger→LLM flow injects rule performance into AI context via `buildContextForAI()`. Underperforming rules (<40% confidence) trigger AI fix proposals. All key systems (heat-score, discovery-engine, whale-detection, rule-executor) publish and consume insights. Insights decay in 8-hour aggregation cycle.
-- **Admin Chat Interface**: Conversational AI interface for system monitoring at `/admin`. Features GPT-4o-mini powered chat with dynamic system context injection (errors, insights, rule performance, patterns). Summary cards display system health, 24h errors, 7d rules created, and patterns detected. Recent Observations panel shows top insight sources and recent patterns. Chat history stored in `adminChatMessages` table.
-- **Discovery-Enhanced Strategy Analysis**: Signal wallet strategy analysis integrates discovery engine insights (behavior classification, leader/follower relationships). Smart auto-caching with 1-hour TTL and swap count-based invalidation. AI recommendations prompt enriched with discovery context.
-- **Token Detail Page**: Enhanced `/trading/:token` page with DexScreener price chart iframe, Bubblemaps holder distribution iframe, external resource links (Solscan, DexScreener, Bubblemaps, Birdeye), and Paper Buy/Sell buttons.
-- **Signal Wallet Page Enhancements**: Bubblemaps wallet activity iframe, Paper Copy button for simulated copy trading, Trade History moved above Holdings for better visibility. Token links throughout the page route to in-app `/trading/:mint` page.
+- **System Insight Bus**: Cross-system knowledge sharing via `systemInsights` table. Facilitates LLM→Trigger flow for rule creation and Trigger→LLM flow for AI context injection and rule performance feedback.
+- **Admin Chat Interface**: Conversational AI interface for system monitoring with dynamic system context injection, summary cards, and recent observations.
+- **Discovery-Enhanced Strategy Analysis**: Signal wallet strategy analysis integrates discovery engine insights for behavior classification and leader/follower relationships, with smart auto-caching.
+- **Token Detail Page**: Enhanced `/trading/:token` page with DexScreener price chart, Bubblemaps holder distribution, external resource links, and Paper Buy/Sell buttons.
+- **Signal Wallet Page Enhancements**: Bubblemaps wallet activity iframe, Paper Copy button for simulated copy trading, and improved visibility of Trade History.
 
 ## External Dependencies
 
-- **Helius**: Real-time Solana blockchain data, swap transaction webhooks, dynamic priority fee estimation (1M calls/month free tier).
-- **Chainstack**: Primary RPC provider for raw Solana calls (3M calls/month free tier), with automatic failover to Helius.
-- **Resend**: Sending email notifications.
-- **Jupiter**: Executing token swaps on the Solana blockchain, fallback for token symbol/name lookup.
+- **Helius**: Real-time Solana blockchain data, swap transaction webhooks, and dynamic priority fee estimation.
+- **Chainstack**: Primary RPC provider for raw Solana calls, with automatic failover to Helius.
+- **Resend**: For sending email notifications.
+- **Jupiter**: For executing token swaps on the Solana blockchain and as a fallback for token symbol/name lookup.
 - **PostgreSQL**: Primary database for persistent storage.
-- **DexScreener**: Secondary source for token metadata (price, market cap, liquidity, FDV, volume). Currently paused per budget constraints.
-- **GeckoTerminal**: Primary token metadata provider. Fetches trending tokens and new Solana pools with rate-limited scheduling.
+- **DexScreener**: Secondary source for token metadata (price, market cap, liquidity, FDV, volume) and boost tracking.
+- **GeckoTerminal**: Primary token metadata provider for trending tokens and new Solana pools.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
-
-## Paused Tasks / Backlog
-
-### Compute Node Update
-Special `compute_node` user role/account. Logging in with a compute node account launches a dedicated compute node interface instead of the regular dashboard. Features:
-- Auto-redirects compute_node accounts to `/compute-node` page on login
-- Same analytics page as admin (system health, admin chat interface)
-- Live task processing panel: connection status, task feed, stats, start/stop toggle
-- Handles all server-side task types (`holder_overlap`, `wallet_correlation`, `token_metadata`) — no trust scoring needed since admin-run
-- Route protection: compute_node accounts only access compute page + task endpoints
-- Remove server-side `processServerSideTasks` from compute-manager scheduler once compute node is active

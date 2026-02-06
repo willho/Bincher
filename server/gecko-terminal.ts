@@ -1,12 +1,13 @@
 import { memoryCache } from "./memory-cache";
 import { upsertTokenData } from "./data-pool";
-import { shouldAllowApiCall, trackApiCall } from "./api-budget";
+import { shouldAllowApiCall, trackApiCall, record429 } from "./api-budget";
 import { db } from "./db";
 import { priceSnapshots } from "@shared/schema";
+import { emit } from "./discovery-event-bus";
 
 const GECKO_BASE_URL = "https://api.geckoterminal.com/api/v2";
-const HIGH_PRIORITY_INTERVAL_MS = 4000;
-const LOW_PRIORITY_INTERVAL_MS = 12000;
+const HIGH_PRIORITY_INTERVAL_MS = 6000;
+const LOW_PRIORITY_INTERVAL_MS = 6000;
 const MAX_CALLS_PER_MINUTE = 25;
 const LOW_PRIORITY_QUEUE_MAX = 500;
 
@@ -77,15 +78,9 @@ function extractMintFromRelationship(pool: any): string | null {
 export async function fetchTrending(): Promise<void> {
   try {
     const budget = await shouldAllowApiCall("geckoterminal");
-    if (!budget.allowed) {
-      console.log(`[GeckoTerminal] Trending blocked: ${budget.reason}`);
-      return;
-    }
+    if (!budget.allowed) return;
 
-    if (!canMakeCall()) {
-      console.log("[GeckoTerminal] Rate limit approaching, skipping trending");
-      return;
-    }
+    if (!canMakeCall()) return;
 
     const response = await fetch(`${GECKO_BASE_URL}/networks/solana/trending_pools`, {
       headers: { Accept: "application/json" },
@@ -95,7 +90,8 @@ export async function fetchTrending(): Promise<void> {
     await trackApiCall("geckoterminal", "trending", 1);
 
     if (!response.ok) {
-      console.error(`[GeckoTerminal] Trending fetch failed: ${response.status}`);
+      if (response.status === 429) record429("geckoterminal");
+      else console.error(`[GeckoTerminal] Trending fetch failed: ${response.status}`);
       state.errors++;
       return;
     }
@@ -147,6 +143,24 @@ export async function fetchTrending(): Promise<void> {
       memoryCache.setTrending(trendingEntries);
       state.trendingUpdatedAt = now;
       console.log(`[GeckoTerminal] Updated ${trendingEntries.length} trending tokens`);
+
+      for (const entry of trendingEntries.slice(0, 10)) {
+        const pool = pools[entry.rank - 1];
+        const attrs = pool?.attributes || {};
+        emit({
+          type: "trending_spotted",
+          tokenMint: entry.tokenMint,
+          tokenSymbol: attrs.base_token_symbol,
+          source: "geckoterminal",
+          data: {
+            rank: entry.rank,
+            volume24h: attrs.volume_usd?.h24 ? parseFloat(attrs.volume_usd.h24) : 0,
+            priceChange24h: attrs.price_change_percentage?.h24 ? parseFloat(attrs.price_change_percentage.h24) : 0,
+          },
+          timestamp: Date.now(),
+          urgency: Math.max(1, Math.min(10, 11 - entry.rank)),
+        }).catch(() => {});
+      }
     }
   } catch (error) {
     console.error("[GeckoTerminal] Error fetching trending:", error);
@@ -157,15 +171,9 @@ export async function fetchTrending(): Promise<void> {
 export async function fetchNewPools(): Promise<void> {
   try {
     const budget = await shouldAllowApiCall("geckoterminal");
-    if (!budget.allowed) {
-      console.log(`[GeckoTerminal] New pools blocked: ${budget.reason}`);
-      return;
-    }
+    if (!budget.allowed) return;
 
-    if (!canMakeCall()) {
-      console.log("[GeckoTerminal] Rate limit approaching, skipping new pools");
-      return;
-    }
+    if (!canMakeCall()) return;
 
     const response = await fetch(`${GECKO_BASE_URL}/networks/solana/new_pools`, {
       headers: { Accept: "application/json" },
@@ -175,7 +183,8 @@ export async function fetchNewPools(): Promise<void> {
     await trackApiCall("geckoterminal", "new_pools", 1);
 
     if (!response.ok) {
-      console.error(`[GeckoTerminal] New pools fetch failed: ${response.status}`);
+      if (response.status === 429) record429("geckoterminal");
+      else console.error(`[GeckoTerminal] New pools fetch failed: ${response.status}`);
       state.errors++;
       return;
     }
@@ -231,6 +240,21 @@ export async function fetchNewPools(): Promise<void> {
       );
 
       addedCount++;
+
+      emit({
+        type: "new_token",
+        tokenMint,
+        tokenSymbol: attrs.base_token_symbol,
+        source: "geckoterminal",
+        data: {
+          poolAddress: attrs.address,
+          dexId: attrs.dex_id,
+          createdAt,
+          volume24h: volStr ? parseFloat(volStr) : 0,
+        },
+        timestamp: Date.now(),
+        urgency: 4,
+      }).catch(() => {});
     }
 
     state.newPoolsUpdatedAt = now;
@@ -253,15 +277,9 @@ export async function fetchTokenPrice(tokenMint: string): Promise<{
 } | null> {
   try {
     const budget = await shouldAllowApiCall("geckoterminal");
-    if (!budget.allowed) {
-      console.log(`[GeckoTerminal] Token price blocked: ${budget.reason}`);
-      return null;
-    }
+    if (!budget.allowed) return null;
 
-    if (!canMakeCall()) {
-      console.log("[GeckoTerminal] Rate limit approaching, skipping token price");
-      return null;
-    }
+    if (!canMakeCall()) return null;
 
     const response = await fetch(`${GECKO_BASE_URL}/networks/solana/tokens/${tokenMint}`, {
       headers: { Accept: "application/json" },
@@ -271,7 +289,8 @@ export async function fetchTokenPrice(tokenMint: string): Promise<{
     await trackApiCall("geckoterminal", "token_price", 1);
 
     if (!response.ok) {
-      console.error(`[GeckoTerminal] Token price fetch failed: ${response.status} for ${tokenMint}`);
+      if (response.status === 429) record429("geckoterminal");
+      else console.error(`[GeckoTerminal] Token price fetch failed: ${response.status} for ${tokenMint}`);
       state.errors++;
       return null;
     }
@@ -317,15 +336,9 @@ export async function fetchOHLCV(
 ): Promise<number[][] | null> {
   try {
     const budget = await shouldAllowApiCall("geckoterminal");
-    if (!budget.allowed) {
-      console.log(`[GeckoTerminal] OHLCV blocked: ${budget.reason}`);
-      return null;
-    }
+    if (!budget.allowed) return null;
 
-    if (!canMakeCall()) {
-      console.log("[GeckoTerminal] Rate limit approaching, skipping OHLCV");
-      return null;
-    }
+    if (!canMakeCall()) return null;
 
     const url = `${GECKO_BASE_URL}/networks/solana/pools/${poolAddress}/ohlcv/${timeframe}?limit=${limit}`;
     const response = await fetch(url, {
@@ -336,7 +349,8 @@ export async function fetchOHLCV(
     await trackApiCall("geckoterminal", "ohlcv", 1);
 
     if (!response.ok) {
-      console.error(`[GeckoTerminal] OHLCV fetch failed: ${response.status} for ${poolAddress}`);
+      if (response.status === 429) record429("geckoterminal");
+      else console.error(`[GeckoTerminal] OHLCV fetch failed: ${response.status} for ${poolAddress}`);
       state.errors++;
       return null;
     }

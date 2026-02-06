@@ -3,7 +3,8 @@ import { priceSnapshots, tokenDataPool, holderCache } from "@shared/schema";
 import { eq, and, sql } from "drizzle-orm";
 import { memoryCache } from "./memory-cache";
 import { upsertTokenData } from "./data-pool";
-import { shouldAllowApiCall, trackApiCall } from "./api-budget";
+import { shouldAllowApiCall, trackApiCall, record429 } from "./api-budget";
+import { emit } from "./discovery-event-bus";
 
 const BOOST_FETCH_INTERVAL_MS = 60 * 1000;
 const DAILY_SNAPSHOT_CHECK_INTERVAL_MS = 60 * 1000;
@@ -33,15 +34,13 @@ interface DexBoostToken {
 
 async function fetchBoosts(): Promise<void> {
   try {
-    const budget = await shouldAllowApiCall("dexscreener");
-    if (!budget.allowed) {
-      console.log(`[DexBoosts] Skipping fetch: ${budget.reason}`);
-      return;
-    }
+    const budget = await shouldAllowApiCall("dexscreener", "boosts");
+    if (!budget.allowed) return;
 
     const response = await fetch("https://api.dexscreener.com/token-boosts/latest/v1");
     if (!response.ok) {
-      console.error(`[DexBoosts] API error: ${response.status} ${response.statusText}`);
+      if (response.status === 429) record429("dexscreener");
+      else console.error(`[DexBoosts] API error: ${response.status} ${response.statusText}`);
       boostStats.errors++;
       return;
     }
@@ -86,6 +85,18 @@ async function fetchBoosts(): Promise<void> {
 
     if (solanaTokens.length > 0) {
       console.log(`[DexBoosts] Fetched ${solanaTokens.length} boosted Solana tokens`);
+
+      for (const token of solanaTokens.slice(0, 10)) {
+        const boostAmount = token.totalAmount ?? token.amount ?? 0;
+        emit({
+          type: "boost_detected",
+          tokenMint: token.tokenAddress,
+          source: "dexscreener",
+          data: { boostAmount, description: token.description },
+          timestamp: Date.now(),
+          urgency: Math.min(10, Math.max(3, Math.floor(boostAmount / 100))),
+        }).catch(() => {});
+      }
     }
   } catch (error) {
     console.error("[DexBoosts] Fetch error:", error);
