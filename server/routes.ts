@@ -7262,46 +7262,45 @@ async function restoreMonitoring() {
     const status = await storage.getMonitoringStatus();
     console.log("Checking monitoring status on startup:", status.isActive ? "ACTIVE" : "INACTIVE", "webhookId:", status.webhookId || "none");
     
-    if (status.isActive && status.webhookId) {
-      const currentUrl = getWebhookUrl();
-      console.log("Monitoring was active, updating webhook URL to:", currentUrl);
-      
-      // Get all enabled monitored wallets
-      const allWallets = await storage.getAllMonitoredWallets();
-      const walletAddresses = allWallets.map(w => w.walletAddress);
-      console.log("Found", walletAddresses.length, "enabled monitored wallet(s)");
-      
-      // If no wallets to monitor, deactivate monitoring
-      if (walletAddresses.length === 0) {
+    const allWallets = await storage.getAllMonitoredWallets();
+    const walletAddresses = allWallets.filter(w => w.enabled).map(w => w.walletAddress);
+    const uniqueAddresses = [...new Set(walletAddresses)];
+
+    if (uniqueAddresses.length === 0) {
+      if (status.isActive && status.webhookId) {
         console.log("No enabled wallets to monitor, deactivating monitoring");
         await deleteWebhook(status.webhookId);
         await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
+      }
+      return;
+    }
+
+    const currentUrl = getWebhookUrl();
+    const webhookSecret = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
+    const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
+
+    if (status.isActive && status.webhookId) {
+      console.log("Monitoring was active, updating webhook URL to:", currentUrl);
+      console.log("Found", uniqueAddresses.length, "enabled monitored wallet(s)");
+      
+      const updated = await updateWebhookUrl(status.webhookId, fullUrl, uniqueAddresses);
+      
+      if (updated) {
+        console.log("Webhook URL updated successfully");
         return;
       }
-      
-      const updated = await updateWebhookUrl(
-        status.webhookId, 
-        `${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`,
-        walletAddresses
-      );
-      
-      if (!updated) {
-        console.log("Failed to update webhook, recreating...");
-        const newWebhookId = await createWebhook(
-          `${currentUrl}?secret=${process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret"}`,
-          walletAddresses
-        );
-        
-        if (newWebhookId) {
-          await storage.updateMonitoringStatus({ webhookId: newWebhookId });
-          console.log("New webhook created:", newWebhookId);
-        } else {
-          console.error("Failed to recreate webhook on startup");
-          await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
-        }
-      } else {
-        console.log("Webhook URL updated successfully");
-      }
+      console.log("Failed to update existing webhook, recreating...");
+    } else {
+      console.log("Monitoring was inactive but found", uniqueAddresses.length, "enabled wallet(s), auto-starting...");
+    }
+
+    const newWebhookId = await createWebhook(fullUrl, uniqueAddresses);
+    if (newWebhookId) {
+      await storage.updateMonitoringStatus({ isActive: true, webhookId: newWebhookId });
+      console.log("Webhook created and monitoring activated:", newWebhookId);
+    } else {
+      console.error("Failed to create webhook on startup");
+      await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
     }
   } catch (error) {
     console.error("Error restoring monitoring:", error);
