@@ -4269,9 +4269,101 @@ export async function chatWithAI(
     createdAt: m.createdAt,
   }));
 
-  console.log(`[ChatWithAI] Loading snapshots...`);
+  console.log(`[ChatWithAI] Loading snapshots and learned context...`);
   const snapshots = await getAllSnapshots();
   const snapshotsWithOutcomes = await getSnapshotsWithOutcomes();
+  
+  let learnedPatternsContext = "";
+  let accuracySummary = "";
+  try {
+    const [patternsResult, accuracyResult] = await Promise.all([
+      import("./adaptive-scoring").then(m => m.discoverPatterns()).catch(() => []),
+      import("./ai-accuracy").then(m => m.getAccuracySummaryForChat(null)).catch(() => ""),
+    ]);
+    
+    if (patternsResult && patternsResult.length > 0) {
+      learnedPatternsContext = `\nLEARNED PATTERNS (from ${patternsResult.reduce((a: number, p: any) => a + p.occurrences, 0)} resolved predictions):\n` +
+        patternsResult.slice(0, 5).map((p: any) => 
+          `- ${p.pattern}: ${(p.successRate * 100).toFixed(0)}% success (${p.occurrences} samples, avg ${p.avgMultiplier.toFixed(1)}x)`
+        ).join('\n');
+    }
+    
+    if (accuracyResult && !accuracyResult.includes("don't have enough")) {
+      accuracySummary = `\nMY TRACK RECORD:\n${accuracyResult}`;
+    }
+  } catch (err) {
+    // Non-critical, continue without learned context
+  }
+  
+  // Build similar-token outcome summary from historical data
+  let outcomePatternContext = "";
+  if (snapshotsWithOutcomes.length >= 3) {
+    const buckets: Record<string, { count: number; wins: number; totalMult: number; examples: string[] }> = {};
+    
+    for (const s of snapshotsWithOutcomes) {
+      const mult = s.finalMultiplier || 0;
+      const isWin = mult >= 1.5;
+      
+      // Bucket by holder concentration
+      const topHolder = (s as any).topHolderPercent;
+      if (topHolder != null) {
+        const key = topHolder > 40 ? "top10_holders_above_40pct" : topHolder > 20 ? "top10_holders_20_40pct" : "top10_holders_below_20pct";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0, examples: [] };
+        buckets[key].count++;
+        if (isWin) buckets[key].wins++;
+        buckets[key].totalMult += mult;
+        if (buckets[key].examples.length < 2) buckets[key].examples.push(`${s.tokenSymbol}(${mult.toFixed(1)}x)`);
+      }
+      
+      // Bucket by liquidity
+      if (s.liquidity != null) {
+        const key = s.liquidity < 10000 ? "liquidity_under_10k" : s.liquidity < 50000 ? "liquidity_10k_50k" : "liquidity_above_50k";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0, examples: [] };
+        buckets[key].count++;
+        if (isWin) buckets[key].wins++;
+        buckets[key].totalMult += mult;
+        if (buckets[key].examples.length < 2) buckets[key].examples.push(`${s.tokenSymbol}(${mult.toFixed(1)}x)`);
+      }
+      
+      // Bucket by token age
+      if ((s as any).tokenAgeMinutes != null) {
+        const ageHrs = (s as any).tokenAgeMinutes / 60;
+        const key = ageHrs < 1 ? "age_under_1hr" : ageHrs < 24 ? "age_1hr_24hr" : "age_over_24hr";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0, examples: [] };
+        buckets[key].count++;
+        if (isWin) buckets[key].wins++;
+        buckets[key].totalMult += mult;
+        if (buckets[key].examples.length < 2) buckets[key].examples.push(`${s.tokenSymbol}(${mult.toFixed(1)}x)`);
+      }
+      
+      // Bucket by market cap range
+      if (s.marketCap != null) {
+        const key = s.marketCap < 50000 ? "mcap_under_50k" : s.marketCap < 500000 ? "mcap_50k_500k" : "mcap_above_500k";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0, examples: [] };
+        buckets[key].count++;
+        if (isWin) buckets[key].wins++;
+        buckets[key].totalMult += mult;
+        if (buckets[key].examples.length < 2) buckets[key].examples.push(`${s.tokenSymbol}(${mult.toFixed(1)}x)`);
+      }
+    }
+    
+    const significantBuckets = Object.entries(buckets)
+      .filter(([_, b]) => b.count >= 3)
+      .sort((a, b) => b[1].count - a[1].count)
+      .slice(0, 8);
+    
+    if (significantBuckets.length > 0) {
+      outcomePatternContext = `\nOUTCOME PATTERNS FROM MY DATA (use these instead of generic assumptions):\n` +
+        significantBuckets.map(([key, b]) => {
+          const label = key.replace(/_/g, ' ');
+          const winRate = ((b.wins / b.count) * 100).toFixed(0);
+          const avgMult = (b.totalMult / b.count).toFixed(1);
+          return `- ${label}: ${b.count} tokens tracked, ${winRate}% hit 1.5x+, avg ${avgMult}x (e.g. ${b.examples.join(', ')})`;
+        }).join('\n') +
+        `\nIMPORTANT: Reference these actual stats when analyzing tokens. Say things like "I've tracked ${snapshotsWithOutcomes.length} tokens with known outcomes..." instead of generic warnings.`;
+    }
+  }
+  
   console.log(`[ChatWithAI] Loaded ${snapshots.length} snapshots, ${snapshotsWithOutcomes.length} with outcomes`);
   
   const userPrefs = await getUserPreferences(userId);
@@ -4390,9 +4482,26 @@ CURRENT STATS:
 - Tokens with outcomes: ${snapshotsWithOutcomes.length}
 
 RECENT TOKENS (last 5):
-${snapshots.slice(0, 5).map(s => `- ${s.tokenSymbol}: score ${s.aiScore || 'N/A'}, MC $${s.marketCap ? Math.round(s.marketCap / 1000) + 'K' : 'N/A'}${s.hasTwitter ? ', has Twitter' : ''}${s.finalMultiplier ? `, ${s.finalMultiplier.toFixed(1)}x` : ''}`).join('\n')}
+${snapshots.slice(0, 5).map(s => {
+  let detail = `- ${s.tokenSymbol}: score ${s.aiScore || 'N/A'}, MC $${s.marketCap ? Math.round(s.marketCap / 1000) + 'K' : 'N/A'}`;
+  if (s.liquidity) detail += `, liq $${Math.round(s.liquidity / 1000)}K`;
+  if (s.hasTwitter) detail += ', has Twitter';
+  if (s.finalMultiplier) detail += `, outcome: ${s.finalMultiplier.toFixed(1)}x`;
+  // Parse aiAnalysis for richer context
+  if (s.aiAnalysis) {
+    try {
+      const parsed = JSON.parse(s.aiAnalysis);
+      if (parsed.greenFlags?.length) detail += ` | Positives: ${parsed.greenFlags.slice(0, 2).join(', ')}`;
+      if (parsed.redFlags?.length) detail += ` | Risks: ${parsed.redFlags.slice(0, 2).join(', ')}`;
+    } catch {}
+  }
+  return detail;
+}).join('\n')}
 
 ${snapshotsWithOutcomes.length > 0 ? `PERFORMANCE SUMMARY: ${snapshotsWithOutcomes.length} tokens with outcomes, avg multiplier ${(snapshotsWithOutcomes.reduce((a, s) => a + (s.finalMultiplier || 0), 0) / snapshotsWithOutcomes.length).toFixed(1)}x` : ''}
+${outcomePatternContext}
+${learnedPatternsContext}
+${accuracySummary}
 ${crossChannelNote}
 
 Stay in character. Be helpful but skeptical. Give opinions, not financial advice.`;

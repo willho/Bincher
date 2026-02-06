@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink, Loader2 } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useState, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
@@ -213,6 +213,20 @@ export default function TokenPage() {
     }
   });
 
+  function parseAiAnalysis(raw: string): { reasoning: string; redFlags: string[]; greenFlags: string[] } | null {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.reasoning === "string") {
+        return {
+          reasoning: parsed.reasoning,
+          redFlags: Array.isArray(parsed.redFlags) ? parsed.redFlags : [],
+          greenFlags: Array.isArray(parsed.greenFlags) ? parsed.greenFlags : [],
+        };
+      }
+    } catch {}
+    return null;
+  }
+
   function formatTimeAgo(timestamp: number): string {
     const now = Math.floor(Date.now() / 1000);
     const diff = now - timestamp;
@@ -236,20 +250,37 @@ export default function TokenPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Link href="/trading">
-          <Button variant="ghost" size="icon" data-testid="button-back">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <div>
-          <h1 className="text-2xl font-bold" data-testid="text-token-symbol">
-            {isLoading ? <Skeleton className="h-8 w-24" /> : snapshot?.tokenSymbol || "Unknown"}
-          </h1>
-          <p className="text-muted-foreground text-sm font-mono">
-            {tokenMint.slice(0, 8)}...{tokenMint.slice(-6)}
-          </p>
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-4">
+          <Link href="/trading">
+            <Button variant="ghost" size="icon" data-testid="button-back">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+          </Link>
+          <div>
+            <h1 className="text-2xl font-bold" data-testid="text-token-symbol">
+              {isLoading ? <Skeleton className="h-8 w-24" /> : snapshot?.tokenSymbol || "Unknown"}
+            </h1>
+            <p className="text-muted-foreground text-sm font-mono">
+              {tokenMint.slice(0, 8)}...{tokenMint.slice(-6)}
+            </p>
+          </div>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
+            queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/trades`] });
+            queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/signal-sources`] });
+            queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/top-holders`] });
+            toast({ description: "Refreshing token data..." });
+          }}
+          data-testid="button-refresh-token"
+        >
+          <RefreshCw className="h-4 w-4 mr-2" />
+          Refresh
+        </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
@@ -388,32 +419,68 @@ export default function TokenPage() {
                 <Skeleton className="h-4 w-3/4" />
                 <Skeleton className="h-4 w-5/6" />
               </div>
-            ) : snapshot?.aiAnalysis ? (
-              <div className="space-y-4">
-                <p className="text-sm whitespace-pre-wrap">{snapshot.aiAnalysis}</p>
-                {snapshot.aiScore && (
-                  <div className="flex items-center gap-4 pt-2 border-t">
-                    <div className="flex items-center gap-2">
-                      <Flame className="h-4 w-4 text-orange-500" />
-                      <span className="text-sm text-muted-foreground">Heat Score:</span>
-                      <Badge variant={snapshot.aiScore >= 70 ? "default" : snapshot.aiScore >= 40 ? "secondary" : "destructive"}>
-                        {snapshot.aiScore}/100
-                      </Badge>
+            ) : snapshot?.aiAnalysis ? (() => {
+              const analysis = parseAiAnalysis(snapshot.aiAnalysis);
+              return (
+                <div className="space-y-4">
+                  {analysis?.reasoning ? (
+                    <p className="text-sm" data-testid="text-ai-reasoning">{analysis.reasoning}</p>
+                  ) : (
+                    <p className="text-sm whitespace-pre-wrap">{snapshot.aiAnalysis}</p>
+                  )}
+                  {analysis?.greenFlags && analysis.greenFlags.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-green-500">Positive Signals</p>
+                      <div className="flex flex-wrap gap-1">
+                        {analysis.greenFlags.map((flag: string, i: number) => (
+                          <Badge key={i} variant="secondary" className="text-xs" data-testid={`badge-green-flag-${i}`}>
+                            {flag}
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={() => analyzeTokenMutation.mutate()}
-                  disabled={analyzeTokenMutation.isPending}
-                  data-testid="button-reanalyze-token"
-                >
-                  {analyzeTokenMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Shell className="h-4 w-4 mr-2" />}
-                  {analyzeTokenMutation.isPending ? "Analyzing..." : "Re-analyze"}
-                </Button>
-              </div>
-            ) : (
+                  )}
+                  {analysis?.redFlags && analysis.redFlags.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-red-500">Risk Factors</p>
+                      <div className="flex flex-wrap gap-1">
+                        {analysis.redFlags.map((flag: string, i: number) => (
+                          <Badge key={i} variant="destructive" className="text-xs" data-testid={`badge-red-flag-${i}`}>
+                            {flag}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {snapshot.aiScore != null && (
+                    <div className="flex items-center gap-4 pt-2 border-t flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <Flame className="h-4 w-4 text-orange-500" />
+                        <span className="text-sm text-muted-foreground">Heat Score:</span>
+                        <Badge variant={snapshot.aiScore >= 70 ? "default" : snapshot.aiScore >= 40 ? "secondary" : "destructive"}>
+                          {snapshot.aiScore}/100
+                        </Badge>
+                      </div>
+                      {snapshot.aiScoredAt ? (
+                        <span className="text-xs text-muted-foreground">
+                          Scored {formatTimeAgo(snapshot.aiScoredAt)}
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => analyzeTokenMutation.mutate()}
+                    disabled={analyzeTokenMutation.isPending}
+                    data-testid="button-reanalyze-token"
+                  >
+                    {analyzeTokenMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Shell className="h-4 w-4 mr-2" />}
+                    {analyzeTokenMutation.isPending ? "Analyzing..." : "Re-analyze"}
+                  </Button>
+                </div>
+              );
+            })() : (
               <div className="text-center py-4 text-muted-foreground space-y-3">
                 <Shell className="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p className="text-sm">No analysis available yet.</p>
@@ -670,32 +737,27 @@ export default function TokenPage() {
 
       {/* Bubblemaps Holder Distribution */}
       <Card data-testid="card-bubblemaps">
-        <CardHeader className="flex flex-row items-center justify-between gap-2">
-          <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Holder Distribution (Bubblemaps)
-            </CardTitle>
-            <CardDescription>Visualize token holder concentration</CardDescription>
-          </div>
-          <a
-            href={`https://app.bubblemaps.io/sol/token/${tokenMint}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Button variant="outline" size="sm" data-testid="link-bubblemaps-open">
-              <ExternalLink className="h-4 w-4 mr-2" />
-              Open Full View
-            </Button>
-          </a>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Users className="h-4 w-4" />
+            Holder Distribution (Bubblemaps)
+          </CardTitle>
+          <CardDescription>Visualize token holder concentration</CardDescription>
         </CardHeader>
-        <CardContent className="p-0 overflow-hidden rounded-b-lg">
-          <iframe
-            src={`https://iframe.bubblemaps.io/map?address=${tokenMint}&chain=solana&partnerId=demo`}
-            className="w-full h-[400px] border-0"
-            title="Bubblemaps Token Distribution"
-            data-testid="iframe-bubblemaps"
-          />
+        <CardContent>
+          <div className="text-center py-4 text-muted-foreground space-y-3">
+            <p className="text-sm">View holder distribution and wallet clustering on Bubblemaps</p>
+            <a
+              href={`https://app.bubblemaps.io/sol/token/${tokenMint}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Button variant="outline" size="sm" data-testid="link-bubblemaps-open">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open Bubblemaps
+              </Button>
+            </a>
+          </div>
         </CardContent>
       </Card>
 
