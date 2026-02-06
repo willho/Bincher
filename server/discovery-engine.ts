@@ -689,6 +689,33 @@ export async function runDailyTuning(): Promise<{
       console.error("[Discovery] Self-improvement cycle failed:", err);
     }
     
+    let computeTasksGenerated = 0;
+    try {
+      const { generatePriceSlopeTasks, generateHolderOverlapTasks, generateWalletCorrelationTasks } = await import("./compute-manager");
+      const priceTasks = await generatePriceSlopeTasks(50);
+      
+      const highPriorityTokens = await db.select({ tokenMint: tokenDataPool.tokenMint })
+        .from(tokenDataPool)
+        .where(gt(tokenDataPool.volume24h, 50000))
+        .limit(20);
+      const holderTasks = highPriorityTokens.length > 0
+        ? await generateHolderOverlapTasks(highPriorityTokens.map(t => t.tokenMint))
+        : 0;
+      
+      const activeWallets = await db.select({ walletAddress: walletSummaries.walletAddress })
+        .from(walletSummaries)
+        .where(gt(walletSummaries.totalTrades, 5))
+        .limit(30);
+      const correlationTasks = activeWallets.length > 0
+        ? await generateWalletCorrelationTasks(activeWallets.map(w => w.walletAddress))
+        : 0;
+      
+      computeTasksGenerated = priceTasks + holderTasks + correlationTasks;
+      console.log(`[Discovery] Generated ${computeTasksGenerated} compute tasks (${priceTasks} price_slope, ${holderTasks} holder_overlap, ${correlationTasks} wallet_correlation)`);
+    } catch (err) {
+      console.error("[Discovery] Compute task generation failed:", err);
+    }
+    
     await db.update(discoveryJobRuns)
       .set({
         completedAt: Math.floor(Date.now() / 1000),
@@ -696,6 +723,7 @@ export async function runDailyTuning(): Promise<{
         status: "completed",
         summary: JSON.stringify({
           selfImprovement: selfImprovement || null,
+          computeTasksGenerated,
         }),
       })
       .where(eq(discoveryJobRuns.id, run.id));

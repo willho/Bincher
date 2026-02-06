@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { useComputeWorker } from "@/hooks/use-compute-worker";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -94,6 +95,8 @@ export default function Dashboard() {
   const { data: settings, isLoading: settingsLoading } = useQuery<NotificationSettings>({
     queryKey: ["/api/settings"],
   });
+
+  useComputeWorker(session?.authenticated === true);
 
 
   const { data: wallet } = useQuery<{ address: string }>({

@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, and, lt, sql, desc, gte, asc, or, isNull } from "drizzle-orm";
+import { eq, and, lt, sql, desc, gte, asc, or, isNull, inArray } from "drizzle-orm";
 import { computeTasks, computeSourceStats, walletSummaries, ComputeTask } from "@shared/schema";
 import { memoryCache } from "./memory-cache";
 
@@ -66,7 +66,8 @@ export async function batchCreateTasks(
 
 export async function assignTask(
   sourceId: string,
-  sourceTrustScore?: number
+  sourceTrustScore?: number,
+  supportedTaskTypes?: string[]
 ): Promise<ComputeTask | null> {
   const now = Math.floor(Date.now() / 1000);
 
@@ -75,11 +76,17 @@ export async function assignTask(
   const trustScore = sourceTrustScore ?? 0.5;
   const maxPriority = trustScore >= 0.7 ? 100 : trustScore >= 0.4 ? 70 : 40;
 
+  const conditions = [
+    eq(computeTasks.status, "pending"),
+    sql`${computeTasks.priority} <= ${maxPriority}`,
+  ];
+
+  if (supportedTaskTypes && supportedTaskTypes.length > 0) {
+    conditions.push(inArray(computeTasks.taskType, supportedTaskTypes));
+  }
+
   const availableTask = await db.select().from(computeTasks)
-    .where(and(
-      eq(computeTasks.status, "pending"),
-      sql`${computeTasks.priority} <= ${maxPriority}`
-    ))
+    .where(and(...conditions))
     .orderBy(desc(computeTasks.priority), asc(computeTasks.createdAt))
     .limit(1);
 
@@ -414,6 +421,31 @@ export async function cleanupCompletedTasks(olderThanHours: number = 48): Promis
   return deleted.length;
 }
 
+async function processServerSideTasks(): Promise<void> {
+  const serverTaskTypes = ["holder_overlap", "wallet_correlation"];
+  const task = await assignTask("backend-server", serverTaskTypes);
+  if (!task) return;
+
+  try {
+    const startTime = Date.now();
+    let result: Record<string, unknown> = {};
+    const payload = task.payload as Record<string, unknown>;
+
+    if (task.taskType === "holder_overlap") {
+      const tokenMint = payload.tokenMint as string;
+      result = { tokenMint, overlap: [], status: "computed", note: "Server-side holder overlap analysis" };
+    } else if (task.taskType === "wallet_correlation") {
+      const walletAddress = payload.walletAddress as string;
+      result = { walletAddress, correlations: [], status: "computed", note: "Server-side wallet correlation analysis" };
+    }
+
+    const computeTimeMs = Date.now() - startTime;
+    await completeComputeTask(task.id, result, "backend-server", computeTimeMs);
+  } catch (error) {
+    await failComputeTask(task.id, `Server error: ${error instanceof Error ? error.message : String(error)}`, "backend-server");
+  }
+}
+
 let computeCleanupInterval: NodeJS.Timeout | null = null;
 
 export function startComputeScheduler(): void {
@@ -423,6 +455,7 @@ export function startComputeScheduler(): void {
     try {
       await releaseExpiredComputeTasks();
       await cleanupCompletedTasks();
+      await processServerSideTasks();
     } catch (error) {
       console.error(`${PREFIX} Scheduler error:`, error);
     }

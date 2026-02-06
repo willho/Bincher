@@ -6853,12 +6853,27 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/compute/worker-config", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      res.json({
+        supportedTaskTypes: ["price_slope"],
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get worker config" });
+    }
+  });
+
   app.get("/api/compute/task", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const { assignTask, getSourceTrustScore } = await import("./compute-manager");
       const sourceId = `browser-${req.userId}`;
       const trustScore = await getSourceTrustScore(sourceId);
-      const task = await assignTask(sourceId, trustScore);
+
+      const supportedTypes = req.query.types
+        ? (req.query.types as string).split(",")
+        : undefined;
+
+      const task = await assignTask(sourceId, trustScore, supportedTypes);
       res.json({ task, trustScore });
     } catch (error) {
       console.error("Error assigning compute task:", error);
@@ -6906,13 +6921,15 @@ export async function registerRoutes(
 
   app.post("/api/admin/compute/generate-tasks", requireAuth, async (req, res) => {
     try {
-      const { generatePriceSlopeTasks, generateHolderOverlapTasks } = await import("./compute-manager");
-      const { taskType, tokenMints } = req.body;
+      const { generatePriceSlopeTasks, generateHolderOverlapTasks, generateWalletCorrelationTasks } = await import("./compute-manager");
+      const { taskType, tokenMints, walletAddresses } = req.body;
       let created = 0;
       if (taskType === "price_slope") {
         created = await generatePriceSlopeTasks(req.body.limit || 20);
       } else if (taskType === "holder_overlap" && tokenMints) {
         created = await generateHolderOverlapTasks(tokenMints);
+      } else if (taskType === "wallet_correlation" && walletAddresses) {
+        created = await generateWalletCorrelationTasks(walletAddresses);
       }
       res.json({ created });
     } catch (error) {
