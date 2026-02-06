@@ -7243,7 +7243,7 @@ export async function registerRoutes(
   });
 
   // Restore monitoring on startup if it was active
-  await restoreMonitoring();
+  restoreMonitoring();
   
   // Start the trade processor to handle pending buys
   startTradeProcessor();
@@ -7257,10 +7257,63 @@ export async function registerRoutes(
   return httpServer;
 }
 
+let monitoringRetryTimer: ReturnType<typeof setInterval> | null = null;
+
+async function attemptWebhookCreation(fullUrl: string, uniqueAddresses: string[]): Promise<string | null> {
+  const delays = [0, 5000, 15000, 45000];
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt] > 0) {
+      console.log(`[Monitoring] Retry ${attempt + 1}/${delays.length - 1} in ${delays[attempt] / 1000}s...`);
+      await new Promise(r => setTimeout(r, delays[attempt]));
+    }
+    const webhookId = await createWebhook(fullUrl, uniqueAddresses);
+    if (webhookId) return webhookId;
+    console.warn(`[Monitoring] Webhook creation attempt ${attempt + 1}/${delays.length} failed`);
+  }
+  return null;
+}
+
+function startMonitoringRetryLoop() {
+  if (monitoringRetryTimer) return;
+  const RETRY_INTERVAL = 5 * 60 * 1000;
+  console.log("[Monitoring] Starting background retry (every 5min) until webhook is created");
+  monitoringRetryTimer = setInterval(async () => {
+    try {
+      const status = await storage.getMonitoringStatus();
+      if (status.isActive && status.webhookId) {
+        console.log("[Monitoring] Webhook now active, stopping background retry");
+        if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
+        return;
+      }
+      const allWallets = await storage.getAllMonitoredWallets();
+      const uniqueAddresses = [...new Set(allWallets.filter(w => w.enabled).map(w => w.walletAddress))];
+      if (uniqueAddresses.length === 0) {
+        console.log("[Monitoring] No enabled wallets, stopping background retry");
+        if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
+        return;
+      }
+      const currentUrl = getWebhookUrl();
+      const webhookSecret = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
+      const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
+      console.log(`[Monitoring] Background retry: creating webhook for ${uniqueAddresses.length} wallet(s) -> ${currentUrl}`);
+      const webhookId = await createWebhook(fullUrl, uniqueAddresses);
+      if (webhookId) {
+        await storage.updateMonitoringStatus({ isActive: true, webhookId });
+        console.log("[Monitoring] Background retry succeeded, webhook active:", webhookId);
+        if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
+      } else {
+        console.warn("[Monitoring] Background retry failed, will try again in 5min");
+      }
+    } catch (error) {
+      console.error("[Monitoring] Background retry error:", error);
+    }
+  }, RETRY_INTERVAL);
+}
+
 async function restoreMonitoring() {
   try {
     const status = await storage.getMonitoringStatus();
-    console.log("Checking monitoring status on startup:", status.isActive ? "ACTIVE" : "INACTIVE", "webhookId:", status.webhookId || "none");
+    console.log("[Monitoring] Startup check:", status.isActive ? "ACTIVE" : "INACTIVE", "webhookId:", status.webhookId || "none");
     
     const allWallets = await storage.getAllMonitoredWallets();
     const walletAddresses = allWallets.filter(w => w.enabled).map(w => w.walletAddress);
@@ -7268,7 +7321,7 @@ async function restoreMonitoring() {
 
     if (uniqueAddresses.length === 0) {
       if (status.isActive && status.webhookId) {
-        console.log("No enabled wallets to monitor, deactivating monitoring");
+        console.log("[Monitoring] No enabled wallets, deactivating");
         await deleteWebhook(status.webhookId);
         await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
       }
@@ -7278,31 +7331,31 @@ async function restoreMonitoring() {
     const currentUrl = getWebhookUrl();
     const webhookSecret = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
     const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
+    console.log(`[Monitoring] Webhook URL: ${currentUrl}, wallets: ${uniqueAddresses.length}`);
 
     if (status.isActive && status.webhookId) {
-      console.log("Monitoring was active, updating webhook URL to:", currentUrl);
-      console.log("Found", uniqueAddresses.length, "enabled monitored wallet(s)");
-      
+      console.log("[Monitoring] Was active, updating existing webhook...");
       const updated = await updateWebhookUrl(status.webhookId, fullUrl, uniqueAddresses);
-      
       if (updated) {
-        console.log("Webhook URL updated successfully");
+        console.log("[Monitoring] Webhook updated successfully");
         return;
       }
-      console.log("Failed to update existing webhook, recreating...");
+      console.log("[Monitoring] Update failed, recreating...");
     } else {
-      console.log("Monitoring was inactive but found", uniqueAddresses.length, "enabled wallet(s), auto-starting...");
+      console.log(`[Monitoring] Was inactive, auto-starting for ${uniqueAddresses.length} wallet(s)...`);
     }
 
-    const newWebhookId = await createWebhook(fullUrl, uniqueAddresses);
+    const newWebhookId = await attemptWebhookCreation(fullUrl, uniqueAddresses);
     if (newWebhookId) {
       await storage.updateMonitoringStatus({ isActive: true, webhookId: newWebhookId });
-      console.log("Webhook created and monitoring activated:", newWebhookId);
+      console.log("[Monitoring] Webhook created and active:", newWebhookId);
     } else {
-      console.error("Failed to create webhook on startup");
+      console.error("[Monitoring] All webhook creation attempts failed");
       await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
+      startMonitoringRetryLoop();
     }
   } catch (error) {
-    console.error("Error restoring monitoring:", error);
+    console.error("[Monitoring] Error restoring monitoring:", error);
+    startMonitoringRetryLoop();
   }
 }
