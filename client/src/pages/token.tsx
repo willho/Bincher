@@ -61,6 +61,9 @@ export default function TokenPage() {
   const [, navigate] = useLocation();
   const { navigateToWallet, isNavigating } = useWalletNavigation();
 
+  const lastRefreshRef = useRef<number>(0);
+  const REFRESH_COOLDOWN_MS = 60000;
+
   // Touch token on mount to record user view for discovery signals
   useEffect(() => {
     if (tokenMint) {
@@ -270,6 +273,14 @@ export default function TokenPage() {
           variant="outline"
           size="sm"
           onClick={() => {
+            const now = Date.now();
+            const elapsed = now - lastRefreshRef.current;
+            if (elapsed < REFRESH_COOLDOWN_MS) {
+              const secsLeft = Math.ceil((REFRESH_COOLDOWN_MS - elapsed) / 1000);
+              toast({ description: `Data is up to date. Try again in ${secsLeft}s.` });
+              return;
+            }
+            lastRefreshRef.current = now;
             queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/trades`] });
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/signal-sources`] });
@@ -694,16 +705,6 @@ export default function TokenPage() {
                 </Button>
               </a>
               <a 
-                href={`https://app.bubblemaps.io/sol/token/${tokenMint}`} 
-                target="_blank" 
-                rel="noopener noreferrer"
-              >
-                <Button variant="outline" size="sm" data-testid="link-bubblemaps">
-                  <Users className="h-4 w-4 mr-2" />
-                  Bubblemaps
-                </Button>
-              </a>
-              <a 
                 href={`https://birdeye.so/token/${tokenMint}?chain=solana`} 
                 target="_blank" 
                 rel="noopener noreferrer"
@@ -734,32 +735,6 @@ export default function TokenPage() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Bubblemaps Holder Distribution */}
-      <Card data-testid="card-bubblemaps">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Users className="h-4 w-4" />
-            Holder Distribution (Bubblemaps)
-          </CardTitle>
-          <CardDescription>Visualize token holder concentration</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="text-center py-4 text-muted-foreground space-y-3">
-            <p className="text-sm">View holder distribution and wallet clustering on Bubblemaps</p>
-            <a
-              href={`https://app.bubblemaps.io/sol/token/${tokenMint}`}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <Button variant="outline" size="sm" data-testid="link-bubblemaps-open">
-                <ExternalLink className="h-4 w-4 mr-2" />
-                Open Bubblemaps
-              </Button>
-            </a>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Trade History */}
       <Card data-testid="card-trade-history">

@@ -549,6 +549,7 @@ import {
 const scoreResultSchema = z.object({
   score: z.number().int().min(0).max(100),
   reasoning: z.string(),
+  summary: z.string().optional().default(""),
   redFlags: z.array(z.string()).default([]),
   greenFlags: z.array(z.string()).default([]),
 });
@@ -742,6 +743,7 @@ ${JSON.stringify(patterns, null, 2)}
 {
   "score": <0-100 integer>,
   "reasoning": "<brief 2-3 sentence explanation>",
+  "summary": "<1-2 sentences connecting the actual numbers to what they mean, e.g. 'This token has $12K liquidity with 45% top-10 holder concentration. Based on similar tokens I've tracked, this combination typically results in...' Reference specific data points.>",
   "redFlags": ["<list any concerns>"],
   "greenFlags": ["<list positive indicators>"]
 }
@@ -757,6 +759,8 @@ Key factors to consider:
 - Price patterns from OHLC data (if provided) - look for volatility, trends, support levels
 - Whale activity - recent whale buys are positive signals, high concentration is risky
 
+The "summary" field is critical - connect the actual token metrics (liquidity, holders, market cap, age) to what they indicate. Be specific with numbers, not generic warnings.
+
 Return ONLY valid JSON, no markdown or explanation outside the JSON.`;
 
   return prompt;
@@ -765,6 +769,7 @@ Return ONLY valid JSON, no markdown or explanation outside the JSON.`;
 export interface ScoreResult {
   score: number;
   reasoning: string;
+  summary: string;
   redFlags: string[];
   greenFlags: string[];
 }

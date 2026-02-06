@@ -71,8 +71,8 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **System Insight Bus**: Cross-system knowledge sharing via `systemInsights` table. Facilitates LLM→Trigger flow for rule creation and Trigger→LLM flow for AI context injection and rule performance feedback.
 - **Admin Chat Interface**: Conversational AI interface for system monitoring with dynamic system context injection, summary cards, and recent observations.
 - **Discovery-Enhanced Strategy Analysis**: Signal wallet strategy analysis integrates discovery engine insights for behavior classification and leader/follower relationships, with smart auto-caching.
-- **Token Detail Page**: Enhanced `/trading/:token` page with DexScreener price chart, Bubblemaps holder distribution, external resource links, and Paper Buy/Sell buttons.
-- **Signal Wallet Page Enhancements**: Bubblemaps wallet activity iframe, Paper Copy button for simulated copy trading, and improved visibility of Trade History.
+- **Token Detail Page**: Enhanced `/trading/:token` page with DexScreener price chart, external resource links, and Paper Buy/Sell buttons.
+- **Signal Wallet Page Enhancements**: Paper Copy button for simulated copy trading, and improved visibility of Trade History.
 
 ## External Dependencies
 
@@ -84,3 +84,6 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **DexScreener**: Secondary source for token metadata (price, market cap, liquidity, FDV, volume) and boost tracking.
 - **GeckoTerminal**: Primary token metadata provider for trending tokens and new Solana pools.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
+
+## Paused Tasks / Backlog
+- **Bubblemaps Integration**: Embed Bubblemaps holder distribution and wallet activity iframes on token and signal wallet pages. Requires domain whitelisting with Bubblemaps for production embedding (demo partnerId only works on localhost). Re-add when whitelisting is available.
