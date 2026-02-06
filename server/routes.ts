@@ -4883,7 +4883,6 @@ export async function registerRoutes(
       const poolData = await getTokenData(tokenMint);
       
       if (poolData) {
-        // Return a snapshot-like response from pool data
         return res.json({
           tokenMint: poolData.tokenMint,
           tokenSymbol: poolData.tokenSymbol,
@@ -4896,6 +4895,29 @@ export async function registerRoutes(
           priceChange24h: poolData.priceChange24h,
           source: 'tokenDataPool',
           lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
+          isFallback: true,
+        });
+      }
+      
+      const swapRecord = await db.select({
+        fromToken: swaps.fromToken,
+        fromTokenSymbol: swaps.fromTokenSymbol,
+        toToken: swaps.toToken,
+        toTokenSymbol: swaps.toTokenSymbol,
+      }).from(swaps)
+        .where(or(eq(swaps.fromToken, tokenMint), eq(swaps.toToken, tokenMint)))
+        .orderBy(desc(swaps.timestamp))
+        .limit(1);
+      
+      if (swapRecord.length > 0) {
+        const s = swapRecord[0];
+        const symbol = s.fromToken === tokenMint ? s.fromTokenSymbol : s.toTokenSymbol;
+        return res.json({
+          tokenMint,
+          tokenSymbol: symbol && symbol !== "???" ? symbol : tokenMint.slice(0, 6),
+          tokenName: null,
+          priceUsd: null,
+          source: 'swapRecord',
           isFallback: true,
         });
       }
@@ -5177,19 +5199,27 @@ export async function registerRoutes(
   app.post("/api/ai/chat", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       console.log(`[AIChat] Request from userId: ${req.userId}`);
-      const { message } = req.body;
+      const { message, pageContext } = req.body;
       if (!message || typeof message !== 'string') {
         console.log(`[AIChat] Invalid message format`);
         return res.status(400).json({ error: "Message is required" });
       }
       
-      console.log(`[AIChat] Processing message: "${message.slice(0, 50)}..."`);
+      let enrichedMessage = message;
+      if (pageContext && typeof pageContext === 'string' && pageContext.startsWith('token:')) {
+        const contextMint = pageContext.replace('token:', '');
+        if (contextMint && !message.includes(contextMint)) {
+          enrichedMessage = `[Currently viewing token: ${contextMint}] ${message}`;
+        }
+      }
+      
+      console.log(`[AIChat] Processing message: "${enrichedMessage.slice(0, 80)}..."`);
       
       const { handleMessage } = await import("./intent-parser");
       const { isAIAvailable, getFallbackMessage } = await import("./ai-health");
       
       console.log(`[AIChat] Checking intent parser...`);
-      const intentResult = await handleMessage(req.userId!, message);
+      const intentResult = await handleMessage(req.userId!, enrichedMessage);
       
       if (intentResult.handled && intentResult.response) {
         console.log(`[AIChat] Intent handled directly`);
@@ -5207,7 +5237,7 @@ export async function registerRoutes(
       
       console.log(`[AIChat] Calling chatWithAI...`);
       const startTime = Date.now();
-      const response = await chatWithAI(req.userId!, message, 'web');
+      const response = await chatWithAI(req.userId!, enrichedMessage, 'web');
       const latency = Date.now() - startTime;
       console.log(`[AIChat] Response received in ${latency}ms`);
       

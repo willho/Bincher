@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink, Loader2 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useState, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
@@ -187,6 +187,27 @@ export default function TokenPage() {
     setShowConfirmDialog(false);
     setPendingPositionId(null);
   };
+
+  const analyzeTokenMutation = useMutation({
+    mutationFn: async () => {
+      const symbol = snapshot?.tokenSymbol || tokenMint?.slice(0, 8);
+      return apiRequest("POST", "/api/ai/chat", { 
+        message: `Analyze token ${symbol} (${tokenMint}). Give me your heat score and full analysis.`,
+        pageContext: `token:${tokenMint}`
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/ai/chat"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
+      }, 2000);
+      toast({ description: "Analysis requested! Results will appear shortly." });
+    },
+    onError: () => {
+      toast({ description: "Analysis failed. Try again in a moment.", variant: "destructive" });
+    }
+  });
 
   function formatTimeAgo(timestamp: number): string {
     const now = Math.floor(Date.now() / 1000);
@@ -377,12 +398,31 @@ export default function TokenPage() {
                     </div>
                   </div>
                 )}
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={() => analyzeTokenMutation.mutate()}
+                  disabled={analyzeTokenMutation.isPending}
+                  data-testid="button-reanalyze-token"
+                >
+                  {analyzeTokenMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Shell className="h-4 w-4 mr-2" />}
+                  {analyzeTokenMutation.isPending ? "Analyzing..." : "Re-analyze"}
+                </Button>
               </div>
             ) : (
-              <div className="text-center py-4 text-muted-foreground">
+              <div className="text-center py-4 text-muted-foreground space-y-3">
                 <Shell className="h-8 w-8 mx-auto mb-2 opacity-50" />
                 <p className="text-sm">No analysis available yet.</p>
-                <p className="text-xs mt-1">Ask me about this token in the chat!</p>
+                <Button 
+                  variant="default" 
+                  size="sm"
+                  onClick={() => analyzeTokenMutation.mutate()}
+                  disabled={analyzeTokenMutation.isPending}
+                  data-testid="button-analyze-token"
+                >
+                  {analyzeTokenMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Shell className="h-4 w-4 mr-2" />}
+                  {analyzeTokenMutation.isPending ? "Analyzing..." : "Run Analysis"}
+                </Button>
               </div>
             )}
           </CardContent>

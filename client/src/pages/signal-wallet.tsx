@@ -264,6 +264,14 @@ export default function SignalWalletPage() {
     },
   });
 
+  const hasAutoBackfilled = useRef(false);
+  useEffect(() => {
+    if (walletId && !hasAutoBackfilled.current) {
+      hasAutoBackfilled.current = true;
+      backfillMutation.mutate();
+    }
+  }, [walletId]);
+
   const walletAddress = activity?.wallet?.address;
 
   const { data: strategyData, isLoading: strategyLoading, refetch: refetchStrategy } = useQuery<{ analysis: StrategyAnalysis } | null>({
@@ -585,6 +593,18 @@ export default function SignalWalletPage() {
             {backfillMutation.isPending ? "Refreshing..." : "Refresh History"}
           </Button>
         </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Timeframe:</span>
+        <Tabs value={timeframe} onValueChange={setTimeframe}>
+          <TabsList>
+            <TabsTrigger value="24h" data-testid="tab-24h">24h</TabsTrigger>
+            <TabsTrigger value="7d" data-testid="tab-7d">7d</TabsTrigger>
+            <TabsTrigger value="30d" data-testid="tab-30d">30d</TabsTrigger>
+            <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -1023,17 +1043,7 @@ export default function SignalWalletPage() {
 
       <Card data-testid="card-trades-list">
         <CardHeader>
-          <div className="flex items-center justify-between flex-wrap gap-4">
-            <CardTitle>Trade History</CardTitle>
-            <Tabs value={timeframe} onValueChange={setTimeframe}>
-              <TabsList>
-                <TabsTrigger value="24h" data-testid="tab-24h">24h</TabsTrigger>
-                <TabsTrigger value="7d" data-testid="tab-7d">7d</TabsTrigger>
-                <TabsTrigger value="30d" data-testid="tab-30d">30d</TabsTrigger>
-                <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
+          <CardTitle>Trade History</CardTitle>
         </CardHeader>
         <CardContent>
           {trades.length === 0 ? (

@@ -100,7 +100,7 @@ export function PincherFooter() {
 
   const sendMessage = useMutation({
     mutationFn: (message: string) => 
-      apiRequest("POST", "/api/ai/chat", { message }),
+      apiRequest("POST", "/api/ai/chat", { message, pageContext }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/chat"] });
       // Invalidate all settings-related queries so UI reflects any changes Miss Pincher made
