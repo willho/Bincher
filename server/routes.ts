@@ -4888,6 +4888,51 @@ export async function registerRoutes(
     }
   });
 
+  // Score a token by mint address - creates snapshot on-the-fly if none exists
+  app.post("/api/ai/score-token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tokenMint = req.params.tokenMint as string;
+      const { getSnapshotByToken, createSnapshot, refreshScore } = await import("./ai");
+      
+      let snapshot = await getSnapshotByToken(tokenMint);
+      
+      if (!snapshot) {
+        const { fetchTokenWithFallback } = await import("./data-pool");
+        const tokenData = await fetchTokenWithFallback(tokenMint, 300);
+        
+        if (!tokenData.priceUsd && !tokenData.tokenSymbol) {
+          return res.status(404).json({ error: "Could not find token data. Try refreshing first." });
+        }
+        
+        const snapshotId = await createSnapshot({
+          tokenMint,
+          tokenSymbol: tokenData.tokenSymbol || tokenMint.slice(0, 6),
+          tokenName: tokenData.tokenName || "",
+          priceUsd: tokenData.priceUsd,
+          marketCap: tokenData.marketCap,
+          fdv: tokenData.fdv,
+          liquidity: tokenData.liquidity,
+          volume24h: tokenData.volume24h,
+          priceChange24h: tokenData.priceChange24h,
+        });
+        
+        snapshot = await import("./ai").then(ai => ai.getSnapshot(snapshotId));
+        if (!snapshot) {
+          return res.status(500).json({ error: "Failed to create snapshot" });
+        }
+      }
+      
+      const result = await refreshScore(snapshot.id);
+      if (!result) {
+        return res.status(500).json({ error: "Failed to score token" });
+      }
+      res.json(result);
+    } catch (error) {
+      console.error("Error scoring token by mint:", error);
+      res.status(500).json({ error: "Failed to score token" });
+    }
+  });
+
   app.get("/api/snapshots/token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const tokenMint = req.params.tokenMint as string;
@@ -5169,10 +5214,40 @@ export async function registerRoutes(
           },
         });
 
+      // Queue high-priority DexScreener fetch so token data loads quickly
+      const { getTokenData, addToFetchQueue } = await import("./data-pool");
+      const existing = await getTokenData(tokenMint);
+      if (!existing || !existing.priceUsd) {
+        await addToFetchQueue('dexscreener', tokenMint, 90, req.userId!);
+      }
+
       res.json({ success: true, viewedAt: now });
     } catch (error) {
       console.error("Error touching token:", error);
       res.status(500).json({ error: "Failed to touch token" });
+    }
+  });
+
+  // Refresh token - immediate DexScreener fetch for a specific token
+  app.post("/api/token/:mint/refresh", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const tokenMint = req.params.mint;
+      const { fetchTokenWithFallback } = await import("./data-pool");
+      const result = await fetchTokenWithFallback(tokenMint, 30);
+      res.json({ 
+        success: true, 
+        source: result.source, 
+        priceUsd: result.priceUsd,
+        tokenSymbol: result.tokenSymbol,
+        tokenName: result.tokenName,
+        marketCap: result.marketCap,
+        liquidity: result.liquidity,
+        volume24h: result.volume24h,
+        fdv: result.fdv,
+      });
+    } catch (error) {
+      console.error("Error refreshing token:", error);
+      res.status(500).json({ error: "Failed to refresh token data" });
     }
   });
 

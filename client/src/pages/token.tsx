@@ -193,15 +193,18 @@ export default function TokenPage() {
 
   const analyzeTokenMutation = useMutation({
     mutationFn: async () => {
-      if (!snapshot?.id) throw new Error("No snapshot to analyze");
-      return apiRequest("POST", `/api/ai/snapshots/${snapshot.id}/score`);
+      if (!tokenMint) throw new Error("No token to analyze");
+      return apiRequest("POST", `/api/ai/score-token/${tokenMint}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
       toast({ description: "Analysis complete!" });
     },
-    onError: () => {
-      toast({ description: "Analysis failed. Try again in a moment.", variant: "destructive" });
+    onError: (error: any) => {
+      const msg = error?.message?.includes("404") 
+        ? "No token data available yet. Try pressing Refresh first." 
+        : "Analysis failed. Try again in a moment.";
+      toast({ description: msg, variant: "destructive" });
     }
   });
 
@@ -262,7 +265,7 @@ export default function TokenPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => {
+          onClick={async () => {
             const now = Date.now();
             const elapsed = now - lastRefreshRef.current;
             if (elapsed < REFRESH_COOLDOWN_MS) {
@@ -271,11 +274,17 @@ export default function TokenPage() {
               return;
             }
             lastRefreshRef.current = now;
+            toast({ description: "Fetching latest token data..." });
+            try {
+              await apiRequest("POST", `/api/token/${tokenMint}/refresh`);
+            } catch (e) {
+              // Non-critical: data may still be in cache
+            }
             queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/trades`] });
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/signal-sources`] });
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/top-holders`] });
-            toast({ description: "Refreshing token data..." });
+            toast({ description: "Token data refreshed!" });
           }}
           data-testid="button-refresh-token"
         >
