@@ -82,3 +82,14 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **DexScreener**: Secondary source for token metadata (price, market cap, liquidity, FDV, volume). Currently paused per budget constraints.
 - **GeckoTerminal**: Primary token metadata provider. Fetches trending tokens and new Solana pools with rate-limited scheduling.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
+
+## Paused Tasks / Backlog
+
+### Compute Node Update
+Special `compute_node` user role/account. Logging in with a compute node account launches a dedicated compute node interface instead of the regular dashboard. Features:
+- Auto-redirects compute_node accounts to `/compute-node` page on login
+- Same analytics page as admin (system health, admin chat interface)
+- Live task processing panel: connection status, task feed, stats, start/stop toggle
+- Handles all server-side task types (`holder_overlap`, `wallet_correlation`, `token_metadata`) — no trust scoring needed since admin-run
+- Route protection: compute_node accounts only access compute page + task endpoints
+- Remove server-side `processServerSideTasks` from compute-manager scheduler once compute node is active
