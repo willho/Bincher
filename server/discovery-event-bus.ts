@@ -395,6 +395,10 @@ export function initEventBus(): void {
         tokenCooldowns.delete(key);
       }
     }
+    const cutoff = now - RECENT_WINDOW_MS;
+    while (recentEvents.length > 0 && recentEvents[0].timestamp < cutoff) {
+      recentEvents.shift();
+    }
   }, 60_000);
 
   console.log("[EventBus] Initialized with 3 combos, 7 event types");

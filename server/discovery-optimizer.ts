@@ -12,7 +12,7 @@ import { eq, and, gte, desc, sql, gt, lt, lte } from "drizzle-orm";
 import { publishInsight } from "./insight-bus";
 import { evaluateMetric } from "./discovery-engine";
 import { fetchTokenWithFallback } from "./data-pool";
-import { getBusStats, getRecentEvents } from "./discovery-event-bus";
+import { getBusStats } from "./discovery-event-bus";
 
 interface ReviewStats {
   reviewsRun: number;
@@ -93,33 +93,27 @@ export async function runAdaptiveReview(): Promise<ReviewStats> {
   optimizerState.lastReviewAt = Date.now();
 
   const busStats = getBusStats();
-  const isActive = busStats.totalEmitted > 5 || outcomesBackfilled > 0 || thresholdsAdjusted > 0;
+  const msSinceLastEmit = busStats.lastEmit > 0 ? Date.now() - busStats.lastEmit : Infinity;
+  const quietThresholdMs = optimizerState.reviewIntervalMs * 0.8;
+  const isActive = msSinceLastEmit < quietThresholdMs || outcomesBackfilled > 0 || thresholdsAdjusted > 0;
 
   if (isActive) {
     optimizerState.consecutiveActiveReviews++;
     optimizerState.consecutiveQuietReviews = 0;
     if (optimizerState.consecutiveActiveReviews >= 3) {
-      const newInterval = Math.max(
+      optimizerState.reviewIntervalMs = Math.max(
         optimizerState.minIntervalMs,
         optimizerState.reviewIntervalMs * 0.75
       );
-      if (newInterval !== optimizerState.reviewIntervalMs) {
-        optimizerState.reviewIntervalMs = newInterval;
-        rescheduleReview();
-      }
     }
   } else {
     optimizerState.consecutiveQuietReviews++;
     optimizerState.consecutiveActiveReviews = 0;
     if (optimizerState.consecutiveQuietReviews >= 2) {
-      const newInterval = Math.min(
+      optimizerState.reviewIntervalMs = Math.min(
         optimizerState.maxIntervalMs,
         optimizerState.reviewIntervalMs * 1.5
       );
-      if (newInterval !== optimizerState.reviewIntervalMs) {
-        optimizerState.reviewIntervalMs = newInterval;
-        rescheduleReview();
-      }
     }
   }
 
@@ -562,26 +556,29 @@ export async function runSelfImprovementCycle(): Promise<{
   };
 }
 
-export function startOptimizer(): void {
-  function scheduleReview() {
-    optimizerState.reviewHandle = setTimeout(async () => {
-      try {
-        const stats = await runAdaptiveReview();
-        if (stats.reviewsRun % 10 === 0 || stats.thresholdsAdjusted > 0) {
-          console.log(
-            `[Optimizer] Review #${stats.reviewsRun}: coverage=${(stats.ruleCoverage * 100).toFixed(0)}%, ` +
-              `outcomes=${stats.outcomesBackfilled}, thresholds=${stats.thresholdsAdjusted}, ` +
-              `interval=${Math.round(optimizerState.reviewIntervalMs / 60000)}min`
-          );
-        }
-      } catch (err) {
-        console.error("[Optimizer] Review failed:", err);
-      }
-      scheduleReview();
-    }, optimizerState.reviewIntervalMs);
+function scheduleNextReview(): void {
+  if (optimizerState.reviewHandle) {
+    clearTimeout(optimizerState.reviewHandle);
   }
+  optimizerState.reviewHandle = setTimeout(async () => {
+    try {
+      const stats = await runAdaptiveReview();
+      if (stats.reviewsRun % 10 === 0 || stats.thresholdsAdjusted > 0) {
+        console.log(
+          `[Optimizer] Review #${stats.reviewsRun}: coverage=${(stats.ruleCoverage * 100).toFixed(0)}%, ` +
+            `outcomes=${stats.outcomesBackfilled}, thresholds=${stats.thresholdsAdjusted}, ` +
+            `interval=${Math.round(optimizerState.reviewIntervalMs / 60000)}min`
+        );
+      }
+    } catch (err) {
+      console.error("[Optimizer] Review failed:", err);
+    }
+    scheduleNextReview();
+  }, optimizerState.reviewIntervalMs);
+}
 
-  scheduleReview();
+export function startOptimizer(): void {
+  scheduleNextReview();
 
   optimizerState.selfImprovementHandle = setInterval(async () => {
     try {
@@ -599,19 +596,6 @@ export function startOptimizer(): void {
   console.log(
     `[Optimizer] Started (review every ${Math.round(optimizerState.reviewIntervalMs / 60000)}min, self-improvement every 4h)`
   );
-}
-
-function rescheduleReview(): void {
-  if (optimizerState.reviewHandle) {
-    clearTimeout(optimizerState.reviewHandle);
-    optimizerState.reviewHandle = setTimeout(async () => {
-      try {
-        await runAdaptiveReview();
-      } catch (err) {
-        console.error("[Optimizer] Review failed:", err);
-      }
-    }, optimizerState.reviewIntervalMs);
-  }
 }
 
 export function getOptimizerStats() {
