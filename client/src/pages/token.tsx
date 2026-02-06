@@ -685,10 +685,18 @@ export default function TokenPage() {
           >
             <Button variant="outline" size="sm" data-testid="link-bubblemaps-open">
               <ExternalLink className="h-4 w-4 mr-2" />
-              Open Bubblemaps
+              Open Full View
             </Button>
           </a>
         </CardHeader>
+        <CardContent className="p-0 overflow-hidden rounded-b-lg">
+          <iframe
+            src={`https://iframe.bubblemaps.io/map?address=${tokenMint}&chain=solana&partnerId=demo`}
+            className="w-full h-[400px] border-0"
+            title="Bubblemaps Token Distribution"
+            data-testid="iframe-bubblemaps"
+          />
+        </CardContent>
       </Card>
 
       {/* Trade History */}

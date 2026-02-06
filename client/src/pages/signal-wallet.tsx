@@ -1015,10 +1015,18 @@ export default function SignalWalletPage() {
             >
               <Button variant="outline" size="sm" data-testid="link-bubblemaps-open">
                 <ExternalLink className="h-4 w-4 mr-2" />
-                Open Bubblemaps
+                Open Full View
               </Button>
             </a>
           </CardHeader>
+          <CardContent className="p-0 overflow-hidden rounded-b-lg">
+            <iframe
+              src={`https://iframe.bubblemaps.io/map?address=${walletAddress}&chain=solana&partnerId=demo`}
+              className="w-full h-[350px] border-0"
+              title="Bubblemaps Wallet Activity"
+              data-testid="iframe-bubblemaps"
+            />
+          </CardContent>
         </Card>
       )}
 
