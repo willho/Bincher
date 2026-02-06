@@ -6798,6 +6798,129 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/discovery/token-history/:tokenMint", requireAuth, async (req, res) => {
+    try {
+      const { getTokenHistoricalContext } = await import("./discovery-engine");
+      const context = await getTokenHistoricalContext(req.params.tokenMint);
+      res.json(context);
+    } catch (error) {
+      console.error("Error getting token history:", error);
+      res.status(500).json({ error: "Failed to get token history" });
+    }
+  });
+
+  app.get("/api/discovery/wallet-patterns/:walletAddress", requireAuth, async (req, res) => {
+    try {
+      const { getWalletPatternContext } = await import("./discovery-engine");
+      const context = await getWalletPatternContext(req.params.walletAddress);
+      res.json(context);
+    } catch (error) {
+      console.error("Error getting wallet patterns:", error);
+      res.status(500).json({ error: "Failed to get wallet patterns" });
+    }
+  });
+
+  app.get("/api/discovery/scan-stats", requireAuth, async (req, res) => {
+    try {
+      const { getScanContextStats } = await import("./discovery-engine");
+      const stats = await getScanContextStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting scan stats:", error);
+      res.status(500).json({ error: "Failed to get scan stats" });
+    }
+  });
+
+  app.post("/api/discovery/self-improve", requireAuth, async (req, res) => {
+    try {
+      const { runSelfImprovementCycle } = await import("./discovery-engine");
+      const result = await runSelfImprovementCycle();
+      res.json(result);
+    } catch (error) {
+      console.error("Error running self-improvement:", error);
+      res.status(500).json({ error: "Failed to run self-improvement" });
+    }
+  });
+
+  app.get("/api/discovery/context-patterns", requireAuth, async (req, res) => {
+    try {
+      const { analyzeContextPatterns } = await import("./discovery-engine");
+      const patterns = await analyzeContextPatterns();
+      res.json({ patterns });
+    } catch (error) {
+      console.error("Error analyzing patterns:", error);
+      res.status(500).json({ error: "Failed to analyze patterns" });
+    }
+  });
+
+  app.get("/api/compute/task", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { assignTask, getSourceTrustScore } = await import("./compute-manager");
+      const sourceId = `browser-${req.userId}`;
+      const trustScore = await getSourceTrustScore(sourceId);
+      const task = await assignTask(sourceId, trustScore);
+      res.json({ task, trustScore });
+    } catch (error) {
+      console.error("Error assigning compute task:", error);
+      res.status(500).json({ error: "Failed to assign task" });
+    }
+  });
+
+  app.post("/api/compute/task/:taskId/complete", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { completeComputeTask } = await import("./compute-manager");
+      const taskId = parseInt(req.params.taskId);
+      const sourceId = `browser-${req.userId}`;
+      const { result: taskResult, computeTimeMs } = req.body;
+      const { task, spotCheckTriggered } = await completeComputeTask(taskId, sourceId, taskResult || {}, computeTimeMs || 0);
+      res.json({ task, spotCheckTriggered });
+    } catch (error) {
+      console.error("Error completing compute task:", error);
+      res.status(500).json({ error: "Failed to complete task" });
+    }
+  });
+
+  app.post("/api/compute/task/:taskId/fail", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { failComputeTask } = await import("./compute-manager");
+      const taskId = parseInt(req.params.taskId);
+      const sourceId = `browser-${req.userId}`;
+      const task = await failComputeTask(taskId, sourceId, req.body.error || "Unknown error");
+      res.json({ task });
+    } catch (error) {
+      console.error("Error failing compute task:", error);
+      res.status(500).json({ error: "Failed to report task failure" });
+    }
+  });
+
+  app.get("/api/admin/compute/stats", requireAuth, async (req, res) => {
+    try {
+      const { getComputeStats } = await import("./compute-manager");
+      const stats = await getComputeStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting compute stats:", error);
+      res.status(500).json({ error: "Failed to get compute stats" });
+    }
+  });
+
+  app.post("/api/admin/compute/generate-tasks", requireAuth, async (req, res) => {
+    try {
+      const { generatePriceSlopeTasks, generateHolderOverlapTasks } = await import("./compute-manager");
+      const { taskType, tokenMints } = req.body;
+      let created = 0;
+      if (taskType === "price_slope") {
+        created = await generatePriceSlopeTasks(req.body.limit || 20);
+      } else if (taskType === "holder_overlap" && tokenMints) {
+        created = await generateHolderOverlapTasks(tokenMints);
+      }
+      res.json({ created });
+    } catch (error) {
+      console.error("Error generating tasks:", error);
+      res.status(500).json({ error: "Failed to generate tasks" });
+    }
+  });
+
   app.get("/api/wallet-discovery/discovered", requireAuth, async (req, res) => {
     try {
       const { getTopDiscoveredWallets, getCopyChainStats } = await import("./wallet-discovery");

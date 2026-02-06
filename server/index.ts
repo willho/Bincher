@@ -70,6 +70,9 @@ app.use((req, res, next) => {
     const { startCleanupScheduler } = await import("./discovery-worker");
     startCleanupScheduler();
     
+    const { startComputeScheduler } = await import("./compute-manager");
+    startComputeScheduler();
+    
     const { memoryCache } = await import("./memory-cache");
     await memoryCache.warmUp(500);
     memoryCache.start();

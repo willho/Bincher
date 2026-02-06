@@ -1248,7 +1248,6 @@ export async function batchFetchFromDexScreener(tokenMints: string[]): Promise<M
     
     const budgetCheck = await shouldAllowApiCall("dexscreener");
     if (!budgetCheck.allowed) {
-      console.warn(`[DexScreener Batch] API blocked: ${budgetCheck.reason}`);
       return results;
     }
     

@@ -5,9 +5,11 @@ import {
   tokenDataPool, swaps, holderCache,
   discoverySources, discoveryExperiments, discoveryConfig,
   emergentPatterns, vectorUpdates, userTokenViews,
+  walletSummaries, tokenPopularity, walletCorrelations,
+  scanContextLogs, priceSnapshots,
   DiscoveryTrigger, DiscoveryEvent
 } from "@shared/schema";
-import { eq, and, desc, gte, lte, sql, gt, lt, isNull } from "drizzle-orm";
+import { eq, and, desc, gte, lte, sql, gt, lt, isNull, ne, inArray } from "drizzle-orm";
 import { fetchTokenWithFallback } from "./data-pool";
 import { logSystemEvent, createCorrelationId } from "./system-events";
 
@@ -108,6 +110,116 @@ export async function evaluateMetric(
         .limit(1);
       
       return tokenData?.liquidity || 0;
+    }
+    
+    case "trending_momentum": {
+      const [pop] = await db.select().from(tokenPopularity)
+        .where(eq(tokenPopularity.tokenMint, tokenMint))
+        .limit(1);
+      if (!pop) return 0;
+      
+      const trendScore = (pop.trendingAppearances || 0) * 10;
+      const walletScore = (pop.signalWalletCount || 0) * 15;
+      const confirmScore = (pop.independentConfirmations || 0) * 20;
+      return Math.min(100, trendScore + walletScore + confirmScore);
+    }
+    
+    case "boost_intensity": {
+      const [tokenData] = await db.select().from(tokenDataPool)
+        .where(eq(tokenDataPool.tokenMint, tokenMint))
+        .limit(1);
+      if (!tokenData) return 0;
+      
+      const boostRank = (tokenData as any).boostRank || 0;
+      if (boostRank === 0) return 0;
+      return Math.max(0, 100 - boostRank);
+    }
+    
+    case "multi_wallet_convergence": {
+      const recentBuyers = await db.select({
+        walletAddress: swaps.source,
+      })
+        .from(swaps)
+        .where(and(
+          eq(swaps.toToken, tokenMint),
+          eq(swaps.type, "buy"),
+          gte(swaps.timestamp, now - (timeWindowMinutes * 60))
+        ))
+        .groupBy(swaps.source);
+      
+      return recentBuyers.length;
+    }
+    
+    case "deployer_track_record": {
+      const [pop] = await db.select().from(tokenPopularity)
+        .where(eq(tokenPopularity.tokenMint, tokenMint))
+        .limit(1);
+      if (!pop || !pop.deployerAddress) return 0;
+      
+      const deployerReturn = pop.deployerAvgReturn || 0;
+      const deployerCount = pop.deployerTokenCount || 0;
+      if (deployerCount < 2) return 0;
+      return deployerReturn;
+    }
+    
+    case "price_slope": {
+      const snapshots = await db.select().from(priceSnapshots)
+        .where(and(
+          eq(priceSnapshots.tokenMint, tokenMint),
+          eq(priceSnapshots.snapshotType, "daily")
+        ))
+        .orderBy(desc(priceSnapshots.snapshotDate))
+        .limit(7);
+      
+      if (snapshots.length < 2) return 0;
+      
+      let totalSlope = 0;
+      for (let i = 0; i < snapshots.length - 1; i++) {
+        const newer = snapshots[i];
+        const older = snapshots[i + 1];
+        if (older.close > 0) {
+          totalSlope += ((newer.close - older.close) / older.close) * 100;
+        }
+      }
+      return totalSlope / (snapshots.length - 1);
+    }
+    
+    case "crash_recovery": {
+      const [pop] = await db.select().from(tokenPopularity)
+        .where(eq(tokenPopularity.tokenMint, tokenMint))
+        .limit(1);
+      return pop?.crashRecoveryCount || 0;
+    }
+    
+    case "repeat_interest": {
+      const [pop] = await db.select().from(tokenPopularity)
+        .where(eq(tokenPopularity.tokenMint, tokenMint))
+        .limit(1);
+      return pop?.repeatInterestCount || 0;
+    }
+    
+    case "wallet_quality": {
+      const recentBuyers = await db.select({ source: swaps.source })
+        .from(swaps)
+        .where(and(
+          eq(swaps.toToken, tokenMint),
+          eq(swaps.type, "buy"),
+          gte(swaps.timestamp, now - (timeWindowMinutes * 60))
+        ))
+        .groupBy(swaps.source)
+        .limit(20);
+      
+      if (recentBuyers.length === 0) return 0;
+      
+      const walletAddresses = recentBuyers.map((b: { source: string }) => b.source);
+      const summaries = await db.select().from(walletSummaries)
+        .where(inArray(walletSummaries.walletAddress, walletAddresses));
+      
+      if (summaries.length === 0) return 0;
+      
+      const avgHitRate = summaries.reduce((sum: number, s: { hitRate: number | null }) => 
+        sum + (s.hitRate || 0), 0) / summaries.length;
+      return avgHitRate * 100;
     }
     
     default:
@@ -455,6 +567,46 @@ export async function initializeDefaultTriggers(): Promise<void> {
       timeWindowMinutes: 60,
       cooldownMinutes: 240,
     },
+    {
+      name: "Trending Momentum 50+",
+      description: "Combined trending/wallet/confirmation score above 50",
+      metric: "trending_momentum",
+      threshold: 50,
+      operator: "gte",
+      priority: 72,
+      timeWindowMinutes: 60,
+      cooldownMinutes: 60,
+    },
+    {
+      name: "Multi-Wallet Convergence 3+",
+      description: "3+ unique wallets buying in time window",
+      metric: "multi_wallet_convergence",
+      threshold: 3,
+      operator: "gte",
+      priority: 78,
+      timeWindowMinutes: 30,
+      cooldownMinutes: 30,
+    },
+    {
+      name: "Positive Price Slope",
+      description: "Consistent upward price trend over 7 days",
+      metric: "price_slope",
+      threshold: 5,
+      operator: "gte",
+      priority: 55,
+      timeWindowMinutes: 60,
+      cooldownMinutes: 360,
+    },
+    {
+      name: "High Wallet Quality",
+      description: "Recent buyers have 60%+ hit rate",
+      metric: "wallet_quality",
+      threshold: 60,
+      operator: "gte",
+      priority: 82,
+      timeWindowMinutes: 60,
+      cooldownMinutes: 30,
+    },
   ];
   
   for (const trigger of defaults) {
@@ -512,6 +664,12 @@ export async function runHourlyMonitor(): Promise<{
 
 export async function runDailyTuning(): Promise<{
   thresholdsAdjusted: number;
+  selfImprovement?: {
+    outcomesBackfilled: number;
+    patternsFound: number;
+    triggersProposed: number;
+    shadowsEvaluated: { promoted: number; retired: number };
+  };
 }> {
   const now = Math.floor(Date.now() / 1000);
   
@@ -524,15 +682,25 @@ export async function runDailyTuning(): Promise<{
   try {
     const thresholdsAdjusted = await adjustTriggerThresholds();
     
+    let selfImprovement;
+    try {
+      selfImprovement = await runSelfImprovementCycle();
+    } catch (err) {
+      console.error("[Discovery] Self-improvement cycle failed:", err);
+    }
+    
     await db.update(discoveryJobRuns)
       .set({
         completedAt: Math.floor(Date.now() / 1000),
         thresholdsAdjusted,
         status: "completed",
+        summary: JSON.stringify({
+          selfImprovement: selfImprovement || null,
+        }),
       })
       .where(eq(discoveryJobRuns.id, run.id));
     
-    return { thresholdsAdjusted };
+    return { thresholdsAdjusted, selfImprovement };
   } catch (error) {
     await db.update(discoveryJobRuns)
       .set({
@@ -599,6 +767,604 @@ export async function getRecentEvents(
   }
   
   return query.orderBy(desc(discoveryEvents.firedAt)).limit(limit);
+}
+
+// =====================
+// HISTORICAL CONTEXT QUERIES
+// =====================
+
+interface TokenHistoricalContext {
+  hasHistory: boolean;
+  priceChange7d: number | null;
+  priceChange14d: number | null;
+  priceChange30d: number | null;
+  allTimeHigh: number | null;
+  allTimeLow: number | null;
+  avgDailyVolume7d: number | null;
+  crashCount: number;
+  recoveryCount: number;
+  deployerTrackRecord: { tokenCount: number; avgReturn: number } | null;
+  signalWalletInterest: number;
+  holderOverlapWithWinners: number;
+  holderOverlapWithRugs: number;
+}
+
+export async function getTokenHistoricalContext(tokenMint: string): Promise<TokenHistoricalContext> {
+  const now = Math.floor(Date.now() / 1000);
+  const context: TokenHistoricalContext = {
+    hasHistory: false,
+    priceChange7d: null,
+    priceChange14d: null,
+    priceChange30d: null,
+    allTimeHigh: null,
+    allTimeLow: null,
+    avgDailyVolume7d: null,
+    crashCount: 0,
+    recoveryCount: 0,
+    deployerTrackRecord: null,
+    signalWalletInterest: 0,
+    holderOverlapWithWinners: 0,
+    holderOverlapWithRugs: 0,
+  };
+
+  const snapshots = await db.select().from(priceSnapshots)
+    .where(and(
+      eq(priceSnapshots.tokenMint, tokenMint),
+      eq(priceSnapshots.snapshotType, "daily")
+    ))
+    .orderBy(desc(priceSnapshots.snapshotDate))
+    .limit(30);
+
+  if (snapshots.length > 0) {
+    context.hasHistory = true;
+    const latest = snapshots[0];
+    
+    context.allTimeHigh = Math.max(...snapshots.map((s: { high: number }) => s.high));
+    context.allTimeLow = Math.min(...snapshots.map((s: { low: number }) => s.low));
+
+    if (snapshots.length >= 7) {
+      const s7 = snapshots[6];
+      if (s7.close > 0) context.priceChange7d = ((latest.close - s7.close) / s7.close) * 100;
+    }
+    if (snapshots.length >= 14) {
+      const s14 = snapshots[13];
+      if (s14.close > 0) context.priceChange14d = ((latest.close - s14.close) / s14.close) * 100;
+    }
+    if (snapshots.length >= 30) {
+      const s30 = snapshots[29];
+      if (s30.close > 0) context.priceChange30d = ((latest.close - s30.close) / s30.close) * 100;
+    }
+
+    const volumeSnapshots = snapshots.slice(0, 7).filter((s: { volume: number | null }) => s.volume !== null);
+    if (volumeSnapshots.length > 0) {
+      context.avgDailyVolume7d = volumeSnapshots.reduce((sum: number, s: { volume: number | null }) => 
+        sum + (s.volume || 0), 0) / volumeSnapshots.length;
+    }
+
+    let prevClose = 0;
+    for (const snap of [...snapshots].reverse()) {
+      if (prevClose > 0) {
+        const change = ((snap.close - prevClose) / prevClose) * 100;
+        if (change <= -50) context.crashCount++;
+        if (change >= 30 && prevClose < snapshots[snapshots.length - 1].close * 0.6) context.recoveryCount++;
+      }
+      prevClose = snap.close;
+    }
+  }
+
+  const [pop] = await db.select().from(tokenPopularity)
+    .where(eq(tokenPopularity.tokenMint, tokenMint))
+    .limit(1);
+
+  if (pop) {
+    context.signalWalletInterest = pop.signalWalletCount || 0;
+    context.recoveryCount = pop.crashRecoveryCount || 0;
+    
+    if (pop.deployerAddress) {
+      context.deployerTrackRecord = {
+        tokenCount: pop.deployerTokenCount || 0,
+        avgReturn: pop.deployerAvgReturn || 0,
+      };
+    }
+  }
+
+  const holderOverlap = await computeHolderOverlapScores(tokenMint);
+  context.holderOverlapWithWinners = holderOverlap.winnerOverlap;
+  context.holderOverlapWithRugs = holderOverlap.rugOverlap;
+
+  return context;
+}
+
+async function computeHolderOverlapScores(tokenMint: string): Promise<{
+  winnerOverlap: number;
+  rugOverlap: number;
+}> {
+  try {
+    const [currentHolders] = await db.select().from(holderCache)
+      .where(eq(holderCache.tokenMint, tokenMint))
+      .limit(1);
+
+    if (!currentHolders || !currentHolders.holders) {
+      return { winnerOverlap: 0, rugOverlap: 0 };
+    }
+
+    const currentHolderAddresses = new Set(
+      (currentHolders.holders as any[]).slice(0, 50).map((h: any) => h.address || h.owner)
+    );
+
+    if (currentHolderAddresses.size === 0) {
+      return { winnerOverlap: 0, rugOverlap: 0 };
+    }
+
+    const profitableEvents = await db.select({ tokenMint: discoveryEvents.tokenMint })
+      .from(discoveryEvents)
+      .where(and(
+        eq(discoveryEvents.outcome, "profit"),
+        gte(discoveryEvents.evaluatedAt, Math.floor(Date.now() / 1000) - 30 * 86400)
+      ))
+      .limit(20);
+
+    const lossEvents = await db.select({ tokenMint: discoveryEvents.tokenMint })
+      .from(discoveryEvents)
+      .where(and(
+        eq(discoveryEvents.outcome, "loss"),
+        gte(discoveryEvents.evaluatedAt, Math.floor(Date.now() / 1000) - 30 * 86400)
+      ))
+      .limit(20);
+
+    let winnerOverlap = 0;
+    let rugOverlap = 0;
+
+    for (const evt of profitableEvents) {
+      const [holders] = await db.select().from(holderCache)
+        .where(eq(holderCache.tokenMint, evt.tokenMint))
+        .limit(1);
+      if (holders?.holders) {
+        const addrs = new Set((holders.holders as any[]).slice(0, 50).map((h: any) => h.address || h.owner));
+        let overlap = 0;
+        for (const addr of Array.from(currentHolderAddresses)) {
+          if (addrs.has(addr)) overlap++;
+        }
+        winnerOverlap += overlap / Math.max(currentHolderAddresses.size, 1);
+      }
+    }
+
+    for (const evt of lossEvents) {
+      const [holders] = await db.select().from(holderCache)
+        .where(eq(holderCache.tokenMint, evt.tokenMint))
+        .limit(1);
+      if (holders?.holders) {
+        const addrs = new Set((holders.holders as any[]).slice(0, 50).map((h: any) => h.address || h.owner));
+        let overlap = 0;
+        for (const addr of Array.from(currentHolderAddresses)) {
+          if (addrs.has(addr)) overlap++;
+        }
+        rugOverlap += overlap / Math.max(currentHolderAddresses.size, 1);
+      }
+    }
+
+    if (profitableEvents.length > 0) winnerOverlap /= profitableEvents.length;
+    if (lossEvents.length > 0) rugOverlap /= lossEvents.length;
+
+    return {
+      winnerOverlap: Math.min(1, winnerOverlap),
+      rugOverlap: Math.min(1, rugOverlap),
+    };
+  } catch (err) {
+    console.error("[Discovery] Holder overlap computation failed:", err);
+    return { winnerOverlap: 0, rugOverlap: 0 };
+  }
+}
+
+export async function getWalletPatternContext(walletAddress: string): Promise<{
+  hitRate: number;
+  avgHoldTime: number;
+  avgReturn: number;
+  bestHour: number | null;
+  bestDay: number | null;
+  sectorPreference: string | null;
+  marketCapPreference: string | null;
+  correlatedWallets: Array<{ wallet: string; similarity: number }>;
+}> {
+  const [summary] = await db.select().from(walletSummaries)
+    .where(eq(walletSummaries.walletAddress, walletAddress))
+    .limit(1);
+
+  const correlations = await db.select().from(walletCorrelations)
+    .where(eq(walletCorrelations.walletA, walletAddress))
+    .orderBy(desc(walletCorrelations.sameGroupLikelihood))
+    .limit(5);
+
+  return {
+    hitRate: summary?.hitRate || 0,
+    avgHoldTime: summary?.avgHoldTimeMinutes || 0,
+    avgReturn: summary?.avgReturnPercent || 0,
+    bestHour: summary?.bestHourUtc ?? null,
+    bestDay: summary?.bestDayOfWeek ?? null,
+    sectorPreference: summary?.sectorPreference || null,
+    marketCapPreference: null,
+    correlatedWallets: correlations.map((c: { walletB: string; sameGroupLikelihood: number | null }) => ({
+      wallet: c.walletB,
+      similarity: c.sameGroupLikelihood || 0,
+    })),
+  };
+}
+
+// =====================
+// CONTEXT-AWARE SCANNING (AI-LEARNED TRIGGERS)
+// =====================
+
+interface ScanContext {
+  tokenMint: string;
+  triggerSource: string;
+  walletAddress?: string;
+  walletHitRate?: number;
+  tokenAge?: number;
+  signalWalletCount: number;
+  timeOfDay: number;
+  trendingRank?: number;
+  boostRank?: number;
+  priceChangePercent?: number;
+  holderOverlapScore?: number;
+  historicalContext?: TokenHistoricalContext;
+}
+
+export async function contextAwareScan(ctx: ScanContext): Promise<{
+  eventFired: boolean;
+  urgencyScore: number;
+  eventId?: number;
+  scanLogId: number;
+}> {
+  const now = Math.floor(Date.now() / 1000);
+  
+  const urgencyScore = computeScanUrgency(ctx);
+  
+  const triggers = await db.select().from(discoveryTriggers)
+    .where(eq(discoveryTriggers.enabled, true))
+    .orderBy(desc(discoveryTriggers.priority));
+
+  let firedEvent: DiscoveryEvent | null = null;
+  
+  for (const trigger of triggers) {
+    const event = await checkTriggerForToken(trigger, ctx.tokenMint);
+    if (event) {
+      firedEvent = event;
+      break;
+    }
+  }
+
+  const [scanLog] = await db.insert(scanContextLogs).values({
+    tokenMint: ctx.tokenMint,
+    triggerSource: ctx.triggerSource,
+    walletHitRate: ctx.walletHitRate || null,
+    walletAddress: ctx.walletAddress || null,
+    tokenAge: ctx.tokenAge || null,
+    signalWalletCount: ctx.signalWalletCount,
+    timeOfDay: ctx.timeOfDay,
+    trendingRank: ctx.trendingRank || null,
+    boostRank: ctx.boostRank || null,
+    priceChangePercent: ctx.priceChangePercent || null,
+    holderOverlapScore: ctx.holderOverlapScore || null,
+    discoveryEventFired: !!firedEvent,
+    discoveryEventId: firedEvent?.id || null,
+    scanUrgencyScore: urgencyScore,
+    createdAt: now,
+  }).returning();
+
+  return {
+    eventFired: !!firedEvent,
+    urgencyScore,
+    eventId: firedEvent?.id,
+    scanLogId: scanLog.id,
+  };
+}
+
+function computeScanUrgency(ctx: ScanContext): number {
+  let urgency = 0;
+  let factors = 0;
+
+  if (ctx.walletHitRate !== undefined && ctx.walletHitRate > 0.5) {
+    urgency += ctx.walletHitRate * 0.3;
+    factors++;
+  }
+
+  if (ctx.signalWalletCount >= 3) {
+    urgency += Math.min(ctx.signalWalletCount / 10, 1) * 0.2;
+    factors++;
+  }
+
+  if (ctx.trendingRank !== undefined && ctx.trendingRank > 0 && ctx.trendingRank <= 20) {
+    urgency += (1 - ctx.trendingRank / 20) * 0.15;
+    factors++;
+  }
+
+  if (ctx.boostRank !== undefined && ctx.boostRank > 0 && ctx.boostRank <= 50) {
+    urgency += (1 - ctx.boostRank / 50) * 0.1;
+    factors++;
+  }
+
+  if (ctx.priceChangePercent !== undefined && ctx.priceChangePercent > 10) {
+    urgency += Math.min(ctx.priceChangePercent / 100, 1) * 0.15;
+    factors++;
+  }
+
+  if (ctx.holderOverlapScore !== undefined && ctx.holderOverlapScore > 0.1) {
+    urgency += ctx.holderOverlapScore * 0.1;
+    factors++;
+  }
+
+  if (ctx.historicalContext?.deployerTrackRecord) {
+    const avgReturn = ctx.historicalContext.deployerTrackRecord.avgReturn;
+    if (avgReturn > 20) {
+      urgency += 0.1;
+      factors++;
+    } else if (avgReturn < -30) {
+      urgency -= 0.1;
+    }
+  }
+
+  return Math.max(0, Math.min(1, urgency));
+}
+
+export async function backfillScanOutcomes(): Promise<number> {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - 86400;
+  
+  const pendingScans = await db.select().from(scanContextLogs)
+    .where(and(
+      isNull(scanContextLogs.outcomeRecordedAt),
+      lte(scanContextLogs.createdAt, cutoff)
+    ))
+    .limit(100);
+
+  let updated = 0;
+  for (const scan of pendingScans) {
+    const tokenData = await fetchTokenWithFallback(scan.tokenMint);
+    
+    const [snap] = await db.select().from(priceSnapshots)
+      .where(and(
+        eq(priceSnapshots.tokenMint, scan.tokenMint),
+        eq(priceSnapshots.snapshotType, "daily")
+      ))
+      .orderBy(desc(priceSnapshots.snapshotDate))
+      .limit(1);
+
+    const currentPrice = tokenData.priceUsd || snap?.close || 0;
+    const scanTimePrice = scan.priceChangePercent !== null && scan.priceChangePercent !== undefined
+      ? currentPrice / (1 + scan.priceChangePercent / 100)
+      : null;
+
+    let priceDelta24h: number | null = null;
+    if (scanTimePrice && scanTimePrice > 0) {
+      priceDelta24h = ((currentPrice - scanTimePrice) / scanTimePrice) * 100;
+    }
+
+    await db.update(scanContextLogs)
+      .set({
+        priceDelta24h,
+        outcomeRecordedAt: now,
+      })
+      .where(eq(scanContextLogs.id, scan.id));
+    
+    updated++;
+  }
+
+  return updated;
+}
+
+// =====================
+// SELF-IMPROVEMENT SYSTEM
+// =====================
+
+interface PatternInsight {
+  field: string;
+  operator: string;
+  threshold: number;
+  avgOutcome: number;
+  sampleCount: number;
+  confidence: number;
+}
+
+export async function analyzeContextPatterns(): Promise<PatternInsight[]> {
+  const insights: PatternInsight[] = [];
+  
+  const completedScans = await db.select().from(scanContextLogs)
+    .where(and(
+      sql`${scanContextLogs.outcomeRecordedAt} IS NOT NULL`,
+      sql`${scanContextLogs.priceDelta24h} IS NOT NULL`
+    ))
+    .orderBy(desc(scanContextLogs.createdAt))
+    .limit(500);
+
+  if (completedScans.length < 20) return insights;
+
+  const profitableScans = completedScans.filter((s: { priceDelta24h: number | null }) => 
+    (s.priceDelta24h || 0) > 5);
+  const unprofitableScans = completedScans.filter((s: { priceDelta24h: number | null }) => 
+    (s.priceDelta24h || 0) < -5);
+
+  const fields: Array<{ name: string; getter: (s: any) => number | null }> = [
+    { name: "walletHitRate", getter: (s) => s.walletHitRate },
+    { name: "signalWalletCount", getter: (s) => s.signalWalletCount },
+    { name: "trendingRank", getter: (s) => s.trendingRank },
+    { name: "boostRank", getter: (s) => s.boostRank },
+    { name: "priceChangePercent", getter: (s) => s.priceChangePercent },
+    { name: "holderOverlapScore", getter: (s) => s.holderOverlapScore },
+    { name: "scanUrgencyScore", getter: (s) => s.scanUrgencyScore },
+    { name: "timeOfDay", getter: (s) => s.timeOfDay },
+  ];
+
+  for (const field of fields) {
+    const profitableValues = profitableScans
+      .map((s: any) => field.getter(s))
+      .filter((v: number | null): v is number => v !== null && v !== undefined);
+    
+    const unprofitableValues = unprofitableScans
+      .map((s: any) => field.getter(s))
+      .filter((v: number | null): v is number => v !== null && v !== undefined);
+
+    if (profitableValues.length < 5 || unprofitableValues.length < 5) continue;
+
+    const profAvg = profitableValues.reduce((a: number, b: number) => a + b, 0) / profitableValues.length;
+    const unprofAvg = unprofitableValues.reduce((a: number, b: number) => a + b, 0) / unprofitableValues.length;
+
+    const separation = Math.abs(profAvg - unprofAvg);
+    const allValues = [...profitableValues, ...unprofitableValues];
+    const allAvg = allValues.reduce((a, b) => a + b, 0) / allValues.length;
+    const stdDev = Math.sqrt(allValues.reduce((sum, v) => sum + Math.pow(v - allAvg, 2), 0) / allValues.length);
+
+    if (stdDev > 0 && separation / stdDev > 0.5) {
+      const threshold = (profAvg + unprofAvg) / 2;
+      const operator = profAvg > unprofAvg ? "gte" : "lte";
+      const confidence = Math.min(0.9, 0.3 + (separation / stdDev) * 0.2);
+
+      insights.push({
+        field: field.name,
+        operator,
+        threshold,
+        avgOutcome: profAvg,
+        sampleCount: profitableValues.length + unprofitableValues.length,
+        confidence,
+      });
+    }
+  }
+
+  return insights.sort((a, b) => b.confidence - a.confidence);
+}
+
+export async function autoGenerateTriggersFromPatterns(): Promise<{
+  proposed: number;
+  patterns: PatternInsight[];
+}> {
+  const patterns = await analyzeContextPatterns();
+  let proposed = 0;
+  const now = Math.floor(Date.now() / 1000);
+
+  const fieldToMetric: Record<string, string> = {
+    walletHitRate: "wallet_quality",
+    signalWalletCount: "multi_wallet_convergence",
+    trendingRank: "trending_momentum",
+    boostRank: "boost_intensity",
+    priceChangePercent: "price_surge",
+    holderOverlapScore: "holder_growth",
+    scanUrgencyScore: "heat_score",
+  };
+
+  for (const pattern of patterns) {
+    if (pattern.confidence < 0.5 || pattern.sampleCount < 20) continue;
+
+    const metric = fieldToMetric[pattern.field];
+    if (!metric) continue;
+
+    const existing = await db.select().from(discoveryTriggers)
+      .where(and(
+        eq(discoveryTriggers.metric, metric),
+        eq(discoveryTriggers.isAiProposed, true),
+        eq(discoveryTriggers.enabled, true)
+      ))
+      .limit(1);
+
+    if (existing.length > 0) continue;
+
+    await db.insert(discoveryTriggers).values({
+      name: `AI-${pattern.field} (${pattern.operator} ${pattern.threshold.toFixed(2)})`,
+      description: `Auto-generated from ${pattern.sampleCount} scan context samples. Confidence: ${(pattern.confidence * 100).toFixed(0)}%`,
+      metric,
+      threshold: pattern.threshold,
+      operator: pattern.operator,
+      priority: Math.round(50 + pattern.confidence * 30),
+      timeWindowMinutes: 60,
+      cooldownMinutes: 30,
+      isAiProposed: true,
+      shadowMode: true,
+      explorationPhase: true,
+      dampeningFactor: 0.12,
+      createdAt: now,
+    });
+
+    proposed++;
+    console.log(`[Discovery] Auto-proposed trigger: AI-${pattern.field} (confidence: ${(pattern.confidence * 100).toFixed(0)}%)`);
+  }
+
+  return { proposed, patterns };
+}
+
+export async function runSelfImprovementCycle(): Promise<{
+  outcomesBackfilled: number;
+  patternsFound: number;
+  triggersProposed: number;
+  shadowsEvaluated: { promoted: number; retired: number };
+}> {
+  console.log("[Discovery] Starting self-improvement cycle...");
+
+  const outcomesBackfilled = await backfillScanOutcomes();
+  const { proposed: triggersProposed, patterns } = await autoGenerateTriggersFromPatterns();
+  const shadowsEvaluated = await evaluateShadowTriggers();
+  await adjustTriggerThresholds();
+
+  console.log(`[Discovery] Self-improvement: backfilled=${outcomesBackfilled}, patterns=${patterns.length}, proposed=${triggersProposed}, promoted=${shadowsEvaluated.promoted}, retired=${shadowsEvaluated.retired}`);
+
+  try {
+    const { publishInsight } = await import("./insight-bus");
+    await publishInsight({
+      source: 'discovery',
+      type: 'pattern',
+      title: 'Discovery self-improvement cycle',
+      payload: {
+        pattern: 'self_improvement',
+        outcomesBackfilled,
+        patternsFound: patterns.length,
+        triggersProposed,
+        shadowsPromoted: shadowsEvaluated.promoted,
+        shadowsRetired: shadowsEvaluated.retired,
+      },
+      confidence: 0.7,
+      expiresInHours: 24,
+    });
+  } catch (err) {
+    // insight bus might not be available
+  }
+
+  return {
+    outcomesBackfilled,
+    patternsFound: patterns.length,
+    triggersProposed,
+    shadowsEvaluated,
+  };
+}
+
+export async function getScanContextStats(): Promise<{
+  totalScans: number;
+  outcomesRecorded: number;
+  avgUrgencyScore: number;
+  topTriggerSources: Array<{ source: string; count: number; avgOutcome: number }>;
+}> {
+  const [totals] = await db.select({
+    total: sql<number>`count(*)`,
+    withOutcome: sql<number>`count(${scanContextLogs.outcomeRecordedAt})`,
+    avgUrgency: sql<number>`avg(${scanContextLogs.scanUrgencyScore})`,
+  }).from(scanContextLogs);
+
+  const sourcesRaw = await db.select({
+    source: scanContextLogs.triggerSource,
+    cnt: sql<number>`count(*)`,
+    avgOutcome: sql<number>`avg(${scanContextLogs.priceDelta24h})`,
+  })
+    .from(scanContextLogs)
+    .groupBy(scanContextLogs.triggerSource)
+    .orderBy(sql`count(*) desc`)
+    .limit(10);
+
+  return {
+    totalScans: Number(totals?.total) || 0,
+    outcomesRecorded: Number(totals?.withOutcome) || 0,
+    avgUrgencyScore: Number(totals?.avgUrgency) || 0,
+    topTriggerSources: sourcesRaw.map((s: any) => ({
+      source: s.source,
+      count: Number(s.cnt),
+      avgOutcome: Number(s.avgOutcome) || 0,
+    })),
+  };
 }
 
 // =====================
@@ -1848,20 +2614,19 @@ export async function getTopViewedTokens(limit: number = 20): Promise<Array<{
     avgPnl: number | null;
   }> = [];
   
-  for (const [tokenMint, views] of tokenMap.entries()) {
-    const rawSignal = views.reduce((sum, v) => sum + calculateViewDecay(v.viewedAt), 0);
+  for (const [tokenMint, views] of Array.from(tokenMap.entries())) {
+    const rawSignal = views.reduce((sum: number, v: { viewedAt: number }) => sum + calculateViewDecay(v.viewedAt), 0);
     const score = Math.min(Math.log(rawSignal + 1), VIEW_SIGNAL_MAX_SCORE);
     
-    // Calculate averages for AI score and PnL
-    const aiScores = views.filter(v => v.aiAnalysisScore !== null).map(v => v.aiAnalysisScore!);
-    const pnls = views.filter(v => v.pnlPercent !== null).map(v => v.pnlPercent!);
+    const aiScores = views.filter((v: { aiAnalysisScore: number | null }) => v.aiAnalysisScore !== null).map((v: { aiAnalysisScore: number | null }) => v.aiAnalysisScore!);
+    const pnls = views.filter((v: { pnlPercent: number | null }) => v.pnlPercent !== null).map((v: { pnlPercent: number | null }) => v.pnlPercent!);
     
     results.push({
       tokenMint,
       score,
       uniqueUsers: views.length,
-      avgAiScore: aiScores.length > 0 ? aiScores.reduce((a, b) => a + b, 0) / aiScores.length : null,
-      avgPnl: pnls.length > 0 ? pnls.reduce((a, b) => a + b, 0) / pnls.length : null,
+      avgAiScore: aiScores.length > 0 ? aiScores.reduce((a: number, b: number) => a + b, 0) / aiScores.length : null,
+      avgPnl: pnls.length > 0 ? pnls.reduce((a: number, b: number) => a + b, 0) / pnls.length : null,
     });
   }
   

@@ -436,7 +436,7 @@ export function startGeckoScheduler(): void {
   state.callsThisMinute = 0;
   state.lastMinuteReset = Date.now();
 
-  console.log("[GeckoTerminal] Starting scheduler (high: 2.5s, low: 10s)");
+  console.log(`[GeckoTerminal] Starting scheduler (high: ${HIGH_PRIORITY_INTERVAL_MS / 1000}s, low: ${LOW_PRIORITY_INTERVAL_MS / 1000}s)`);
 
   state.highPriorityHandle = setInterval(async () => {
     try {
