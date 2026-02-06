@@ -198,10 +198,14 @@ export default function TokenPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/ai/chat"] });
-      queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
-      }, 2000);
+      const pollForResults = (attempts: number) => {
+        if (attempts <= 0) return;
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
+          pollForResults(attempts - 1);
+        }, 3000);
+      };
+      pollForResults(5);
       toast({ description: "Analysis requested! Results will appear shortly." });
     },
     onError: () => {
@@ -666,21 +670,25 @@ export default function TokenPage() {
 
       {/* Bubblemaps Holder Distribution */}
       <Card data-testid="card-bubblemaps">
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Users className="h-4 w-4" />
-            Holder Distribution (Bubblemaps)
-          </CardTitle>
-          <CardDescription>Visualize token holder concentration</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Users className="h-4 w-4" />
+              Holder Distribution (Bubblemaps)
+            </CardTitle>
+            <CardDescription>Visualize token holder concentration</CardDescription>
+          </div>
+          <a
+            href={`https://app.bubblemaps.io/sol/token/${tokenMint}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Button variant="outline" size="sm" data-testid="link-bubblemaps-open">
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open Bubblemaps
+            </Button>
+          </a>
         </CardHeader>
-        <CardContent className="p-0 overflow-hidden rounded-b-lg">
-          <iframe
-            src={`https://app.bubblemaps.io/sol/token/${tokenMint}?embed=1`}
-            className="w-full h-[400px] border-0"
-            title="Bubblemaps Token Distribution"
-            data-testid="iframe-bubblemaps"
-          />
-        </CardContent>
       </Card>
 
       {/* Trade History */}

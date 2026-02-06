@@ -268,18 +268,15 @@ export interface TopHolderInfo {
 
 export async function fetchTopHolders(mintAddress: string, limit: number = 100): Promise<TopHolderInfo[]> {
   try {
-    // Use rpc-provider's wrapper which handles Chainstack routing and tracking
-    const { getTokenLargestAccounts: rpcGetLargestAccounts, rpcCall } = await import("./rpc-provider");
+    const { getTokenLargestAccounts: rpcGetLargestAccounts, getMultipleAccountsInfo, rpcCall } = await import("./rpc-provider");
     const { PublicKey } = await import("@solana/web3.js");
     
-    // Fetch token largest accounts via rpc-provider (tracks usage, handles fallback)
     const largestAccounts = await rpcGetLargestAccounts(mintAddress);
     
     if (!largestAccounts || largestAccounts.length === 0) {
       return [];
     }
 
-    // Get token supply via rpc-provider
     const supplyInfo = await rpcCall("getTokenSupply", async (connection) => {
       return connection.getTokenSupply(new PublicKey(mintAddress));
     });
@@ -300,13 +297,34 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
 
     if (totalSupply === 0) return [];
 
+    const sliced = largestAccounts.slice(0, limit);
+    
+    let ownerAddresses: string[] = [];
+    try {
+      const tokenAccountAddresses = sliced.map(h => h.address.toString());
+      const accountInfos = await getMultipleAccountsInfo(tokenAccountAddresses);
+      
+      ownerAddresses = accountInfos.map((info: any) => {
+        if (info && info.data && info.data.length >= 64) {
+          const data = info.data as Buffer;
+          const ownerPubkey = new PublicKey(data.slice(32, 64));
+          return ownerPubkey.toString();
+        }
+        return "";
+      });
+    } catch (err) {
+      console.error("Failed to resolve holder owner addresses:", err);
+      ownerAddresses = sliced.map(h => h.address.toString());
+    }
+
     const divisor = Math.pow(10, decimals);
     const holders: TopHolderInfo[] = [];
-    for (const holder of largestAccounts.slice(0, limit)) {
+    for (let i = 0; i < sliced.length; i++) {
+      const holder = sliced[i];
       const amount = parseFloat(holder.amount || "0");
       const percent = (amount / totalSupply) * 100;
       holders.push({
-        address: holder.address.toString(),
+        address: ownerAddresses[i] || holder.address.toString(),
         percent: Math.round(percent * 100) / 100,
         amount: amount,
         uiAmount: amount / divisor,

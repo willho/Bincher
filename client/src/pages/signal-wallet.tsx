@@ -1000,21 +1000,25 @@ export default function SignalWalletPage() {
 
       {walletAddress && (
         <Card data-testid="card-bubblemaps">
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Wallet Activity (Bubblemaps)
-            </CardTitle>
-            <CardDescription>Visualize wallet transaction patterns</CardDescription>
+          <CardHeader className="flex flex-row items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                Wallet Activity (Bubblemaps)
+              </CardTitle>
+              <CardDescription>Visualize wallet transaction patterns</CardDescription>
+            </div>
+            <a
+              href={`https://app.bubblemaps.io/sol/wallet/${walletAddress}`}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <Button variant="outline" size="sm" data-testid="link-bubblemaps-open">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open Bubblemaps
+              </Button>
+            </a>
           </CardHeader>
-          <CardContent className="p-0 overflow-hidden rounded-b-lg">
-            <iframe
-              src={`https://app.bubblemaps.io/sol/wallet/${walletAddress}?embed=1`}
-              className="w-full h-[350px] border-0"
-              title="Bubblemaps Wallet Activity"
-              data-testid="iframe-bubblemaps"
-            />
-          </CardContent>
         </Card>
       )}
 

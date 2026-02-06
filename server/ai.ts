@@ -2087,11 +2087,46 @@ async function executeScoreRefresh(tokenIdentifier: string): Promise<{ success: 
   const snapshots = await getAllSnapshots();
   const searchLower = tokenIdentifier.toLowerCase();
   
-  const match = snapshots.find(s => 
+  let match = snapshots.find(s => 
+    s.tokenMint.toLowerCase() === searchLower ||
     s.tokenSymbol.toLowerCase() === searchLower ||
     s.tokenSymbol.toLowerCase().includes(searchLower) ||
     (s.tokenName && s.tokenName.toLowerCase().includes(searchLower))
   );
+  
+  if (!match) {
+    try {
+      const { getTokenData } = await import("./data-pool");
+      const poolData = await getTokenData(tokenIdentifier);
+      if (poolData) {
+        const snapshotId = await createSnapshot({
+          tokenMint: poolData.tokenMint,
+          tokenSymbol: poolData.tokenSymbol || "UNKNOWN",
+          tokenName: poolData.tokenName || "",
+          priceUsd: poolData.priceUsd || 0,
+          marketCap: poolData.marketCap || 0,
+          fdv: poolData.fdv || 0,
+          liquidity: poolData.liquidity || 0,
+          volume24h: poolData.volume24h || 0,
+          priceChange24h: poolData.priceChange24h || 0,
+          pairCreatedAt: poolData.pairCreatedAt || undefined,
+          buys24h: poolData.buys24h || 0,
+          sells24h: poolData.sells24h || 0,
+          buyVolume24h: poolData.buyVolume24h || 0,
+          sellVolume24h: poolData.sellVolume24h || 0,
+          holders: poolData.holders || 0,
+          topHolderPercent: poolData.topHolderPercent || 0,
+          sourceWallets: [],
+        });
+        const freshSnapshot = await getSnapshot(snapshotId);
+        if (freshSnapshot) {
+          match = freshSnapshot as any;
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to create snapshot from pool data:", err);
+    }
+  }
   
   if (!match) {
     return { success: false, message: `No token found matching "${tokenIdentifier}"` };
