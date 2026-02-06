@@ -193,35 +193,25 @@ export default function TokenPage() {
 
   const analyzeTokenMutation = useMutation({
     mutationFn: async () => {
-      const symbol = snapshot?.tokenSymbol || tokenMint?.slice(0, 8);
-      return apiRequest("POST", "/api/ai/chat", { 
-        message: `Analyze token ${symbol} (${tokenMint}). Give me your heat score and full analysis.`,
-        pageContext: `token:${tokenMint}`
-      });
+      if (!snapshot?.id) throw new Error("No snapshot to analyze");
+      return apiRequest("POST", `/api/ai/snapshots/${snapshot.id}/score`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/ai/chat"] });
-      const pollForResults = (attempts: number) => {
-        if (attempts <= 0) return;
-        setTimeout(() => {
-          queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
-          pollForResults(attempts - 1);
-        }, 3000);
-      };
-      pollForResults(5);
-      toast({ description: "Analysis requested! Results will appear shortly." });
+      queryClient.invalidateQueries({ queryKey: [`/api/snapshots/token/${tokenMint}`] });
+      toast({ description: "Analysis complete!" });
     },
     onError: () => {
       toast({ description: "Analysis failed. Try again in a moment.", variant: "destructive" });
     }
   });
 
-  function parseAiAnalysis(raw: string): { reasoning: string; redFlags: string[]; greenFlags: string[] } | null {
+  function parseAiAnalysis(raw: string): { reasoning: string; summary: string; redFlags: string[]; greenFlags: string[] } | null {
     try {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed.reasoning === "string") {
         return {
           reasoning: parsed.reasoning,
+          summary: typeof parsed.summary === "string" ? parsed.summary : "",
           redFlags: Array.isArray(parsed.redFlags) ? parsed.redFlags : [],
           greenFlags: Array.isArray(parsed.greenFlags) ? parsed.greenFlags : [],
         };
@@ -477,6 +467,12 @@ export default function TokenPage() {
                           Scored {formatTimeAgo(snapshot.aiScoredAt)}
                         </span>
                       ) : null}
+                    </div>
+                  )}
+                  {analysis?.summary && (
+                    <div className="pt-3 mt-3 border-t" data-testid="section-ai-summary">
+                      <p className="text-xs font-medium text-muted-foreground mb-1">Data Summary</p>
+                      <p className="text-sm" data-testid="text-ai-summary">{analysis.summary}</p>
                     </div>
                   )}
                   <Button 

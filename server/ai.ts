@@ -723,20 +723,67 @@ ${JSON.stringify(aggregateData, null, 2)}
   }
 
   if (historicalData && historicalData.length > 0) {
-    const patterns = historicalData.slice(0, 20).map(h => ({
-      symbol: h.tokenSymbol,
-      liquidity: h.liquidity,
-      marketCap: h.marketCap,
-      holders: h.holders,
-      hasTwitter: h.hasTwitter,
-      tokenAge: h.tokenAgeMinutes,
-      finalMultiplier: h.finalMultiplier,
-    }));
+    const buckets: Record<string, { count: number; wins: number; totalMult: number }> = {};
     
-    prompt += `\nHISTORICAL TRADE OUTCOMES (learn from these):
-${JSON.stringify(patterns, null, 2)}
+    for (const h of historicalData) {
+      if (h.finalMultiplier == null) continue;
+      const mult = h.finalMultiplier;
+      const isWin = mult >= 1.5;
+      
+      if (h.liquidity != null) {
+        const key = h.liquidity < 10000 ? "liquidity_under_10K" : h.liquidity < 50000 ? "liquidity_10K-50K" : "liquidity_above_50K";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0 };
+        buckets[key].count++; if (isWin) buckets[key].wins++; buckets[key].totalMult += mult;
+      }
+      if (h.topHolderPercent != null) {
+        const key = h.topHolderPercent > 40 ? "top10_holders_above_40%" : h.topHolderPercent > 20 ? "top10_holders_20-40%" : "top10_holders_below_20%";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0 };
+        buckets[key].count++; if (isWin) buckets[key].wins++; buckets[key].totalMult += mult;
+      }
+      if (h.tokenAgeMinutes != null) {
+        const ageHrs = h.tokenAgeMinutes / 60;
+        const key = ageHrs < 1 ? "age_under_1hr" : ageHrs < 24 ? "age_1-24hr" : "age_over_24hr";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0 };
+        buckets[key].count++; if (isWin) buckets[key].wins++; buckets[key].totalMult += mult;
+      }
+      if (h.marketCap != null) {
+        const key = h.marketCap < 50000 ? "mcap_under_50K" : h.marketCap < 500000 ? "mcap_50K-500K" : "mcap_above_500K";
+        if (!buckets[key]) buckets[key] = { count: 0, wins: 0, totalMult: 0 };
+        buckets[key].count++; if (isWin) buckets[key].wins++; buckets[key].totalMult += mult;
+      }
+    }
+    
+    const significantBuckets = Object.entries(buckets)
+      .filter(([_, b]) => b.count >= 3)
+      .sort((a, b) => b[1].count - a[1].count);
+    
+    if (significantBuckets.length > 0) {
+      const currentBucketKeys: string[] = [];
+      if (snapshot.liquidity != null) {
+        currentBucketKeys.push(snapshot.liquidity < 10000 ? "liquidity_under_10K" : snapshot.liquidity < 50000 ? "liquidity_10K-50K" : "liquidity_above_50K");
+      }
+      if (snapshot.topHolderPercent != null) {
+        currentBucketKeys.push(snapshot.topHolderPercent > 40 ? "top10_holders_above_40%" : snapshot.topHolderPercent > 20 ? "top10_holders_20-40%" : "top10_holders_below_20%");
+      }
+      if (snapshot.tokenAgeMinutes != null) {
+        const ageHrs = snapshot.tokenAgeMinutes / 60;
+        currentBucketKeys.push(ageHrs < 1 ? "age_under_1hr" : ageHrs < 24 ? "age_1-24hr" : "age_over_24hr");
+      }
+      if (snapshot.marketCap != null) {
+        currentBucketKeys.push(snapshot.marketCap < 50000 ? "mcap_under_50K" : snapshot.marketCap < 500000 ? "mcap_50K-500K" : "mcap_above_500K");
+      }
+      
+      prompt += `\nLEARNED OUTCOME DATA (reference these stats in your summary):
+${significantBuckets.map(([key, b]) => {
+  const winRate = ((b.wins / b.count) * 100).toFixed(0);
+  const avgMult = (b.totalMult / b.count).toFixed(1);
+  return `- ${key}: ${b.count} tokens tracked, ${winRate}% hit 1.5x+, avg ${avgMult}x`;
+}).join('\n')}
 
+THIS TOKEN falls into these buckets: ${currentBucketKeys.join(', ')}
+Reference the matching bucket stats in your summary. Example: "This token has $${snapshot.liquidity ? Math.round(snapshot.liquidity / 1000) + 'K' : '?'} liquidity. From ${currentBucketKeys[0] ? `my ${currentBucketKeys[0]} data` : 'similar tokens'}..."
 `;
+    }
   }
 
   prompt += `Analyze and return JSON with:
@@ -828,7 +875,7 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
   const budgetCheck = await shouldAllowApiCall("openai");
   if (!budgetCheck.allowed) {
     console.warn(`OpenAI API blocked: ${budgetCheck.reason}`);
-    return { score: 50, reasoning: "AI scoring unavailable due to budget limits", redFlags: [], greenFlags: [] };
+    return { score: 50, reasoning: "AI scoring unavailable due to budget limits", summary: "", redFlags: [], greenFlags: [] };
   }
 
   try {
@@ -956,7 +1003,60 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
   }
 }
 
+const ANALYSIS_CACHE_TTL = 300;
+const ANALYSIS_CHANGE_THRESHOLD = 0.15;
+
 export async function refreshScore(snapshotId: number): Promise<ScoreResult | null> {
+  const snapshot = await getSnapshot(snapshotId);
+  if (!snapshot) return scoreToken(snapshotId);
+  
+  if (snapshot.aiScoredAt && snapshot.aiAnalysis && snapshot.aiScore != null) {
+    const now = Math.floor(Date.now() / 1000);
+    const age = now - snapshot.aiScoredAt;
+    
+    if (age < ANALYSIS_CACHE_TTL) {
+      try {
+        const cached = JSON.parse(snapshot.aiAnalysis);
+        console.log(`[AI] Using cached analysis for snapshot ${snapshotId} (${age}s old)`);
+        return {
+          score: snapshot.aiScore,
+          reasoning: cached.reasoning || "",
+          summary: cached.summary || "",
+          redFlags: cached.redFlags || [],
+          greenFlags: cached.greenFlags || [],
+        };
+      } catch {}
+    }
+    
+    const { getTokenData } = await import("./data-pool");
+    const currentData = await getTokenData(snapshot.tokenMint);
+    if (currentData && age < ANALYSIS_CACHE_TTL * 6) {
+      const priceChanged = snapshot.priceUsd && currentData.priceUsd
+        ? Math.abs(currentData.priceUsd - snapshot.priceUsd) / snapshot.priceUsd > ANALYSIS_CHANGE_THRESHOLD
+        : false;
+      const liqChanged = snapshot.liquidity && currentData.liquidity
+        ? Math.abs(currentData.liquidity - snapshot.liquidity) / snapshot.liquidity > ANALYSIS_CHANGE_THRESHOLD
+        : false;
+      const mcapChanged = snapshot.marketCap && currentData.marketCap
+        ? Math.abs(currentData.marketCap - snapshot.marketCap) / snapshot.marketCap > ANALYSIS_CHANGE_THRESHOLD
+        : false;
+      
+      if (!priceChanged && !liqChanged && !mcapChanged) {
+        try {
+          const cached = JSON.parse(snapshot.aiAnalysis);
+          console.log(`[AI] Metrics unchanged for snapshot ${snapshotId} (${age}s old, within ${ANALYSIS_CHANGE_THRESHOLD * 100}% threshold)`);
+          return {
+            score: snapshot.aiScore,
+            reasoning: cached.reasoning || "",
+            summary: cached.summary || "",
+            redFlags: cached.redFlags || [],
+            greenFlags: cached.greenFlags || [],
+          };
+        } catch {}
+      }
+    }
+  }
+  
   return scoreToken(snapshotId);
 }
 
@@ -2115,12 +2215,12 @@ async function executeScoreRefresh(tokenIdentifier: string): Promise<{ success: 
           volume24h: poolData.volume24h || 0,
           priceChange24h: poolData.priceChange24h || 0,
           pairCreatedAt: poolData.pairCreatedAt || undefined,
-          buys24h: poolData.buys24h || 0,
-          sells24h: poolData.sells24h || 0,
-          buyVolume24h: poolData.buyVolume24h || 0,
-          sellVolume24h: poolData.sellVolume24h || 0,
-          holders: poolData.holders || 0,
-          topHolderPercent: poolData.topHolderPercent || 0,
+          buys24h: (poolData as any).buys24h || 0,
+          sells24h: (poolData as any).sells24h || 0,
+          buyVolume24h: (poolData as any).buyVolume24h || 0,
+          sellVolume24h: (poolData as any).sellVolume24h || 0,
+          holders: (poolData as any).holders || 0,
+          topHolderPercent: (poolData as any).topHolderPercent || 0,
           sourceWallets: [],
         });
         const freshSnapshot = await getSnapshot(snapshotId);
