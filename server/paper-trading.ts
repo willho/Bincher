@@ -565,7 +565,10 @@ export async function generateAiRecommendations(
   analysis: Omit<StrategyAnalysis, 'aiRecommendations'>
 ): Promise<AiRecommendation[]> {
   try {
-    const openai = new OpenAI();
+    const openai = new OpenAI({
+      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || "dummy-key",
+      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || "https://api.openai.com/v1",
+    });
     
     // Build discovery context section if available
     let discoverySection = "";
