@@ -445,6 +445,7 @@ interface Trade {
 
 interface SignalWalletActivityChartProps {
   trades: Trade[];
+  embedded?: boolean;
 }
 
 const activityChartConfig: ChartConfig = {
@@ -458,7 +459,7 @@ const activityChartConfig: ChartConfig = {
   },
 };
 
-export function SignalWalletActivityChart({ trades }: SignalWalletActivityChartProps) {
+export function SignalWalletActivityChart({ trades, embedded = false }: SignalWalletActivityChartProps) {
   const chartData = useMemo(() => {
     if (!trades || trades.length === 0) return [];
 
@@ -490,39 +491,60 @@ export function SignalWalletActivityChart({ trades }: SignalWalletActivityChartP
       .slice(-14); // Last 14 days
   }, [trades]);
 
-  if (!trades || trades.length === 0) {
-    return (
-      <Card data-testid="card-activity-chart">
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <BarChart3 className="h-4 w-4" />
-            Trading Activity
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-40 flex items-center justify-center text-muted-foreground text-sm" data-testid="text-activity-empty">
-            No trade data available.
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+  const chartContent = (() => {
+    if (!trades || trades.length === 0) {
+      return (
+        <div className="h-32 flex items-center justify-center text-muted-foreground text-sm" data-testid="text-activity-empty">
+          No trade data available.
+        </div>
+      );
+    }
 
-  if (chartData.length < 2) {
+    if (chartData.length < 2) {
+      return (
+        <div className="h-32 flex items-center justify-center text-muted-foreground text-sm" data-testid="text-activity-insufficient">
+          Not enough data for chart. Need trades over multiple days.
+        </div>
+      );
+    }
+
     return (
-      <Card data-testid="card-activity-chart">
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <BarChart3 className="h-4 w-4" />
-            Trading Activity
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="h-40 flex items-center justify-center text-muted-foreground text-sm" data-testid="text-activity-insufficient">
-            Not enough data for chart. Need trades over multiple days.
-          </div>
-        </CardContent>
-      </Card>
+      <ChartContainer config={activityChartConfig} className="h-40 w-full">
+        <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+          <XAxis
+            dataKey="date"
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+            fontSize={10}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            tickMargin={4}
+            fontSize={10}
+            width={25}
+            allowDecimals={false}
+          />
+          <ChartTooltip
+            content={<ChartTooltipContent />}
+          />
+          <Bar dataKey="buys" fill="hsl(142, 76%, 36%)" stackId="stack" radius={[0, 0, 0, 0]} />
+          <Bar dataKey="sells" fill="hsl(0, 84%, 60%)" stackId="stack" radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ChartContainer>
+    );
+  })();
+
+  if (embedded) {
+    return (
+      <div data-testid="chart-activity-embedded" className="mb-4">
+        <p className="text-sm font-medium text-muted-foreground mb-2 flex items-center gap-2">
+          <BarChart3 className="h-4 w-4" />
+          Activity (14d)
+        </p>
+        {chartContent}
+      </div>
     );
   }
 
@@ -531,34 +553,11 @@ export function SignalWalletActivityChart({ trades }: SignalWalletActivityChartP
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <BarChart3 className="h-4 w-4" />
-          Trading Activity (14d)
+          Trading Activity {chartData.length >= 2 ? "(14d)" : ""}
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <ChartContainer config={activityChartConfig} className="h-40 w-full">
-          <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-            <XAxis
-              dataKey="date"
-              tickLine={false}
-              axisLine={false}
-              tickMargin={8}
-              fontSize={10}
-            />
-            <YAxis
-              tickLine={false}
-              axisLine={false}
-              tickMargin={4}
-              fontSize={10}
-              width={25}
-              allowDecimals={false}
-            />
-            <ChartTooltip
-              content={<ChartTooltipContent />}
-            />
-            <Bar dataKey="buys" fill="hsl(142, 76%, 36%)" stackId="stack" radius={[0, 0, 0, 0]} />
-            <Bar dataKey="sells" fill="hsl(0, 84%, 60%)" stackId="stack" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ChartContainer>
+        {chartContent}
       </CardContent>
     </Card>
   );

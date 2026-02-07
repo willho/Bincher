@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
-import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships, swaps, walletRuleDefaults, tokenBlacklist } from "@shared/schema";
+import { tokenSnapshots, aiChatMessages, pendingBuys, tokenEvents, userEventPreferences, priceAggregates, priceSnapshots, settings, cachedAlerts, adminSettings, users, communityInsights, monitoredWallets, holdings, userRelationships, swaps, walletRuleDefaults, tokenBlacklist } from "@shared/schema";
 import type { TokenSnapshot, InsertTokenSnapshot, TokenEvent, UserEventPreferences } from "@shared/schema";
 import { eq, desc, and, isNotNull, gte, inArray, sql } from "drizzle-orm";
 import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget";
@@ -667,7 +667,8 @@ async function buildScoringPrompt(
   snapshot: TokenSnapshot, 
   historicalData?: TokenSnapshot[],
   aggregateData?: { tier: string; open: number; high: number; low: number; close: number; volume: number; buys: number; sells: number; marketCap: number }[],
-  whaleData?: { top10Percent: number; holderCount: number; recentWhaleActivity: boolean }
+  whaleData?: { top10Percent: number; holderCount: number; recentWhaleActivity: boolean },
+  timeframeContext?: { period: string; priceChange: number; volumeTrend: string; highLow: string }[]
 ): Promise<string> {
   const data = {
     token: snapshot.tokenSymbol,
@@ -719,6 +720,15 @@ ${JSON.stringify(aggregateData, null, 2)}
 - Total holder count: ${whaleData.holderCount}
 - Recent whale activity detected: ${whaleData.recentWhaleActivity ? 'Yes' : 'No'}
 
+`;
+  }
+
+  // Add timeframe price trends (7d/14d/30d)
+  if (timeframeContext && timeframeContext.length > 0) {
+    prompt += `\nPRICE TREND CONTEXT:
+${timeframeContext.map(t => `- ${t.period}: ${t.priceChange > 0 ? '+' : ''}${t.priceChange}% price change, volume ${t.volumeTrend}, range ${t.highLow}`).join('\n')}
+
+Use this to determine if the token is bleeding out (steady decline), recovering (bounce from low), pumping (sharp rise), or consolidating (sideways).
 `;
   }
 
@@ -805,6 +815,7 @@ Key factors to consider:
 - LP burned/locked status
 - Price patterns from OHLC data (if provided) - look for volatility, trends, support levels
 - Whale activity - recent whale buys are positive signals, high concentration is risky
+- Timeframe trends (if provided) - distinguish bleeding out (-30%+ over 14d with declining volume) vs recovering (bounce from low with increasing volume) vs pumping vs consolidating
 
 The "summary" field is critical - connect the actual token metrics (liquidity, holders, market cap, age) to what they indicate. Be specific with numbers, not generic warnings.
 
@@ -870,7 +881,58 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
     console.warn("Failed to fetch holder data for scoring:", err);
   }
   
-  const prompt = await buildScoringPrompt(snapshot, historicalData, aggregateData, whaleData);
+  // Fetch timeframe price context (7d/14d/30d price changes from daily snapshots)
+  let timeframeContext: { period: string; priceChange: number; volumeTrend: string; highLow: string }[] | undefined;
+  try {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const dateStr = thirtyDaysAgo.toISOString().split('T')[0];
+    
+    const dailySnapshots = await db.select().from(priceSnapshots)
+      .where(and(
+        eq(priceSnapshots.tokenMint, snapshot.tokenMint),
+        eq(priceSnapshots.snapshotType, "daily"),
+        gte(priceSnapshots.snapshotDate, dateStr)
+      ))
+      .orderBy(desc(priceSnapshots.snapshotDate))
+      .limit(30);
+    
+    if (dailySnapshots.length >= 2) {
+      const latest = dailySnapshots[0];
+      timeframeContext = [];
+      
+      for (const [days, label] of [[7, "7d"], [14, "14d"], [30, "30d"]] as [number, string][]) {
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - days);
+        const periodSnapshots = dailySnapshots.filter(s => s.snapshotDate >= cutoffDate.toISOString().split('T')[0]);
+        
+        if (periodSnapshots.length >= 2) {
+          const oldest = periodSnapshots[periodSnapshots.length - 1];
+          const priceChange = oldest.close > 0 ? ((latest.close - oldest.close) / oldest.close) * 100 : 0;
+          
+          const avgVolume = periodSnapshots.reduce((sum, s) => sum + (s.volume || 0), 0) / periodSnapshots.length;
+          const recentHalf = periodSnapshots.slice(0, Math.ceil(periodSnapshots.length / 2));
+          const olderHalf = periodSnapshots.slice(Math.ceil(periodSnapshots.length / 2));
+          const recentAvgVol = recentHalf.reduce((sum, s) => sum + (s.volume || 0), 0) / (recentHalf.length || 1);
+          const olderAvgVol = olderHalf.reduce((sum, s) => sum + (s.volume || 0), 0) / (olderHalf.length || 1);
+          const volumeTrend = olderAvgVol > 0 && recentAvgVol > olderAvgVol * 1.2 ? "increasing" : 
+            olderAvgVol > 0 && recentAvgVol < olderAvgVol * 0.8 ? "decreasing" : "stable";
+          
+          const high = Math.max(...periodSnapshots.map(s => s.high));
+          const low = Math.min(...periodSnapshots.map(s => s.low));
+          const highLow = `$${high.toFixed(8)} / $${low.toFixed(8)}`;
+          
+          timeframeContext.push({ period: label, priceChange: Math.round(priceChange * 10) / 10, volumeTrend, highLow });
+        }
+      }
+      
+      if (timeframeContext.length === 0) timeframeContext = undefined;
+    }
+  } catch (err) {
+    console.warn("Failed to fetch timeframe price context:", err);
+  }
+  
+  const prompt = await buildScoringPrompt(snapshot, historicalData, aggregateData, whaleData, timeframeContext);
 
   const budgetCheck = await shouldAllowApiCall("openai");
   if (!budgetCheck.allowed) {

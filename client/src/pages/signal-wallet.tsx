@@ -710,8 +710,6 @@ export default function SignalWalletPage() {
         </Card>
       </div>
 
-      <SignalWalletActivityChart trades={trades} />
-
       {/* Pincher's Strategy Panel */}
       <Card data-testid="card-pincher-strategy">
         <CardHeader 
@@ -1026,6 +1024,7 @@ export default function SignalWalletPage() {
           <CardTitle>Trade History</CardTitle>
         </CardHeader>
         <CardContent>
+          <SignalWalletActivityChart trades={trades} embedded />
           {trades.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               No trades found for this timeframe.

@@ -46,7 +46,7 @@ import {
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
 import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews } from "@shared/schema";
-import { eq, and, or, isNotNull, desc, gte, sql, like } from "drizzle-orm";
+import { eq, and, or, isNotNull, desc, gte, sql, like, inArray } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs, logWebhook, logErrorToTable, logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
@@ -4958,6 +4958,7 @@ export async function registerRoutes(
           liquidity: poolData.liquidity,
           volume24h: poolData.volume24h,
           priceChange24h: poolData.priceChange24h,
+          pairAddress: poolData.pairAddress || null,
           source: 'tokenDataPool',
           lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
           isFallback: true,
@@ -4998,42 +4999,57 @@ export async function registerRoutes(
     try {
       const tokenMint = req.params.tokenMint as string;
       
-      const signalSources = await db.select({
-        walletAddress: holdings.sourceWalletAddress,
-        walletLabel: monitoredWallets.label,
-        signalWalletId: holdings.signalWalletId,
-        buyTimestamp: holdings.buyTimestamp,
-        buyPrice: holdings.buyPrice,
-        solSpent: holdings.solSpent,
-        tokenSymbol: holdings.tokenSymbol,
+      const userWallets = await db.select({
+        id: monitoredWallets.id,
+        walletAddress: monitoredWallets.walletAddress,
+        label: monitoredWallets.label,
+      }).from(monitoredWallets).where(eq(monitoredWallets.userId, req.userId!));
+
+      if (userWallets.length === 0) {
+        return res.json([]);
+      }
+
+      const walletAddresses = userWallets.map(w => w.walletAddress);
+      const walletLabelMap = new Map(userWallets.map(w => [w.walletAddress.toLowerCase(), w.label]));
+
+      const signalSwaps = await db.select({
+        source: swaps.source,
+        timestamp: swaps.timestamp,
+        fromToken: swaps.fromToken,
+        toToken: swaps.toToken,
+        fromAmount: swaps.fromAmount,
+        toAmount: swaps.toAmount,
       })
-        .from(holdings)
-        .leftJoin(monitoredWallets, eq(holdings.signalWalletId, monitoredWallets.id))
+        .from(swaps)
         .where(
           and(
-            eq(holdings.tokenMint, tokenMint),
-            eq(holdings.userId, req.userId!),
-            isNotNull(holdings.sourceWalletAddress)
+            or(eq(swaps.toToken, tokenMint), eq(swaps.fromToken, tokenMint)),
+            inArray(swaps.source, walletAddresses)
           )
         )
-        .orderBy(desc(holdings.buyTimestamp));
-      
-      const uniqueSources = signalSources.reduce((acc, source) => {
-        const key = source.walletAddress || '';
+        .orderBy(desc(swaps.timestamp))
+        .limit(100);
+
+      const uniqueSources = signalSwaps.reduce((acc, swap) => {
+        const key = swap.source.toLowerCase();
+        const isBuy = swap.toToken === tokenMint;
+        const solAmount = isBuy ? swap.fromAmount : swap.toAmount;
         if (!acc.has(key)) {
           acc.set(key, {
-            walletAddress: source.walletAddress,
-            walletLabel: source.walletLabel,
-            firstSignal: source.buyTimestamp,
-            totalBuys: 1,
-            totalSolSpent: source.solSpent,
+            walletAddress: swap.source,
+            walletLabel: walletLabelMap.get(key) || null,
+            firstSignal: swap.timestamp,
+            totalBuys: isBuy ? 1 : 0,
+            totalSolSpent: isBuy ? solAmount : 0,
           });
         } else {
           const existing = acc.get(key)!;
-          existing.totalBuys++;
-          existing.totalSolSpent += source.solSpent;
-          if (source.buyTimestamp < existing.firstSignal) {
-            existing.firstSignal = source.buyTimestamp;
+          if (isBuy) {
+            existing.totalBuys++;
+            existing.totalSolSpent += solAmount;
+          }
+          if (swap.timestamp < existing.firstSignal) {
+            existing.firstSignal = swap.timestamp;
           }
         }
         return acc;
@@ -5068,10 +5084,10 @@ export async function registerRoutes(
       // Get user's monitored wallets to check which holders are tracked
       const userWallets = await db.select({
         id: monitoredWallets.id,
-        address: monitoredWallets.address,
+        walletAddress: monitoredWallets.walletAddress,
       }).from(monitoredWallets).where(eq(monitoredWallets.userId, req.userId!));
       
-      const walletMap = new Map(userWallets.map(w => [w.address.toLowerCase(), w.id]));
+      const walletMap = new Map(userWallets.map(w => [w.walletAddress.toLowerCase(), w.id]));
 
       // Return top 20 holders with formatted data and tracking status
       const holders = holderCache.holders.slice(0, 20).map((holder, index) => {
@@ -5256,32 +5272,48 @@ export async function registerRoutes(
     try {
       const tokenMint = req.params.tokenMint as string;
       
-      // Get all swaps involving this token (as either from or to token)
+      // Get user's monitored wallets
+      const userWallets = await db.select({
+        walletAddress: monitoredWallets.walletAddress,
+        label: monitoredWallets.label,
+      }).from(monitoredWallets).where(eq(monitoredWallets.userId, req.userId!));
+      const walletLabelMap = new Map(userWallets.map(w => [w.walletAddress.toLowerCase(), w.label]));
+      const signalAddresses = userWallets.map(w => w.walletAddress);
+
+      // Get all swaps involving this token (user's own + signal wallet trades)
       const tokenTrades = await db.select()
         .from(swaps)
         .where(
           and(
-            eq(swaps.userId, req.userId!),
             or(
               eq(swaps.toToken, tokenMint),
               eq(swaps.fromToken, tokenMint)
+            ),
+            or(
+              eq(swaps.userId, req.userId!),
+              ...(signalAddresses.length > 0 ? [inArray(swaps.source, signalAddresses)] : [])
             )
           )
         )
         .orderBy(desc(swaps.timestamp))
-        .limit(50);
+        .limit(100);
       
-      // Format trades for display
-      const formattedTrades = tokenTrades.map(trade => ({
-        id: trade.id,
-        signature: trade.signature,
-        timestamp: trade.timestamp,
-        type: trade.toToken === tokenMint ? "buy" : "sell",
-        amount: trade.toToken === tokenMint ? trade.toAmount : trade.fromAmount,
-        tokenSymbol: trade.toToken === tokenMint ? trade.toTokenSymbol : trade.fromTokenSymbol,
-        solAmount: trade.toToken === tokenMint ? trade.fromAmount : trade.toAmount,
-        source: trade.source,
-      }));
+      // Format trades for display with signal flag
+      const formattedTrades = tokenTrades.map(trade => {
+        const isSignal = signalAddresses.some(a => a.toLowerCase() === trade.source.toLowerCase());
+        return {
+          id: trade.id,
+          signature: trade.signature,
+          timestamp: trade.timestamp,
+          type: trade.toToken === tokenMint ? "buy" : "sell",
+          amount: trade.toToken === tokenMint ? trade.toAmount : trade.fromAmount,
+          tokenSymbol: trade.toToken === tokenMint ? trade.toTokenSymbol : trade.fromTokenSymbol,
+          solAmount: trade.toToken === tokenMint ? trade.fromAmount : trade.toAmount,
+          source: trade.source,
+          isSignal,
+          signalLabel: isSignal ? (walletLabelMap.get(trade.source.toLowerCase()) || trade.source.slice(0, 6) + '...' + trade.source.slice(-4)) : null,
+        };
+      });
       
       res.json(formattedTrades);
     } catch (error) {

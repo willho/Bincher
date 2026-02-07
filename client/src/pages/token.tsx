@@ -35,6 +35,8 @@ interface TokenTrade {
   tokenSymbol: string;
   solAmount: number;
   source: string;
+  isSignal: boolean;
+  signalLabel: string | null;
 }
 
 interface TopHolder {
@@ -63,6 +65,7 @@ export default function TokenPage() {
 
   const lastRefreshRef = useRef<number>(0);
   const REFRESH_COOLDOWN_MS = 60000;
+  const [tradeTab, setTradeTab] = useState<"yours" | "signal">("yours");
 
   // Touch token on mount to record user view for discovery signals
   useEffect(() => {
@@ -342,7 +345,7 @@ export default function TokenPage() {
               <Skeleton className="h-8 w-16" />
             ) : (
               <p className="text-2xl font-bold" data-testid="text-holders">
-                {snapshot?.holders?.toLocaleString() || "N/A"}
+                {topHolders?.totalCount ? topHolders.totalCount.toLocaleString() : snapshot?.holders?.toLocaleString() || "N/A"}
               </p>
             )}
           </CardContent>
@@ -723,32 +726,59 @@ export default function TokenPage() {
           </CardContent>
         </Card>
 
-        <Card data-testid="card-dexscreener-chart">
+        <Card data-testid="card-price-chart">
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
               Price Chart
+              <Badge variant="outline" className="text-xs ml-auto">
+                {snapshot?.pairAddress ? "DEXTools" : "DexScreener"}
+              </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0 overflow-hidden rounded-b-lg">
             <iframe
-              src={`https://dexscreener.com/solana/${tokenMint}?embed=1&theme=dark&trades=0&info=0`}
+              src={snapshot?.pairAddress
+                ? `https://www.dextools.io/widget-chart/en/solana/pe-light/${snapshot.pairAddress}?theme=dark&chartType=1&chartResolution=15&drawingToolbars=false`
+                : `https://dexscreener.com/solana/${tokenMint}?embed=1&theme=dark&trades=0&info=0`
+              }
               className="w-full h-[300px] border-0"
-              title="DexScreener Chart"
-              data-testid="iframe-dexscreener"
+              title="Price Chart"
+              data-testid="iframe-price-chart"
             />
           </CardContent>
         </Card>
       </div>
 
-      {/* Trade History */}
+      {/* Trade History - Split into Your Trades and Signal Activity */}
       <Card data-testid="card-trade-history">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Clock className="h-5 w-5" />
             Trade History
           </CardTitle>
-          <CardDescription>Your buy and sell activity for this token</CardDescription>
+          <div className="flex items-center gap-2 mt-2">
+            <Button
+              variant={tradeTab === "yours" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setTradeTab("yours")}
+              data-testid="button-tab-your-trades"
+              className="toggle-elevate"
+            >
+              Your Trades
+              {tradeHistory && <Badge variant="secondary" className="ml-1">{tradeHistory.filter(t => !t.isSignal).length}</Badge>}
+            </Button>
+            <Button
+              variant={tradeTab === "signal" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setTradeTab("signal")}
+              data-testid="button-tab-signal-trades"
+              className="toggle-elevate"
+            >
+              Signal Activity
+              {tradeHistory && <Badge variant="secondary" className="ml-1">{tradeHistory.filter(t => t.isSignal).length}</Badge>}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           {isLoadingTrades ? (
@@ -757,46 +787,55 @@ export default function TokenPage() {
               <Skeleton className="h-12 w-full" />
               <Skeleton className="h-12 w-full" />
             </div>
-          ) : tradeHistory && tradeHistory.length > 0 ? (
-            <div className="space-y-2">
-              {tradeHistory.map((trade) => (
-                <div 
-                  key={trade.id} 
-                  className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
-                  data-testid={`trade-${trade.id}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className={`h-8 w-8 rounded-full flex items-center justify-center ${trade.type === "buy" ? "bg-green-500/10" : "bg-red-500/10"}`}>
-                      <TrendingUp className={`h-4 w-4 ${trade.type === "buy" ? "text-green-500" : "text-red-500 rotate-180"}`} />
+          ) : (() => {
+            const filteredTrades = tradeHistory?.filter(t => tradeTab === "yours" ? !t.isSignal : t.isSignal) || [];
+            return filteredTrades.length > 0 ? (
+              <div className="space-y-2">
+                {filteredTrades.map((trade) => (
+                  <div 
+                    key={trade.id} 
+                    className="flex items-center justify-between p-3 rounded-lg bg-muted/50"
+                    data-testid={`trade-${trade.id}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`h-8 w-8 rounded-full flex items-center justify-center ${trade.type === "buy" ? "bg-green-500/10" : "bg-red-500/10"}`}>
+                        <TrendingUp className={`h-4 w-4 ${trade.type === "buy" ? "text-green-500" : "text-red-500 rotate-180"}`} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className={`font-medium text-sm ${trade.type === "buy" ? "text-green-500" : "text-red-500"}`}>
+                            {trade.type === "buy" ? "Bought" : "Sold"}
+                          </span>
+                          <span className="text-sm text-muted-foreground">
+                            {trade.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {trade.tokenSymbol}
+                          </span>
+                          {trade.isSignal && trade.signalLabel && (
+                            <Badge variant="outline" className="text-xs">
+                              <Wallet className="h-3 w-3 mr-1" />
+                              {trade.signalLabel}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatTimeAgo(trade.timestamp)}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className={`font-medium text-sm ${trade.type === "buy" ? "text-green-500" : "text-red-500"}`}>
-                          {trade.type === "buy" ? "Bought" : "Sold"}
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {trade.amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} {trade.tokenSymbol}
-                        </span>
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {formatTimeAgo(trade.timestamp)} • {trade.source}
-                      </div>
+                    <div className="text-right">
+                      <p className="text-sm font-medium">{trade.solAmount.toFixed(4)} SOL</p>
+                      <p className="text-xs text-muted-foreground">{formatUsd(solToUsd(trade.solAmount))}</p>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-medium">{trade.solAmount.toFixed(4)} SOL</p>
-                    <p className="text-xs text-muted-foreground">{formatUsd(solToUsd(trade.solAmount))}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-6 text-muted-foreground">
-              <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No trades found</p>
-              <p className="text-xs mt-1">Trade history will appear here</p>
-            </div>
-          )}
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-6 text-muted-foreground">
+                <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm">{tradeTab === "yours" ? "No trades from you yet" : "No signal wallet trades found"}</p>
+                <p className="text-xs mt-1">{tradeTab === "yours" ? "Your trades will appear here" : "Signal wallet activity for this token will show here"}</p>
+              </div>
+            );
+          })()}
         </CardContent>
       </Card>
 
