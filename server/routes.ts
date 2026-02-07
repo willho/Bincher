@@ -6647,17 +6647,31 @@ export async function registerRoutes(
         console.log(`[StrategyAnalyze] Auto-analyzing wallet: ${walletAddress} (stale: ${isStale}, hasNewSwaps: ${hasNewSwaps})`);
         const analysis = await analyzeWalletStrategy(walletAddress, userId);
         
-        if (analysis.sampleSize >= 5) {
-          try {
-            const recommendations = await generateAiRecommendations(walletAddress, analysis);
-            analysis.aiRecommendations = recommendations;
-          } catch (aiErr) {
-            console.error("[StrategyAnalyze] AI recommendations failed, continuing without:", aiErr);
-          }
-        }
-        
         await saveWalletStrategy(walletAddress, userId, analysis);
-        res.json({ ...analysis, fromCache: false });
+        
+        const insights: string[] = [];
+        if (analysis.winRate && analysis.winRate > 0.6) insights.push(`Strong performer with ${(analysis.winRate * 100).toFixed(0)}% win rate`);
+        if (analysis.profitFactor && analysis.profitFactor > 2) insights.push(`Excellent risk/reward ratio (${analysis.profitFactor.toFixed(1)}x)`);
+        if (analysis.avgHoldDuration && analysis.avgHoldDuration < 1800) insights.push(`Quick flipper - holds avg ${Math.round(analysis.avgHoldDuration / 60)} minutes`);
+        else if (analysis.avgHoldDuration && analysis.avgHoldDuration > 86400) insights.push(`Patient trader - holds avg ${Math.round(analysis.avgHoldDuration / 86400)} days`);
+        
+        res.json({ ...analysis, insights, fromCache: false });
+        
+        if (analysis.sampleSize >= 5) {
+          generateAiRecommendations(walletAddress, analysis).then(async (recommendations) => {
+            if (recommendations && recommendations.length > 0) {
+              try {
+                analysis.aiRecommendations = recommendations;
+                await saveWalletStrategy(walletAddress, userId, analysis);
+                console.log(`[StrategyAnalyze] GET auto-refresh: AI recs saved (${recommendations.length})`);
+              } catch (saveErr: any) {
+                console.error(`[StrategyAnalyze] GET auto-refresh AI save failed:`, saveErr.message);
+              }
+            }
+          }).catch((aiErr: any) => {
+            console.error("[StrategyAnalyze] GET auto-refresh AI failed:", aiErr.message);
+          });
+        }
       } catch (analysisError) {
         console.error("[StrategyAnalyze] Re-analysis failed:", analysisError);
         const fallback = formatCachedResponse(cached);
