@@ -195,9 +195,12 @@ export default function SignalWalletPage() {
   const [holdingsSort, setHoldingsSort] = useState<HoldingsSortOption>("value");
   const [holdingsTab, setHoldingsTab] = useState<HoldingsTab>("signal");
   const [showStrategyPanel, setShowStrategyPanel] = useState(false);
+  const [waitingForAiRecs, setWaitingForAiRecs] = useState(false);
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
   const wsRef = useRef<WebSocket | null>(null);
+  const aiPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const aiPollStartRef = useRef<number>(0);
 
   // Touch wallet on mount to refresh lastViewedAt (resets decay timer)
   useEffect(() => {
@@ -301,6 +304,14 @@ export default function SignalWalletPage() {
     staleTime: 300000,
   });
 
+  const stopAiPolling = () => {
+    if (aiPollRef.current) {
+      clearInterval(aiPollRef.current);
+      aiPollRef.current = null;
+    }
+    setWaitingForAiRecs(false);
+  };
+
   const analyzeMutation = useMutation({
     mutationFn: async () => {
       if (!walletAddress) throw new Error("No wallet address");
@@ -310,6 +321,27 @@ export default function SignalWalletPage() {
       toast({ description: "Strategy analysis complete. AI recommendations loading in background..." });
       refetchStrategy();
       setShowStrategyPanel(true);
+      if (aiPollRef.current) {
+        clearInterval(aiPollRef.current);
+        aiPollRef.current = null;
+      }
+      setWaitingForAiRecs(true);
+      aiPollStartRef.current = Date.now();
+      aiPollRef.current = setInterval(async () => {
+        if (Date.now() - aiPollStartRef.current > 60000) {
+          stopAiPolling();
+          return;
+        }
+        try {
+          const result = await refetchStrategy();
+          const recs = result.data?.analysis?.aiRecommendations;
+          if (recs && recs.length > 0) {
+            stopAiPolling();
+            toast({ description: "Miss Pincher's recommendations are ready!" });
+          }
+        } catch {
+        }
+      }, 3000);
     },
     onError: (error: any) => {
       toast({ 
@@ -318,6 +350,10 @@ export default function SignalWalletPage() {
       });
     },
   });
+
+  useEffect(() => {
+    return () => stopAiPolling();
+  }, []);
 
   useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -945,6 +981,21 @@ export default function SignalWalletPage() {
                   </div>
                 )}
                 
+                {waitingForAiRecs && (!strategyData.analysis.aiRecommendations || strategyData.analysis.aiRecommendations.length === 0) && (
+                  <div className="p-4 rounded-md border border-accent/30 bg-accent/5 space-y-3" data-testid="ai-recs-loading">
+                    <h4 className="text-sm font-medium flex items-center gap-2">
+                      <Brain className="h-4 w-4 text-accent-foreground animate-pulse" />
+                      Miss Pincher is analyzing...
+                    </h4>
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-3/4" />
+                      <Skeleton className="h-4 w-1/2" />
+                      <Skeleton className="h-12 w-full" />
+                    </div>
+                    <p className="text-xs text-muted-foreground">AI recommendations will appear here automatically when ready.</p>
+                  </div>
+                )}
+
                 {strategyData.analysis.aiRecommendations && strategyData.analysis.aiRecommendations.length > 0 && (
                   <div className="p-4 rounded-md border border-accent/30 bg-accent/5 space-y-3">
                     <h4 className="text-sm font-medium flex items-center gap-2">
