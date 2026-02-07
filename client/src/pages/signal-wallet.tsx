@@ -356,6 +356,32 @@ export default function SignalWalletPage() {
   }, []);
 
   useEffect(() => {
+    if (
+      strategyData?.analysis &&
+      strategyData.analysis.sampleSize >= 5 &&
+      (!strategyData.analysis.aiRecommendations || strategyData.analysis.aiRecommendations.length === 0) &&
+      !waitingForAiRecs &&
+      !aiPollRef.current
+    ) {
+      setWaitingForAiRecs(true);
+      aiPollStartRef.current = Date.now();
+      aiPollRef.current = setInterval(async () => {
+        if (Date.now() - aiPollStartRef.current > 60000) {
+          stopAiPolling();
+          return;
+        }
+        try {
+          const result = await refetchStrategy();
+          const recs = result.data?.analysis?.aiRecommendations;
+          if (recs && recs.length > 0) {
+            stopAiPolling();
+          }
+        } catch {}
+      }, 3000);
+    }
+  }, [strategyData]);
+
+  useEffect(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     

@@ -6638,6 +6638,22 @@ export async function registerRoutes(
         const formatted = formatCachedResponse(cached);
         if (formatted) {
           res.json(formatted);
+          if ((!formatted.aiRecommendations || (Array.isArray(formatted.aiRecommendations) && formatted.aiRecommendations.length === 0)) && cached.sampleSize >= 5) {
+            console.log(`[StrategyAnalyze] Cache hit but missing AI recs, generating in background...`);
+            (async () => {
+              try {
+                const analysis = await analyzeWalletStrategy(walletAddress, userId);
+                const recommendations = await generateAiRecommendations(walletAddress, analysis);
+                if (recommendations && recommendations.length > 0) {
+                  analysis.aiRecommendations = recommendations;
+                  await saveWalletStrategy(walletAddress, userId, analysis);
+                  console.log(`[StrategyAnalyze] Background AI recs saved for cached strategy (${recommendations.length})`);
+                }
+              } catch (bgErr: any) {
+                console.error(`[StrategyAnalyze] Background AI generation failed:`, bgErr.message);
+              }
+            })();
+          }
           return;
         }
       }
