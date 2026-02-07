@@ -46,7 +46,7 @@ import {
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
 import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs } from "@shared/schema";
-import { eq, and, or, isNotNull, desc, gte, sql, like, inArray } from "drizzle-orm";
+import { eq, and, or, isNotNull, desc, gte, sql, like, inArray, count } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs, logWebhook, logErrorToTable, logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
