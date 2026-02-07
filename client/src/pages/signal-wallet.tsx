@@ -309,6 +309,7 @@ export default function SignalWalletPage() {
     onSuccess: () => {
       toast({ description: "Strategy analysis complete" });
       refetchStrategy();
+      setShowStrategyPanel(true);
     },
     onError: (error: any) => {
       toast({ 
