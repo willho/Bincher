@@ -6598,48 +6598,75 @@ export async function registerRoutes(
       // Count current swaps for this wallet to check if new activity
       const [swapCountResult] = await db.select({ count: count() }).from(swaps).where(eq(swaps.source, walletAddress));
       const currentSwapCount = Number(swapCountResult?.count) || 0;
-      const hasNewSwaps = cached?.swapCountAtAnalysis ? currentSwapCount > cached.swapCountAtAnalysis + 2 : true;
+      const hasNewSwaps = cached
+        ? (cached.swapCountAtAnalysis != null ? currentSwapCount > cached.swapCountAtAnalysis + 2 : false)
+        : true;
       
-      // Return cached if valid
-      if (cached && cached.sampleSize && cached.sampleSize > 0 && !isStale && !hasNewSwaps) {
-        // Parse stored JSON fields for response
-        let aiRecommendations: any = cached.aiRecommendations;
-        if (typeof aiRecommendations === 'string') {
-          try { aiRecommendations = JSON.parse(aiRecommendations); } catch { aiRecommendations = null; }
+      // Helper to format cached data for response
+      const formatCachedResponse = (c: typeof cached) => {
+        if (!c || !c.sampleSize || c.sampleSize <= 0) return null;
+        let aiRecs: any = c.aiRecommendations;
+        if (typeof aiRecs === 'string') {
+          try { aiRecs = JSON.parse(aiRecs); } catch { aiRecs = null; }
         }
-        let discoveryInsights: any = cached.discoveryInsights;
-        if (typeof discoveryInsights === 'string') {
-          try { discoveryInsights = JSON.parse(discoveryInsights); } catch { discoveryInsights = null; }
+        let discInsights: any = c.discoveryInsights;
+        if (typeof discInsights === 'string') {
+          try { discInsights = JSON.parse(discInsights); } catch { discInsights = null; }
         }
-        
-        res.json({
-          ...cached,
-          aiRecommendations,
-          discoveryContext: cached.behaviorType ? {
-            behaviorType: cached.behaviorType,
-            behaviorConfidence: cached.behaviorConfidence,
-            recentInsights: discoveryInsights || [],
+        const insights: string[] = [];
+        if (c.winRate && c.winRate > 0.6) insights.push(`Strong performer with ${(c.winRate * 100).toFixed(0)}% win rate`);
+        if (c.profitFactor && c.profitFactor > 2) insights.push(`Excellent risk/reward ratio (${c.profitFactor.toFixed(1)}x)`);
+        if (c.avgHoldDuration && c.avgHoldDuration < 1800) insights.push(`Quick flipper - holds avg ${Math.round(c.avgHoldDuration / 60)} minutes`);
+        else if (c.avgHoldDuration && c.avgHoldDuration > 86400) insights.push(`Patient trader - holds avg ${Math.round(c.avgHoldDuration / 86400)} days`);
+        return {
+          ...c,
+          insights,
+          aiRecommendations: aiRecs,
+          discoveryContext: c.behaviorType ? {
+            behaviorType: c.behaviorType,
+            behaviorConfidence: c.behaviorConfidence,
+            recentInsights: discInsights || [],
             followsLeaders: [],
             leadsFollowers: [],
           } : undefined,
           fromCache: true,
-        });
-        return;
+        };
+      };
+
+      // Return cached if valid
+      if (cached && cached.sampleSize && cached.sampleSize > 0 && !isStale && !hasNewSwaps) {
+        const formatted = formatCachedResponse(cached);
+        if (formatted) {
+          res.json(formatted);
+          return;
+        }
       }
       
-      // Trigger fresh analysis
-      console.log(`[StrategyAnalyze] Auto-analyzing wallet: ${walletAddress} (stale: ${isStale}, hasNewSwaps: ${hasNewSwaps})`);
-      const analysis = await analyzeWalletStrategy(walletAddress, userId);
-      
-      if (analysis.sampleSize >= 5) {
-        const recommendations = await generateAiRecommendations(walletAddress, analysis);
-        analysis.aiRecommendations = recommendations;
+      // Trigger fresh analysis with fallback to cached data on failure
+      try {
+        console.log(`[StrategyAnalyze] Auto-analyzing wallet: ${walletAddress} (stale: ${isStale}, hasNewSwaps: ${hasNewSwaps})`);
+        const analysis = await analyzeWalletStrategy(walletAddress, userId);
+        
+        if (analysis.sampleSize >= 5) {
+          try {
+            const recommendations = await generateAiRecommendations(walletAddress, analysis);
+            analysis.aiRecommendations = recommendations;
+          } catch (aiErr) {
+            console.error("[StrategyAnalyze] AI recommendations failed, continuing without:", aiErr);
+          }
+        }
+        
+        await saveWalletStrategy(walletAddress, userId, analysis);
+        res.json({ ...analysis, fromCache: false });
+      } catch (analysisError) {
+        console.error("[StrategyAnalyze] Re-analysis failed:", analysisError);
+        const fallback = formatCachedResponse(cached);
+        if (fallback) {
+          res.json(fallback);
+        } else {
+          res.json({ sampleSize: 0, fromCache: false });
+        }
       }
-      
-      // Save to cache
-      await saveWalletStrategy(walletAddress, userId, analysis);
-      
-      res.json({ ...analysis, fromCache: false });
     } catch (error) {
       console.error("Error fetching wallet strategy:", error);
       res.status(500).json({ error: "Failed to fetch strategy" });
