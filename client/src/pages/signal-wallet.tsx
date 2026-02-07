@@ -307,7 +307,7 @@ export default function SignalWalletPage() {
       return apiRequest("POST", `/api/paper/strategies/${walletAddress}/analyze`);
     },
     onSuccess: () => {
-      toast({ description: "Strategy analysis complete" });
+      toast({ description: "Strategy analysis complete. AI recommendations loading in background..." });
       refetchStrategy();
       setShowStrategyPanel(true);
     },

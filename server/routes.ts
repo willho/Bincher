@@ -45,7 +45,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like, inArray } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -6674,30 +6674,46 @@ export async function registerRoutes(
   });
 
   app.post("/api/paper/strategies/:wallet/analyze", requireAuth, async (req: Request, res: Response) => {
+    const walletAddr = req.params.wallet;
+    const userId = req.userId!;
     try {
-      console.log(`[StrategyAnalyze] Starting analysis for wallet: ${req.params.wallet}, userId: ${req.userId!}`);
+      console.log(`[StrategyAnalyze] Starting analysis for wallet: ${walletAddr}, userId: ${userId}`);
       const { analyzeWalletStrategy, saveWalletStrategy, generateAiRecommendations } = await import("./paper-trading");
       
-      console.log(`[StrategyAnalyze] Running analyzeWalletStrategy...`);
-      const analysis = await analyzeWalletStrategy(req.params.wallet, req.userId!);
+      const analysis = await analyzeWalletStrategy(walletAddr, userId);
       console.log(`[StrategyAnalyze] Analysis complete, sampleSize: ${analysis.sampleSize}`);
       
-      // Generate AI recommendations if we have enough data
-      if (analysis.sampleSize >= 5) {
-        console.log(`[StrategyAnalyze] Generating AI recommendations...`);
-        const recommendations = await generateAiRecommendations(req.params.wallet, analysis);
-        analysis.aiRecommendations = recommendations;
-        console.log(`[StrategyAnalyze] Generated ${recommendations.length} AI recommendations`);
-      }
-      
-      console.log(`[StrategyAnalyze] Saving strategy...`);
-      const saved = await saveWalletStrategy(req.params.wallet, req.userId!, analysis);
-      console.log(`[StrategyAnalyze] Strategy saved successfully`);
+      const saved = await saveWalletStrategy(walletAddr, userId, analysis);
+      console.log(`[StrategyAnalyze] Strategy saved successfully, id: ${saved?.id}`);
       
       res.json({ analysis, saved });
+      
+      if (analysis.sampleSize >= 5) {
+        generateAiRecommendations(walletAddr, analysis).then(async (recommendations) => {
+          if (recommendations && recommendations.length > 0) {
+            try {
+              analysis.aiRecommendations = recommendations;
+              await saveWalletStrategy(walletAddr, userId, analysis);
+              console.log(`[StrategyAnalyze] AI recommendations saved (${recommendations.length} recs)`);
+            } catch (saveErr: any) {
+              console.error(`[StrategyAnalyze] Failed to save AI recs:`, saveErr.message);
+              try {
+                await db.insert(errorLogs).values({ category: 'trade', message: `Strategy AI rec save failed: ${saveErr.message}`, details: JSON.stringify({ walletAddr, userId }), createdAt: Math.floor(Date.now() / 1000) });
+              } catch {}
+            }
+          }
+        }).catch((aiErr: any) => {
+          console.error(`[StrategyAnalyze] AI recommendations failed:`, aiErr.message);
+          try {
+            db.insert(errorLogs).values({ category: 'ai', message: `Strategy AI gen failed: ${aiErr.message}`, details: JSON.stringify({ walletAddr, userId }), createdAt: Math.floor(Date.now() / 1000) }).then(() => {});
+          } catch {}
+        });
+      }
     } catch (error: any) {
-      console.error("[StrategyAnalyze] Error:", error);
-      console.error("[StrategyAnalyze] Stack:", error?.stack);
+      console.error("[StrategyAnalyze] Error:", error?.message);
+      try {
+        await db.insert(errorLogs).values({ category: 'trade', message: `Strategy analysis failed: ${error?.message}`, details: JSON.stringify({ wallet: walletAddr, userId, stack: error?.stack?.slice(0, 500) }), createdAt: Math.floor(Date.now() / 1000) });
+      } catch {}
       res.status(500).json({ error: "Failed to analyze strategy", details: error?.message });
     }
   });
