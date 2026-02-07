@@ -5123,7 +5123,7 @@ export async function registerRoutes(
       const wallet = await db.query.monitoredWallets.findFirst({
         where: and(
           eq(monitoredWallets.userId, req.userId!),
-          eq(monitoredWallets.address, address)
+          eq(monitoredWallets.walletAddress, address)
         )
       });
 
