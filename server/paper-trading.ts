@@ -479,7 +479,7 @@ export async function getPaperTradingStats(userId: number): Promise<{
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 export interface AiRecommendation {
-  category: "strength" | "weakness" | "copy_setting" | "risk_warning" | "optimization";
+  category: "strength" | "weakness" | "copy_setting" | "risk_warning" | "optimization" | "summary";
   title: string;
   description: string;
   priority: "high" | "medium" | "low";
@@ -512,6 +512,8 @@ export interface StrategyAnalysis {
   entryMarketCap: string;
   takeProfitMultiplier: number;
   stopLossPercent: number;
+  observedWorstDrawdown: number;
+  stopLossEverHit: boolean;
   riskLevel: number;
   maxConcurrentPositions: number;
   confidenceScore: number;
@@ -562,7 +564,8 @@ export async function fetchDiscoveryContext(walletAddress: string): Promise<Disc
 
 export async function generateAiRecommendations(
   walletAddress: string,
-  analysis: Omit<StrategyAnalysis, 'aiRecommendations'>
+  analysis: Omit<StrategyAnalysis, 'aiRecommendations'>,
+  userNotes?: string | null
 ): Promise<AiRecommendation[]> {
   try {
     const openai = new OpenAI({
@@ -583,41 +586,73 @@ ${dc.recentInsights.length > 0 ? `- Recent System Insights:\n${dc.recentInsights
 `;
     }
     
-    const prompt = `You are Miss Pincher, a friendly Solana trading AI assistant. Analyze this signal wallet's trading strategy and provide actionable recommendations.
+    // Build user notes section if available
+    let userNotesSection = "";
+    if (userNotes && userNotes.trim()) {
+      userNotesSection = `
+USER-PROVIDED CONTEXT (treat with healthy skepticism - verify against on-chain data):
+"${userNotes.trim()}"
+Note: The user may have knowledge about this wallet that on-chain data can't reveal (e.g., community reputation, paid groups). Consider this context but always prioritize the actual trading metrics above.
+`;
+    }
+    
+    // Build stop-loss context with observed vs configured distinction
+    const hasLosses = analysis.observedWorstDrawdown > 0;
+    const stopLossContext = hasLosses
+      ? `- Median Loss: ${(analysis.stopLossPercent * 100).toFixed(0)}% (observed from losing trades)
+- Worst Single Loss: ${(analysis.observedWorstDrawdown * 100).toFixed(0)}%
+- Stop-Loss Pattern: ${analysis.stopLossEverHit ? "Has hit significant drawdowns" : "Losses stayed moderate"}`
+      : `- Losses: No losing trades observed in sample (${analysis.sampleSize} trades)
+- Stop Loss: No loss data available - the displayed value is a default, not observed behavior`;
+    
+    // Format hold duration in human-readable terms
+    const holdDurationText = analysis.avgHoldDuration < 3600
+      ? `${Math.round(analysis.avgHoldDuration / 60)} minutes`
+      : analysis.avgHoldDuration < 86400
+        ? `${(analysis.avgHoldDuration / 3600).toFixed(1)} hours`
+        : `${(analysis.avgHoldDuration / 86400).toFixed(1)} days`;
+    
+    const prompt = `You are Miss Pincher, a savvy and friendly Solana trading AI. Analyze this signal wallet and give actionable, opinionated recommendations for copy trading it.
 
 WALLET: ${walletAddress.slice(0, 8)}...${walletAddress.slice(-4)}
 
 TRADING METRICS:
 - Strategy Type: ${analysis.strategyType}
 - Trading Style: ${analysis.tradingStyle}
-- Win Rate: ${(analysis.winRate * 100).toFixed(1)}%
-- Profit Factor: ${analysis.profitFactor.toFixed(2)}x
-- Avg Hold Duration: ${Math.round(analysis.avgHoldDuration / 60)} minutes
+- Win Rate: ${(analysis.winRate * 100).toFixed(1)}% (${analysis.sampleSize} closed trades)
+- Profit Factor: ${analysis.profitFactor >= 999 ? "Infinite (no losses)" : analysis.profitFactor.toFixed(2) + "x"}
+- Avg Hold Duration: ${holdDurationText}
 - Avg Position Size: ${analysis.avgPositionSize.toFixed(2)} SOL
-- Take Profit Target: ${((analysis.takeProfitMultiplier - 1) * 100).toFixed(0)}%
-- Stop Loss: ${(analysis.stopLossPercent * 100).toFixed(0)}%
+- Take Profit (median exit): ${((analysis.takeProfitMultiplier - 1) * 100).toFixed(0)}%
+${stopLossContext}
 - Risk Level: ${analysis.riskLevel}/10
-- Sample Size: ${analysis.sampleSize} trades
 - Confidence Score: ${(analysis.confidenceScore * 100).toFixed(0)}%
-${discoverySection}
-Provide 4-6 specific recommendations in JSON format. Each recommendation should be actionable and help the user maximize value from copy trading this wallet.
+${discoverySection}${userNotesSection}
+IMPORTANT GUIDELINES:
+- If win rate is very high (>80%) with good profits, recognize this as exceptional performance even if sample size is small. Low volume + high quality = selective, disciplined trader.
+- Clearly distinguish between OBSERVED metrics (from actual trades) and DEFAULT values (shown when no data exists). For example, if there are no losing trades, do NOT say "their stop loss is 20%" - say they have no observed losses.
+- Consider trading frequency: if they trade rarely, mention what that means for copy trading (patience required, but each trade is high quality).
+- Be specific about numbers in your recommendations.
 
-Categories to use:
-- "strength": What this wallet does well
-- "weakness": Areas of concern or caution
-- "copy_setting": Specific copy trade settings to use (buy amounts, thresholds)
-- "risk_warning": Important risks to be aware of
-- "optimization": How to best take advantage of this wallet's patterns
+Provide 5-7 recommendations in JSON format. Categories:
+- "strength": What this wallet excels at
+- "weakness": Genuine concerns or gaps
+- "copy_setting": Specific copy trade settings (buy amounts, timing, thresholds)
+- "risk_warning": Risks to watch for
+- "optimization": How to maximize value from this wallet
+- "summary": REQUIRED - Your overall opinion as a single paragraph. Should this wallet be copy traded? What type of trader would benefit most? What's the bottom line? Be direct and opinionated.
+
+The LAST recommendation MUST be category "summary" with priority "high". This is your overall verdict.
 
 Priority levels: "high", "medium", "low"
 
-Respond ONLY with a JSON array of recommendations:
+Respond ONLY with a JSON array:
 [{"category": "...", "title": "...", "description": "...", "priority": "..."}]`;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 800,
+      max_tokens: 1200,
       temperature: 0.7,
     });
     
@@ -809,6 +844,14 @@ export async function analyzeWalletStrategy(
       ? 1 - (lossMultipliers.reduce((a, b) => a + b, 0) / lossMultipliers.length)  // Mean if few samples
       : 0.2;  // Default only when no loss data
   
+  // Observed worst drawdown: the actual worst single-position loss
+  const observedWorstDrawdown = lossMultipliers.length > 0
+    ? 1 - Math.min(...lossMultipliers)  // Worst loss as a percentage (e.g., 0.85 multiplier = 15% drawdown)
+    : 0;
+  
+  // Whether the stop-loss threshold was ever actually hit (any loss >= stopLossPercent)
+  const stopLossEverHit = lossMultipliers.length > 0 && lossMultipliers.some(m => (1 - m) >= stopLossPercent * 0.95);
+  
   let riskLevel = 5;
   if (avgPositionSize > 1 && avgHoldDuration < 3600) riskLevel = 8;
   else if (avgPositionSize > 0.5 && avgHoldDuration < 86400) riskLevel = 6;
@@ -819,10 +862,31 @@ export async function analyzeWalletStrategy(
   const maxConcurrent = Math.max(openPositions, Math.ceil(buys.length / 10));
   
   let confidenceScore = 0;
-  if (sampleSize >= 50) confidenceScore = 0.9;
-  else if (sampleSize >= 20) confidenceScore = 0.7;
-  else if (sampleSize >= 10) confidenceScore = 0.5;
-  else if (sampleSize >= 5) confidenceScore = 0.3;
+  
+  // Base confidence from sample size
+  let volumeBase = 0;
+  if (sampleSize >= 50) volumeBase = 0.7;
+  else if (sampleSize >= 20) volumeBase = 0.55;
+  else if (sampleSize >= 10) volumeBase = 0.4;
+  else if (sampleSize >= 5) volumeBase = 0.25;
+  else if (sampleSize >= 3) volumeBase = 0.15;
+  
+  // Performance quality bonus (up to +0.3)
+  // Exceptional win rates and profit factors boost confidence even with low volume
+  let performanceBonus = 0;
+  if (sampleSize >= 3) {
+    // Win rate bonus: 80%+ win rate starts adding, scales up to 100%
+    if (winRate >= 0.9) performanceBonus += 0.15;
+    else if (winRate >= 0.8) performanceBonus += 0.1;
+    else if (winRate >= 0.7) performanceBonus += 0.05;
+    
+    // Profit factor bonus: consistently profitable trading adds confidence
+    if (profitFactor >= 5) performanceBonus += 0.15;
+    else if (profitFactor >= 3) performanceBonus += 0.1;
+    else if (profitFactor >= 2) performanceBonus += 0.05;
+  }
+  
+  confidenceScore = Math.min(0.95, volumeBase + performanceBonus);
   
   const insights: string[] = [];
   if (winRate > 0.6) {
@@ -908,6 +972,8 @@ export async function analyzeWalletStrategy(
     entryMarketCap,
     takeProfitMultiplier: safeNumber(takeProfitMultiplier, 1.5),
     stopLossPercent: safeNumber(stopLossPercent, 0.2),
+    observedWorstDrawdown: safeNumber(observedWorstDrawdown, 0),
+    stopLossEverHit,
     riskLevel: safeNumber(riskLevel, 5),
     maxConcurrentPositions: safeNumber(maxConcurrent, 1),
     confidenceScore: safeNumber(confidenceScore),

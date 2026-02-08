@@ -114,6 +114,9 @@ export const monitoredWallets = pgTable("monitored_wallets", {
   dedupMaxBuysPerTokenWeekly: integer("dedup_max_buys_per_token_weekly"), // Max buys per token per week
   dedupPriceProtectionPercent: real("dedup_price_protection_percent"), // Skip if price moved more than X% since signal
   
+  // User-provided context notes (e.g., "syndicate wallet", "influencer")
+  userNotes: text("user_notes"),
+  
   // Temporary wallet tracking
   temporary: boolean("temporary").default(false), // Auto-created from UI navigation
   lastViewedAt: integer("last_viewed_at"), // Unix timestamp, resets on page view

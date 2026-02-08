@@ -10,13 +10,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
-import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer, Settings, ChevronDown, ChevronUp, Sparkles, Brain, Zap, Shield, AlertTriangle, FileText, Users } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Clock, Target, Wallet, Activity, ExternalLink, Copy, Coins, ArrowUpDown, Trophy, Timer, Settings, ChevronDown, ChevronUp, Sparkles, Brain, Zap, Shield, AlertTriangle, FileText, Users, StickyNote, Check, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useSolPrice } from "@/hooks/use-sol-price";
 import { SignalWalletActivityChart } from "@/components/portfolio-charts";
 
 interface AiRecommendation {
-  category: "strength" | "weakness" | "copy_setting" | "risk_warning" | "optimization";
+  category: "strength" | "weakness" | "copy_setting" | "risk_warning" | "optimization" | "summary";
   title: string;
   description: string;
   priority: "high" | "medium" | "low";
@@ -49,6 +50,8 @@ interface StrategyAnalysis {
   entryMarketCap: string;
   takeProfitMultiplier: number;
   stopLossPercent: number;
+  observedWorstDrawdown: number;
+  stopLossEverHit: boolean;
   riskLevel: number;
   maxConcurrentPositions: number;
   confidenceScore: number;
@@ -123,6 +126,7 @@ interface WalletActivity {
     label: string | null;
     copyTradeEnabled: boolean;
     enabled: boolean;
+    userNotes: string | null;
   };
   timeframe: string;
   trades: Trade[];
@@ -196,6 +200,8 @@ export default function SignalWalletPage() {
   const [holdingsTab, setHoldingsTab] = useState<HoldingsTab>("signal");
   const [showStrategyPanel, setShowStrategyPanel] = useState(false);
   const [waitingForAiRecs, setWaitingForAiRecs] = useState(false);
+  const [editingNotes, setEditingNotes] = useState(false);
+  const [notesValue, setNotesValue] = useState("");
   const { toast } = useToast();
   const { solToUsd, formatUsd } = useSolPrice();
   const wsRef = useRef<WebSocket | null>(null);
@@ -348,6 +354,18 @@ export default function SignalWalletPage() {
         description: error.message || "Failed to analyze strategy", 
         variant: "destructive" 
       });
+    },
+  });
+
+  const notesMutation = useMutation({
+    mutationFn: async (notes: string | null) => {
+      if (!walletId) throw new Error("No wallet ID");
+      return apiRequest("PATCH", `/api/monitored-wallets/${walletId}`, { userNotes: notes || null });
+    },
+    onSuccess: () => {
+      setEditingNotes(false);
+      queryClient.invalidateQueries({ queryKey: ["/api/signal-wallets", walletId, "activity"] });
+      toast({ description: "Notes saved" });
     },
   });
 
@@ -617,7 +635,7 @@ export default function SignalWalletPage() {
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button 
             variant={wallet.copyTradeEnabled ? "default" : "outline"}
             size="sm"
@@ -657,6 +675,53 @@ export default function SignalWalletPage() {
           </Button>
         </div>
       </div>
+
+      {editingNotes ? (
+        <div className="flex items-start gap-2" data-testid="notes-editor">
+          <StickyNote className="h-4 w-4 mt-2.5 text-muted-foreground shrink-0" />
+          <Textarea
+            value={notesValue}
+            onChange={(e) => setNotesValue(e.target.value)}
+            placeholder="Add context about this wallet (e.g., 'Paid syndicate wallet', 'Known influencer', 'Sniper bot')"
+            className="text-sm min-h-[60px] flex-1"
+            maxLength={500}
+            data-testid="input-user-notes"
+          />
+          <div className="flex flex-col gap-1">
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => notesMutation.mutate(notesValue.trim())}
+              disabled={notesMutation.isPending}
+              data-testid="button-save-notes"
+            >
+              <Check className="h-4 w-4" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setEditingNotes(false)}
+              data-testid="button-cancel-notes"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div
+          className="flex items-center gap-2 text-sm cursor-pointer hover-elevate rounded-md px-2 py-1 -mx-2"
+          onClick={() => {
+            setNotesValue(wallet.userNotes || "");
+            setEditingNotes(true);
+          }}
+          data-testid="button-edit-notes"
+        >
+          <StickyNote className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <span className={wallet.userNotes ? "text-muted-foreground" : "text-muted-foreground/50 italic"}>
+            {wallet.userNotes || "Add notes about this wallet..."}
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">Timeframe:</span>
@@ -942,9 +1007,17 @@ export default function SignalWalletPage() {
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-muted-foreground">Stop Loss</span>
+                        <span className="text-muted-foreground">Avg Loss (median)</span>
                         <span className="text-red-500">
                           -{(strategyData.analysis.stopLossPercent * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Worst Drawdown</span>
+                        <span className="text-red-500">
+                          {strategyData.analysis.observedWorstDrawdown > 0
+                            ? `-${(strategyData.analysis.observedWorstDrawdown * 100).toFixed(0)}%`
+                            : "No losses"}
                         </span>
                       </div>
                       <div className="flex justify-between">
@@ -1022,52 +1095,70 @@ export default function SignalWalletPage() {
                   </div>
                 )}
 
-                {strategyData.analysis.aiRecommendations && strategyData.analysis.aiRecommendations.length > 0 && (
-                  <div className="p-4 rounded-md border border-accent/30 bg-accent/5 space-y-3">
-                    <h4 className="text-sm font-medium flex items-center gap-2">
-                      <Brain className="h-4 w-4 text-accent-foreground" />
-                      Miss Pincher's Recommendations
-                    </h4>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {strategyData.analysis.aiRecommendations.map((rec, idx) => {
-                        const categoryIcons: Record<string, typeof Trophy> = {
-                          strength: Trophy,
-                          weakness: AlertTriangle,
-                          copy_setting: Settings,
-                          risk_warning: Shield,
-                          optimization: TrendingUp,
-                        };
-                        const categoryColors: Record<string, string> = {
-                          strength: "text-green-500",
-                          weakness: "text-orange-500",
-                          copy_setting: "text-blue-500",
-                          risk_warning: "text-red-500",
-                          optimization: "text-purple-500",
-                        };
-                        const priorityBadgeVariant = rec.priority === "high" ? "destructive" : rec.priority === "medium" ? "default" : "secondary";
-                        const Icon = categoryIcons[rec.category] || Brain;
-                        const iconColor = categoryColors[rec.category] || "text-muted-foreground";
-                        
-                        return (
-                          <div key={idx} className="p-3 rounded-md border bg-card">
-                            <div className="flex items-start gap-2">
-                              <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${iconColor}`} />
-                              <div className="space-y-1 min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-medium text-sm">{rec.title}</span>
-                                  <Badge variant={priorityBadgeVariant} className="text-xs capitalize">
-                                    {rec.priority}
-                                  </Badge>
-                                </div>
-                                <p className="text-xs text-muted-foreground">{rec.description}</p>
-                              </div>
+                {strategyData.analysis.aiRecommendations && strategyData.analysis.aiRecommendations.length > 0 && (() => {
+                  const summaryRec = strategyData.analysis.aiRecommendations.find(r => r.category === "summary");
+                  const otherRecs = strategyData.analysis.aiRecommendations.filter(r => r.category !== "summary");
+                  
+                  return (
+                    <div className="p-4 rounded-md border border-accent/30 bg-accent/5 space-y-3">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <Brain className="h-4 w-4 text-accent-foreground" />
+                        Miss Pincher's Recommendations
+                      </h4>
+                      
+                      {summaryRec && (
+                        <div className="p-3 rounded-md border border-primary/30 bg-primary/5" data-testid="ai-summary">
+                          <div className="flex items-start gap-2">
+                            <Sparkles className="h-4 w-4 mt-0.5 shrink-0 text-primary" />
+                            <div className="space-y-1 min-w-0">
+                              <span className="font-medium text-sm">{summaryRec.title}</span>
+                              <p className="text-sm text-muted-foreground">{summaryRec.description}</p>
                             </div>
                           </div>
-                        );
-                      })}
+                        </div>
+                      )}
+                      
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {otherRecs.map((rec, idx) => {
+                          const categoryIcons: Record<string, typeof Trophy> = {
+                            strength: Trophy,
+                            weakness: AlertTriangle,
+                            copy_setting: Settings,
+                            risk_warning: Shield,
+                            optimization: TrendingUp,
+                          };
+                          const categoryColors: Record<string, string> = {
+                            strength: "text-green-500",
+                            weakness: "text-orange-500",
+                            copy_setting: "text-blue-500",
+                            risk_warning: "text-red-500",
+                            optimization: "text-purple-500",
+                          };
+                          const priorityBadgeVariant = rec.priority === "high" ? "destructive" : rec.priority === "medium" ? "default" : "secondary";
+                          const Icon = categoryIcons[rec.category] || Brain;
+                          const iconColor = categoryColors[rec.category] || "text-muted-foreground";
+                          
+                          return (
+                            <div key={idx} className="p-3 rounded-md border bg-card">
+                              <div className="flex items-start gap-2">
+                                <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${iconColor}`} />
+                                <div className="space-y-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-medium text-sm">{rec.title}</span>
+                                    <Badge variant={priorityBadgeVariant} className="text-xs capitalize">
+                                      {rec.priority}
+                                    </Badge>
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">{rec.description}</p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             )}
           </CardContent>

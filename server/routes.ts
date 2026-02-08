@@ -2616,6 +2616,7 @@ export async function registerRoutes(
     dedupSkipIfHolding: z.boolean().optional(),
     dedupSkipIfEverHeld: z.boolean().optional(),
     dedupSkipIfPending: z.boolean().optional(),
+    userNotes: z.string().nullish(),
   });
   
   // Get single monitored wallet by ID
@@ -2905,6 +2906,7 @@ export async function registerRoutes(
           label: wallet.label,
           copyTradeEnabled: wallet.copyTradeEnabled,
           enabled: wallet.enabled,
+          userNotes: wallet.userNotes || null,
         },
         timeframe,
         trades: walletSwaps.map(s => ({
@@ -6586,6 +6588,13 @@ export async function registerRoutes(
       const walletAddress = req.params.wallet;
       const userId = req.userId!;
       
+      // Fetch user notes for this wallet to pass to AI
+      const [walletRecord] = await db.select({ userNotes: monitoredWallets.userNotes })
+        .from(monitoredWallets)
+        .where(and(eq(monitoredWallets.walletAddress, walletAddress), eq(monitoredWallets.userId, userId)))
+        .limit(1);
+      const userNotes = walletRecord?.userNotes || null;
+      
       // Get cached strategy if exists
       const cached = await getWalletStrategy(walletAddress, userId);
       
@@ -6643,7 +6652,7 @@ export async function registerRoutes(
             (async () => {
               try {
                 const analysis = await analyzeWalletStrategy(walletAddress, userId);
-                const recommendations = await generateAiRecommendations(walletAddress, analysis);
+                const recommendations = await generateAiRecommendations(walletAddress, analysis, userNotes);
                 if (recommendations && recommendations.length > 0) {
                   analysis.aiRecommendations = recommendations;
                   await saveWalletStrategy(walletAddress, userId, analysis);
@@ -6674,7 +6683,7 @@ export async function registerRoutes(
         res.json({ ...analysis, insights, fromCache: false });
         
         if (analysis.sampleSize >= 5) {
-          generateAiRecommendations(walletAddress, analysis).then(async (recommendations) => {
+          generateAiRecommendations(walletAddress, analysis, userNotes).then(async (recommendations) => {
             if (recommendations && recommendations.length > 0) {
               try {
                 analysis.aiRecommendations = recommendations;
@@ -6710,6 +6719,13 @@ export async function registerRoutes(
       console.log(`[StrategyAnalyze] Starting analysis for wallet: ${walletAddr}, userId: ${userId}`);
       const { analyzeWalletStrategy, saveWalletStrategy, generateAiRecommendations } = await import("./paper-trading");
       
+      // Fetch user notes for AI context
+      const [walletRec] = await db.select({ userNotes: monitoredWallets.userNotes })
+        .from(monitoredWallets)
+        .where(and(eq(monitoredWallets.walletAddress, walletAddr), eq(monitoredWallets.userId, userId)))
+        .limit(1);
+      const walletUserNotes = walletRec?.userNotes || null;
+      
       const analysis = await analyzeWalletStrategy(walletAddr, userId);
       console.log(`[StrategyAnalyze] Analysis complete, sampleSize: ${analysis.sampleSize}`);
       
@@ -6719,7 +6735,7 @@ export async function registerRoutes(
       res.json({ analysis, saved });
       
       if (analysis.sampleSize >= 5) {
-        generateAiRecommendations(walletAddr, analysis).then(async (recommendations) => {
+        generateAiRecommendations(walletAddr, analysis, walletUserNotes).then(async (recommendations) => {
           if (recommendations && recommendations.length > 0) {
             try {
               analysis.aiRecommendations = recommendations;
