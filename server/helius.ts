@@ -497,6 +497,88 @@ export async function getWebhooks(): Promise<any[]> {
   }
 }
 
+export async function getWebhooksOnNetwork(network: "mainnet" | "devnet"): Promise<any[]> {
+  if (!HELIUS_API_KEY) return [];
+  try {
+    const apiBase = network === "devnet" ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
+    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${HELIUS_API_KEY}`);
+    if (!response.ok) return [];
+    return await response.json();
+  } catch (error) {
+    console.error(`Error fetching webhooks on ${network}:`, error);
+    return [];
+  }
+}
+
+export async function deleteWebhookOnNetwork(webhookId: string, network: "mainnet" | "devnet"): Promise<boolean> {
+  if (!HELIUS_API_KEY) return false;
+  try {
+    const apiBase = network === "devnet" ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
+    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
+      method: "DELETE",
+    });
+    return response.ok;
+  } catch (error) {
+    console.error(`Error deleting webhook ${webhookId} on ${network}:`, error);
+    return false;
+  }
+}
+
+export async function cleanupStaleWebhooks(currentWebhookUrl: string, validWebhookId?: string): Promise<{ cleaned: number; reusable: string | null }> {
+  if (!HELIUS_API_KEY) return { cleaned: 0, reusable: null };
+
+  const mode = await getNetworkMode();
+  const otherNetwork = mode === "mainnet" ? "devnet" : "mainnet";
+  let cleaned = 0;
+  let reusable: string | null = null;
+
+  const currentWebhooks = await getWebhooksOnNetwork(mode);
+  console.log(`[WebhookCleanup] Found ${currentWebhooks.length} webhook(s) on ${mode}`);
+
+  for (const wh of currentWebhooks) {
+    const whUrl = wh.webhookURL || "";
+    const whId = wh.webhookID;
+
+    if (validWebhookId && whId === validWebhookId) {
+      continue;
+    }
+
+    if (whUrl.startsWith(currentWebhookUrl) || whUrl.split("?")[0] === currentWebhookUrl) {
+      if (!reusable) {
+        reusable = whId;
+        console.log(`[WebhookCleanup] Found reusable webhook ${whId} on ${mode}`);
+      } else {
+        const deleted = await deleteWebhookOnNetwork(whId, mode);
+        if (deleted) {
+          cleaned++;
+          console.log(`[WebhookCleanup] Deleted duplicate webhook ${whId} on ${mode}`);
+        }
+      }
+    } else {
+      const deleted = await deleteWebhookOnNetwork(whId, mode);
+      if (deleted) {
+        cleaned++;
+        console.log(`[WebhookCleanup] Deleted stale webhook ${whId} (url: ${whUrl.slice(0, 60)}...) on ${mode}`);
+      }
+    }
+  }
+
+  const otherWebhooks = await getWebhooksOnNetwork(otherNetwork);
+  if (otherWebhooks.length > 0) {
+    console.log(`[WebhookCleanup] Found ${otherWebhooks.length} orphaned webhook(s) on ${otherNetwork}, cleaning up`);
+    for (const wh of otherWebhooks) {
+      const deleted = await deleteWebhookOnNetwork(wh.webhookID, otherNetwork);
+      if (deleted) {
+        cleaned++;
+        console.log(`[WebhookCleanup] Deleted orphan webhook ${wh.webhookID} on ${otherNetwork}`);
+      }
+    }
+  }
+
+  console.log(`[WebhookCleanup] Done: cleaned ${cleaned} webhook(s), reusable: ${reusable || "none"}`);
+  return { cleaned, reusable };
+}
+
 // Fetch historical swap transactions for a wallet address
 export interface HistoricalSwap {
   signature: string;

@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import { storage } from "./storage";
-import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrency, isBaseCurrencySymbol, fetchWalletTokenHoldings } from "./helius";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrency, isBaseCurrencySymbol, fetchWalletTokenHoldings, cleanupStaleWebhooks, fetchWalletSwapHistory, SOL_MINT } from "./helius";
 import { sendSwapNotification, sendPasswordResetEmail } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import {
@@ -4598,8 +4598,35 @@ export async function registerRoutes(
       if (mode !== "devnet" && mode !== "mainnet") {
         return res.status(400).json({ error: "Invalid mode. Use 'devnet' or 'mainnet'" });
       }
-      
+
+      const oldMode = await getNetworkMode();
       await setNetworkMode(mode as NetworkMode, req.userId!);
+
+      if (oldMode !== mode) {
+        console.log(`[NetworkSwitch] ${oldMode} -> ${mode}, cleaning up old webhooks and recreating...`);
+        const status = await storage.getMonitoringStatus();
+        if (status.isActive && status.webhookId) {
+          await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
+        }
+        const currentUrl = getWebhookUrl();
+        await cleanupStaleWebhooks(currentUrl);
+        
+        const allWallets = await storage.getAllMonitoredWallets();
+        const uniqueAddresses = [...new Set(allWallets.filter(w => w.enabled).map(w => w.walletAddress))];
+        if (uniqueAddresses.length > 0) {
+          const webhookSecret = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
+          const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
+          const webhookId = await createWebhook(fullUrl, uniqueAddresses);
+          if (webhookId) {
+            await storage.updateMonitoringStatus({ isActive: true, webhookId });
+            console.log(`[NetworkSwitch] New webhook created on ${mode}:`, webhookId);
+          } else {
+            console.warn(`[NetworkSwitch] Failed to create webhook on ${mode}, starting retry loop`);
+            startMonitoringRetryLoop();
+          }
+        }
+      }
+
       res.json({ success: true, mode, faucetUrl: mode === "devnet" ? getSolanaFaucetUrl() : null });
     } catch (error) {
       console.error("Error setting network mode:", error);
@@ -7454,6 +7481,196 @@ export async function registerRoutes(
 }
 
 let monitoringRetryTimer: ReturnType<typeof setInterval> | null = null;
+let pollingFallbackTimer: ReturnType<typeof setInterval> | null = null;
+let pollingIdleCount = 0;
+
+function startPollingFallback() {
+  if (pollingFallbackTimer) return;
+  const BASE_INTERVAL = 60 * 1000;
+  const MAX_INTERVAL = 3 * 60 * 1000;
+  pollingIdleCount = 0;
+  
+  console.log("[PollingFallback] Starting swap polling (webhook is down)");
+  
+  const runPoll = async () => {
+    try {
+      const status = await storage.getMonitoringStatus();
+      if (status.isActive && status.webhookId) {
+        console.log("[PollingFallback] Webhook is back, stopping polling");
+        stopPollingFallback();
+        return;
+      }
+      
+      const allWallets = await storage.getAllMonitoredWallets();
+      const enabledWallets = allWallets.filter(w => w.enabled);
+      if (enabledWallets.length === 0) return;
+      
+      let totalNewSwaps = 0;
+      
+      for (const wallet of enabledWallets) {
+        try {
+          const recentSwaps = await fetchWalletSwapHistory(wallet.walletAddress, 5);
+          
+          for (const histSwap of recentSwaps) {
+            const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300;
+            if (histSwap.timestamp < fiveMinutesAgo) continue;
+            
+            const existing = await storage.getSwapBySignature(histSwap.signature, wallet.userId);
+            if (existing) continue;
+            
+            const isBuy = histSwap.type === "BUY";
+            const swapData: any = {
+              userId: wallet.userId,
+              signature: histSwap.signature,
+              timestamp: histSwap.timestamp,
+              type: "SWAP",
+              source: wallet.walletAddress,
+              fromToken: isBuy ? SOL_MINT : histSwap.tokenMint,
+              fromTokenSymbol: isBuy ? "SOL" : histSwap.tokenSymbol,
+              fromAmount: isBuy ? histSwap.solAmount : histSwap.tokenAmount,
+              toToken: isBuy ? histSwap.tokenMint : SOL_MINT,
+              toTokenSymbol: isBuy ? histSwap.tokenSymbol : "SOL",
+              toAmount: isBuy ? histSwap.tokenAmount : histSwap.solAmount,
+              fee: null,
+              slot: 0,
+              notificationSent: false,
+              toTokenMetadata: null,
+            };
+            
+            const toTokenMetadata = await fetchTokenMetadata(isBuy ? histSwap.tokenMint : SOL_MINT);
+            if (toTokenMetadata) {
+              swapData.toTokenMetadata = toTokenMetadata;
+              if (toTokenMetadata.symbol && (swapData.toTokenSymbol === "???" || swapData.toTokenSymbol?.includes("..."))) {
+                swapData.toTokenSymbol = toTokenMetadata.symbol;
+              }
+            }
+            
+            if (!isBuy && (swapData.fromTokenSymbol === "???" || swapData.fromTokenSymbol?.includes("..."))) {
+              const fromMeta = await fetchTokenMetadata(histSwap.tokenMint);
+              if (fromMeta?.symbol) swapData.fromTokenSymbol = fromMeta.symbol;
+            }
+            
+            const { getSolPriceUsd } = await import("./jupiter");
+            swapData.solPriceAtTrade = await getSolPriceUsd();
+            
+            const savedSwap = await storage.addSwap(swapData);
+            totalNewSwaps++;
+            console.log(`[PollingFallback] New swap detected: ${isBuy ? 'BUY' : 'SELL'} ${swapData.toTokenSymbol} from wallet ${wallet.label || wallet.walletAddress.slice(0, 8)}`);
+            
+            broadcastSwap(savedSwap);
+            
+            if (isBuy) {
+              try {
+                const { emit } = await import("./discovery-event-bus");
+                await emit({
+                  type: "signal_buy",
+                  tokenMint: histSwap.tokenMint,
+                  tokenSymbol: histSwap.tokenSymbol || undefined,
+                  source: "polling_fallback",
+                  data: {
+                    walletAddress: wallet.walletAddress,
+                    fromAmount: histSwap.solAmount,
+                    toAmount: histSwap.tokenAmount,
+                    solPriceAtTrade: swapData.solPriceAtTrade,
+                  },
+                  timestamp: Date.now(),
+                  urgency: 6,
+                });
+              } catch (_) {}
+            }
+            
+            const tokenMintForAlert = isBuy ? histSwap.tokenMint : swapData.fromToken;
+            const userHasPosition = await db.select({ id: holdings.id }).from(holdings)
+              .where(and(
+                eq(holdings.userId, wallet.userId),
+                eq(holdings.tokenMint, tokenMintForAlert),
+                eq(holdings.reclaimed, false)
+              ))
+              .limit(1);
+            
+            sendTelegramActivityAlert(wallet.userId, {
+              walletLabel: wallet.label || "Wallet",
+              walletAddress: wallet.walletAddress,
+              tokenSymbol: isBuy ? swapData.toTokenSymbol : swapData.fromTokenSymbol,
+              tokenMint: tokenMintForAlert,
+              type: isBuy ? "buy" : "sell",
+              amount: isBuy ? histSwap.tokenAmount : histSwap.tokenAmount,
+              solAmount: histSwap.solAmount,
+              priceUsd: toTokenMetadata?.priceUsd,
+              walletId: wallet.id,
+              hasPosition: userHasPosition.length > 0,
+            }).catch(err => console.error("[PollingFallback] Telegram alert error:", err));
+            
+            if (isBuy && wallet.copyTradeEnabled && !isBaseCurrency(histSwap.tokenMint)) {
+              const isBlacklisted = await isTokenBlacklisted(wallet.userId, histSwap.tokenMint);
+              if (!isBlacklisted) {
+                const walletCopyConfig = {
+                  copyBuyType: wallet.copyBuyType || undefined,
+                  copyBuyAmount: wallet.copyBuyAmount || undefined,
+                  copyMinBalance: wallet.copyMinBalance || undefined,
+                  copyMinTradeUsd: wallet.copyMinTradeUsd || undefined,
+                  copyScoreThreshold: wallet.copyScoreThreshold || undefined,
+                  copyTiming: wallet.copyTiming || undefined,
+                  copyDelayMinutes: wallet.copyDelayMinutes || undefined,
+                  copyAutoMirror: wallet.copyAutoMirror || undefined,
+                  dedupSkipIfHolding: wallet.dedupSkipIfHolding ?? true,
+                  dedupSkipIfEverHeld: wallet.dedupSkipIfEverHeld ?? false,
+                  dedupSkipIfPending: wallet.dedupSkipIfPending ?? true,
+                };
+                
+                console.log(`[PollingFallback] Triggering copy trade for ${swapData.toTokenSymbol}...`);
+                const pendingBuy = await addPendingBuy(
+                  wallet.userId,
+                  histSwap.tokenMint,
+                  swapData.toTokenSymbol,
+                  toTokenMetadata?.name,
+                  toTokenMetadata?.priceUsd,
+                  toTokenMetadata?.liquidity,
+                  {
+                    swapId: savedSwap.id,
+                    walletAddress: wallet.walletAddress,
+                    walletLabel: wallet.label,
+                    signalWalletId: wallet.id,
+                    config: walletCopyConfig,
+                  }
+                );
+                if (pendingBuy) {
+                  console.log(`[PollingFallback] Copy trade queued: ${swapData.toTokenSymbol} (pending buy #${pendingBuy.id})`);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`[PollingFallback] Error polling wallet ${wallet.label || wallet.walletAddress.slice(0, 8)}:`, err);
+        }
+      }
+      
+      if (totalNewSwaps > 0) {
+        pollingIdleCount = 0;
+        console.log(`[PollingFallback] Poll complete: ${totalNewSwaps} new swap(s) detected`);
+      } else {
+        pollingIdleCount++;
+      }
+      
+      const interval = pollingIdleCount > 5 ? MAX_INTERVAL : BASE_INTERVAL;
+      pollingFallbackTimer = setTimeout(runPoll, interval);
+    } catch (error) {
+      console.error("[PollingFallback] Poll error:", error);
+      pollingFallbackTimer = setTimeout(runPoll, BASE_INTERVAL);
+    }
+  };
+  
+  pollingFallbackTimer = setTimeout(runPoll, 5000);
+}
+
+function stopPollingFallback() {
+  if (pollingFallbackTimer) {
+    clearTimeout(pollingFallbackTimer);
+    pollingFallbackTimer = null;
+    pollingIdleCount = 0;
+    console.log("[PollingFallback] Stopped");
+  }
+}
 
 async function attemptWebhookCreation(fullUrl: string, uniqueAddresses: string[]): Promise<string | null> {
   const delays = [0, 5000, 15000, 45000];
@@ -7491,6 +7708,22 @@ function startMonitoringRetryLoop() {
       const currentUrl = getWebhookUrl();
       const webhookSecret = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
       const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
+
+      console.log(`[Monitoring] Background retry: cleanup stale webhooks first...`);
+      const { cleaned, reusable } = await cleanupStaleWebhooks(currentUrl);
+
+      if (reusable) {
+        console.log(`[Monitoring] Background retry: reusing webhook ${reusable}, updating wallets...`);
+        const updated = await updateWebhookUrl(reusable, fullUrl, uniqueAddresses);
+        if (updated) {
+          await storage.updateMonitoringStatus({ isActive: true, webhookId: reusable });
+          console.log("[Monitoring] Background retry succeeded via reuse, webhook active:", reusable);
+          if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
+          stopPollingFallback();
+          return;
+        }
+      }
+
       console.log(`[Monitoring] Background retry: creating webhook for ${uniqueAddresses.length} wallet(s) -> ${currentUrl}`);
       const webhookId = await createWebhook(fullUrl, uniqueAddresses);
       if (webhookId) {
@@ -7521,6 +7754,8 @@ async function restoreMonitoring() {
         await deleteWebhook(status.webhookId);
         await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
       }
+      console.log("[Monitoring] Cleaning up any orphaned webhooks...");
+      await cleanupStaleWebhooks(getWebhookUrl());
       return;
     }
 
@@ -7529,18 +7764,34 @@ async function restoreMonitoring() {
     const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
     console.log(`[Monitoring] Webhook URL: ${currentUrl}, wallets: ${uniqueAddresses.length}`);
 
+    console.log("[Monitoring] Step 1: Cleaning up stale/orphaned webhooks...");
+    const { cleaned, reusable } = await cleanupStaleWebhooks(currentUrl, status.webhookId || undefined);
+    if (cleaned > 0) {
+      console.log(`[Monitoring] Cleaned ${cleaned} stale webhook(s)`);
+    }
+
     if (status.isActive && status.webhookId) {
-      console.log("[Monitoring] Was active, updating existing webhook...");
+      console.log("[Monitoring] Step 2: Was active, updating existing webhook...");
       const updated = await updateWebhookUrl(status.webhookId, fullUrl, uniqueAddresses);
       if (updated) {
         console.log("[Monitoring] Webhook updated successfully");
         return;
       }
-      console.log("[Monitoring] Update failed, recreating...");
-    } else {
-      console.log(`[Monitoring] Was inactive, auto-starting for ${uniqueAddresses.length} wallet(s)...`);
+      console.log("[Monitoring] Update failed (webhook may be invalid), will try reuse or recreate...");
     }
 
+    if (reusable && reusable !== status.webhookId) {
+      console.log(`[Monitoring] Step 2b: Trying to reuse webhook ${reusable}...`);
+      const updated = await updateWebhookUrl(reusable, fullUrl, uniqueAddresses);
+      if (updated) {
+        await storage.updateMonitoringStatus({ isActive: true, webhookId: reusable });
+        console.log("[Monitoring] Reused existing webhook:", reusable);
+        return;
+      }
+      console.log("[Monitoring] Reuse failed, will create new...");
+    }
+
+    console.log(`[Monitoring] Step 3: Creating new webhook for ${uniqueAddresses.length} wallet(s)...`);
     const newWebhookId = await attemptWebhookCreation(fullUrl, uniqueAddresses);
     if (newWebhookId) {
       await storage.updateMonitoringStatus({ isActive: true, webhookId: newWebhookId });
