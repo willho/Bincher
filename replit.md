@@ -86,4 +86,5 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
 
 ## Paused Tasks / Backlog
+- **Discovery Page Update** (9 tasks): Insight Bus migration (user notes → insights for wallets and tokens), AI context unification via buildContextForAI, technical indicators engine (EMA, RSI, MACD, Bollinger, OBV, Stochastic from priceHistoryCache OHLC), wire indicators into discovery + insight bus as signals, discovery page with ranked token/wallet lists and stats counters, discovery page API routes aggregating from discoveryEvents/tokenDataPool/walletStrategies/discoveryTriggers.
 - **Bubblemaps Integration**: Embed Bubblemaps holder distribution and wallet activity iframes on token and signal wallet pages. Requires domain whitelisting with Bubblemaps for production embedding (demo partnerId only works on localhost). Re-add when whitelisting is available.
