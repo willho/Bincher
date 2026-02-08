@@ -5367,6 +5367,45 @@ export async function registerRoutes(
         if (contextMint && !message.includes(contextMint)) {
           enrichedMessage = `[Currently viewing token: ${contextMint}] ${message}`;
         }
+      } else if (pageContext && typeof pageContext === 'string' && pageContext.startsWith('signal:')) {
+        const walletId = parseInt(pageContext.replace('signal:', ''));
+        if (!isNaN(walletId)) {
+          try {
+            const wallet = await storage.getMonitoredWallet(req.userId!, walletId);
+            if (wallet) {
+              const recentSwaps = await db.select()
+                .from(swaps)
+                .where(and(
+                  eq(swaps.userId, req.userId!),
+                  eq(swaps.source, wallet.walletAddress)
+                ))
+                .orderBy(desc(swaps.timestamp))
+                .limit(10);
+              
+              let contextParts: string[] = [];
+              contextParts.push(`[Viewing signal wallet: "${wallet.label || 'Unlabeled'}" (${wallet.walletAddress})`);
+              contextParts.push(`Copy trading: ${wallet.copyTradeEnabled ? 'enabled' : 'disabled'}`);
+              
+              if (recentSwaps.length > 0) {
+                const tradeLines = recentSwaps.map(s => {
+                  const isBuy = s.toToken !== SOL_MINT;
+                  const symbol = isBuy ? s.toTokenSymbol : s.fromTokenSymbol;
+                  const solAmt = isBuy ? s.fromAmount : s.toAmount;
+                  const date = new Date((s.timestamp || 0) * 1000).toLocaleDateString();
+                  return `  ${isBuy ? 'BUY' : 'SELL'} ${symbol || '???'} for ${solAmt ? parseFloat(solAmt).toFixed(3) : '?'} SOL (${date})`;
+                });
+                contextParts.push(`Recent trades:\n${tradeLines.join('\n')}`);
+              } else {
+                contextParts.push('No recent trades detected');
+              }
+              contextParts.push(']');
+              
+              enrichedMessage = contextParts.join('\n') + '\n' + message;
+            }
+          } catch (err) {
+            console.error("[AIChat] Error enriching signal wallet context:", err);
+          }
+        }
       }
       
       console.log(`[AIChat] Processing message: "${enrichedMessage.slice(0, 80)}..."`);
@@ -7730,8 +7769,10 @@ function startMonitoringRetryLoop() {
         await storage.updateMonitoringStatus({ isActive: true, webhookId });
         console.log("[Monitoring] Background retry succeeded, webhook active:", webhookId);
         if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
+        stopPollingFallback();
       } else {
         console.warn("[Monitoring] Background retry failed, will try again in 5min");
+        startPollingFallback();
       }
     } catch (error) {
       console.error("[Monitoring] Background retry error:", error);
@@ -7800,9 +7841,11 @@ async function restoreMonitoring() {
       console.error("[Monitoring] All webhook creation attempts failed");
       await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
       startMonitoringRetryLoop();
+      startPollingFallback();
     }
   } catch (error) {
     console.error("[Monitoring] Error restoring monitoring:", error);
     startMonitoringRetryLoop();
+    startPollingFallback();
   }
 }

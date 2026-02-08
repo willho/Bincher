@@ -17,7 +17,11 @@ interface ChatMessage {
 function getPageContext(pathname: string): string {
   if (pathname === "/" || pathname === "/dashboard") return "dashboard";
   if (pathname === "/signals") return "signals";
-  if (pathname.startsWith("/signal/")) return "signals";
+  if (pathname.startsWith("/signal/")) {
+    const walletId = pathname.split("/")[2];
+    if (walletId && !walletId.includes("copy-settings")) return `signal:${walletId}`;
+    return "signals";
+  }
   if (pathname.startsWith("/trading/")) return `token:${pathname.split("/")[2]}`;
   if (pathname === "/trading") return "trading";
   if (pathname === "/settings") return "settings";
@@ -27,6 +31,7 @@ function getPageContext(pathname: string): string {
 function getPageLabel(context: string): string {
   if (context === "dashboard") return "Dashboard";
   if (context === "signals") return "Signals";
+  if (context.startsWith("signal:")) return "Signal Wallet";
   if (context === "trading") return "Trading";
   if (context === "settings") return "Settings";
   if (context.startsWith("token:")) return "Token";
@@ -71,7 +76,7 @@ export function PincherFooter() {
   const { toast } = useToast();
 
   const pageContext = getPageContext(location);
-  const pageKey = pageContext.startsWith("token:") ? "token" : pageContext;
+  const pageKey = pageContext.startsWith("token:") ? "token" : pageContext.startsWith("signal:") ? "signals" : pageContext;
 
   // Check if this is a new page visit and show intro
   useEffect(() => {
