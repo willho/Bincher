@@ -16,13 +16,16 @@ import {
   Compass,
   Eye,
   Flame,
+  Globe,
   Lightbulb,
   Loader2,
+  MessageCircle,
   Radio,
   Rocket,
   Search,
   Target,
   TrendingUp,
+  Twitter,
   Wallet,
   Zap,
 } from "lucide-react";
@@ -50,6 +53,12 @@ interface RankedToken {
   insightCount: number;
   selectedPriceChange: number | null;
   crashMultiplier: number | null;
+  hasTwitter: boolean | null;
+  hasTelegram: boolean | null;
+  hasWebsite: boolean | null;
+  twitterUrl: string | null;
+  telegramUrl: string | null;
+  websiteUrl: string | null;
 }
 
 interface RankedWallet {
@@ -188,9 +197,22 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
               </Badge>
             )}
           </div>
-          <span className="text-xs text-muted-foreground truncate block">
-            {formatMint(token.tokenMint)}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-muted-foreground truncate">
+              {formatMint(token.tokenMint)}
+            </span>
+            <div className="flex items-center gap-0.5" style={{ visibility: (token.hasTwitter || token.hasTelegram || token.hasWebsite) ? 'visible' : 'hidden' }}>
+              {token.hasTwitter && (
+                <Twitter className="h-3 w-3 text-sky-400" data-testid={`icon-twitter-${token.tokenMint}`} />
+              )}
+              {token.hasTelegram && (
+                <MessageCircle className="h-3 w-3 text-blue-400" data-testid={`icon-telegram-${token.tokenMint}`} />
+              )}
+              {token.hasWebsite && (
+                <Globe className="h-3 w-3 text-muted-foreground" data-testid={`icon-website-${token.tokenMint}`} />
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="text-right flex flex-col items-end gap-0.5">

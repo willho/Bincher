@@ -7209,6 +7209,12 @@ export async function registerRoutes(
         isPumpfun: tokenDataPool.isPumpfun,
         pumpfunGraduated: tokenDataPool.pumpfunGraduated,
         updatedAt: tokenDataPool.updatedAt,
+        hasTwitter: tokenDataPool.hasTwitter,
+        hasTelegram: tokenDataPool.hasTelegram,
+        hasWebsite: tokenDataPool.hasWebsite,
+        twitterUrl: tokenDataPool.twitterUrl,
+        telegramUrl: tokenDataPool.telegramUrl,
+        websiteUrl: tokenDataPool.websiteUrl,
       })
         .from(tokenDataPool)
         .where(and(

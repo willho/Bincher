@@ -71,6 +71,14 @@ export async function upsertTokenData(
     pairAddress: string;
     dexId: string;
     pairCreatedAt: number;
+    hasTwitter: boolean;
+    hasTelegram: boolean;
+    hasWebsite: boolean;
+    twitterUrl: string;
+    telegramUrl: string;
+    websiteUrl: string;
+    twitterMentions: number;
+    telegramMentions: number;
   }>,
   source: string = 'backend',
   fetchedBy?: number
@@ -108,6 +116,24 @@ export async function upsertTokenData(
       if (data.priceChange1h !== undefined) updateData.priceChange1h = data.priceChange1h;
       if (data.priceChange6h !== undefined) updateData.priceChange6h = data.priceChange6h;
       updateData.marketDataUpdatedAt = now;
+    }
+
+    if (data.hasTwitter !== undefined) updateData.hasTwitter = data.hasTwitter;
+    if (data.hasTelegram !== undefined) updateData.hasTelegram = data.hasTelegram;
+    if (data.hasWebsite !== undefined) updateData.hasWebsite = data.hasWebsite;
+    if (data.twitterUrl) updateData.twitterUrl = data.twitterUrl;
+    if (data.telegramUrl) updateData.telegramUrl = data.telegramUrl;
+    if (data.websiteUrl) updateData.websiteUrl = data.websiteUrl;
+    if (data.twitterMentions !== undefined) updateData.twitterMentions = data.twitterMentions;
+    if (data.telegramMentions !== undefined) updateData.telegramMentions = data.telegramMentions;
+
+    const hadSocials = existing.hasTwitter || existing.hasTelegram || existing.hasWebsite;
+    const hasSocialsNow = data.hasTwitter || data.hasTelegram || data.hasWebsite;
+    if (!hadSocials && hasSocialsNow) {
+      updateData.socialFirstDetectedAt = now;
+    }
+    if (data.hasTwitter !== undefined || data.hasTelegram !== undefined || data.hasWebsite !== undefined) {
+      updateData.socialCheckedAt = now;
     }
 
     if (fetchedBy) {
@@ -164,6 +190,17 @@ export async function upsertTokenData(
     priceChange14d: null,
     priceChange30d: null,
     deployerAddress: null,
+    hasTwitter: data.hasTwitter ?? false,
+    hasTelegram: data.hasTelegram ?? false,
+    hasWebsite: data.hasWebsite ?? false,
+    twitterUrl: data.twitterUrl ?? null,
+    telegramUrl: data.telegramUrl ?? null,
+    websiteUrl: data.websiteUrl ?? null,
+    socialFirstDetectedAt: (data.hasTwitter || data.hasTelegram || data.hasWebsite) ? now : null,
+    socialScore: null,
+    twitterMentions: data.twitterMentions ?? 0,
+    telegramMentions: data.telegramMentions ?? 0,
+    socialCheckedAt: (data.hasTwitter !== undefined || data.hasTelegram !== undefined || data.hasWebsite !== undefined) ? now : null,
   };
 
   memoryCache.setToken(tokenMint, newEntry, true);
@@ -1240,6 +1277,12 @@ export interface TokenPriceData {
   priceChange24h?: number;
   pairAddress?: string;
   dexId?: string;
+  hasTwitter?: boolean;
+  hasTelegram?: boolean;
+  hasWebsite?: boolean;
+  twitterUrl?: string;
+  telegramUrl?: string;
+  websiteUrl?: string;
 }
 
 export async function batchFetchFromDexScreener(tokenMints: string[]): Promise<Map<string, TokenPriceData>> {
@@ -1295,6 +1338,12 @@ export async function batchFetchFromDexScreener(tokenMints: string[]): Promise<M
         return currLiq > bestLiq ? current : best;
       });
       
+      const socials = bestPair.info?.socials || [];
+      const websites = bestPair.info?.websites || [];
+      const twitterSocial = socials.find((s: any) => s.type === "twitter" || s.platform === "twitter");
+      const telegramSocial = socials.find((s: any) => s.type === "telegram" || s.platform === "telegram");
+      const websiteEntry = websites.find((w: any) => w.url);
+
       results.set(mint, {
         tokenMint: mint,
         tokenSymbol: bestPair.baseToken?.symbol,
@@ -1307,6 +1356,12 @@ export async function batchFetchFromDexScreener(tokenMints: string[]): Promise<M
         priceChange24h: bestPair.priceChange?.h24,
         pairAddress: bestPair.pairAddress,
         dexId: bestPair.dexId,
+        hasTwitter: !!twitterSocial,
+        hasTelegram: !!telegramSocial,
+        hasWebsite: !!websiteEntry,
+        twitterUrl: twitterSocial?.url || undefined,
+        telegramUrl: telegramSocial?.url || undefined,
+        websiteUrl: websiteEntry?.url || undefined,
       });
       
       batchRefreshState.tokensRefreshedToday++;
@@ -1357,6 +1412,12 @@ export async function refreshTokenBatch(): Promise<{ tokensRefreshed: number; ca
       priceChange24h: data.priceChange24h,
       pairAddress: data.pairAddress,
       dexId: data.dexId,
+      hasTwitter: data.hasTwitter,
+      hasTelegram: data.hasTelegram,
+      hasWebsite: data.hasWebsite,
+      twitterUrl: data.twitterUrl,
+      telegramUrl: data.telegramUrl,
+      websiteUrl: data.websiteUrl,
     }, 'dexscreener_batch');
   }
   

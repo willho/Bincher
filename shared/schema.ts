@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex, index, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // Token metadata schema (from DexScreener)
@@ -2175,6 +2175,19 @@ export const tokenDataPool = pgTable("token_data_pool", {
   
   // Deployer tracking
   deployerAddress: text("deployer_address"),
+  
+  // Social presence
+  hasTwitter: boolean("has_twitter").default(false),
+  hasTelegram: boolean("has_telegram").default(false),
+  hasWebsite: boolean("has_website").default(false),
+  twitterUrl: text("twitter_url"),
+  telegramUrl: text("telegram_url"),
+  websiteUrl: text("website_url"),
+  socialFirstDetectedAt: integer("social_first_detected_at"),
+  socialScore: real("social_score"),
+  twitterMentions: integer("twitter_mentions").default(0),
+  telegramMentions: integer("telegram_mentions").default(0),
+  socialCheckedAt: integer("social_checked_at"),
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
@@ -3627,3 +3640,73 @@ export const storageBucketStatus = pgTable("storage_bucket_status", {
 export const insertStorageBucketStatusSchema = createInsertSchema(storageBucketStatus).omit({ id: true });
 export type StorageBucketStatus = typeof storageBucketStatus.$inferSelect;
 export type InsertStorageBucketStatus = z.infer<typeof insertStorageBucketStatusSchema>;
+
+// ============ Social Signal System ============
+
+export const socialCallers = pgTable("social_callers", {
+  id: serial("id").primaryKey(),
+  
+  platform: text("platform").notNull(), // twitter, telegram
+  handle: text("handle").notNull(), // @username or group/channel name
+  displayName: text("display_name"),
+  platformUrl: text("platform_url"),
+  
+  callCount: integer("call_count").default(0),
+  winCount: integer("win_count").default(0),
+  lossCount: integer("loss_count").default(0),
+  hitRate: real("hit_rate").default(0),
+  avgReturn: real("avg_return").default(0),
+  bestReturn: real("best_return"),
+  worstReturn: real("worst_return"),
+  
+  trustScore: real("trust_score").default(0.5),
+  
+  vector: jsonb("vector").$type<number[]>().default([]),
+  vectorDimension: integer("vector_dimension").default(384),
+  
+  isActive: boolean("is_active").default(true),
+  lastCallAt: integer("last_call_at"),
+  firstSeenAt: integer("first_seen_at"),
+  
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => ({
+  platformHandleUnique: unique().on(table.platform, table.handle),
+}));
+
+export const insertSocialCallerSchema = createInsertSchema(socialCallers).omit({ id: true });
+export type SocialCaller = typeof socialCallers.$inferSelect;
+export type InsertSocialCaller = z.infer<typeof insertSocialCallerSchema>;
+
+export const socialCalls = pgTable("social_calls", {
+  id: serial("id").primaryKey(),
+  
+  callerId: integer("caller_id").notNull(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+  
+  platform: text("platform").notNull(), // twitter, telegram
+  sourceUrl: text("source_url"),
+  messageText: text("message_text"),
+  
+  priceAtCall: real("price_at_call"),
+  marketCapAtCall: real("market_cap_at_call"),
+  liquidityAtCall: real("liquidity_at_call"),
+  
+  peakPriceAfter: real("peak_price_after"),
+  peakMultiplier: real("peak_multiplier"),
+  priceAfter1h: real("price_after_1h"),
+  priceAfter6h: real("price_after_6h"),
+  priceAfter24h: real("price_after_24h"),
+  
+  outcome: text("outcome"), // pending, win, loss, neutral
+  returnPercent: real("return_percent"),
+  evaluatedAt: integer("evaluated_at"),
+  
+  calledAt: integer("called_at").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertSocialCallSchema = createInsertSchema(socialCalls).omit({ id: true });
+export type SocialCall = typeof socialCalls.$inferSelect;
+export type InsertSocialCall = z.infer<typeof insertSocialCallSchema>;
