@@ -7167,10 +7167,24 @@ export async function registerRoutes(
 
   // ============ Discovery Page Routes ============
 
+  const discoveryCache = new Map<string, { data: any; expiresAt: number }>();
+  function getCached(key: string): any | null {
+    const entry = discoveryCache.get(key);
+    if (entry && entry.expiresAt > Date.now()) return entry.data;
+    discoveryCache.delete(key);
+    return null;
+  }
+  function setCache(key: string, data: any, ttlMs: number = 30000) {
+    discoveryCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+  }
+
   app.get("/api/discovery/ranked-tokens", requireAuth, async (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-      const sortBy = (req.query.sort as string) || "score";
+      const sortBy = (req.query.sort as string) || "heat";
+      const cacheKey = `ranked-tokens:${sortBy}:${limit}`;
+      const cached = getCached(cacheKey);
+      if (cached) return res.json(cached);
       
       const now = Math.floor(Date.now() / 1000);
       const oneDayAgo = now - 86400;
@@ -7205,7 +7219,7 @@ export async function registerRoutes(
           sortBy === "price_change" ? desc(tokenDataPool.priceChange24h) :
           desc(tokenDataPool.volume24h)
         )
-        .limit(limit);
+        .limit(sortBy === "heat" || sortBy === "score" ? 200 : limit);
 
       const eventCounts = await db.select({
         tokenMint: discoveryEvents.tokenMint,
@@ -7230,6 +7244,13 @@ export async function registerRoutes(
 
       const insightMap = new Map(insightCounts.map(i => [i.tokenMint, Number(i.insightCount)]));
 
+      let heatMap = new Map<string, number>();
+      if (sortBy === "heat") {
+        const { getHotTokens } = await import("./heat-score");
+        const heatData = await getHotTokens();
+        heatMap = new Map(heatData.map(h => [h.tokenMint, h.heatScore]));
+      }
+
       const ranked = tokens.map(t => {
         let score = 0;
         if (t.trendingRank && t.trendingRank <= 20) score += Math.max(0, 21 - t.trendingRank) * 3;
@@ -7240,55 +7261,105 @@ export async function registerRoutes(
         score += events * 5;
         const insights = insightMap.get(t.tokenMint) || 0;
         score += insights * 3;
+        const heatScore = heatMap.get(t.tokenMint) ?? null;
 
-        return { ...t, discoveryScore: Math.round(score), eventCount: events, insightCount: insights };
+        return { ...t, discoveryScore: Math.round(score), eventCount: events, insightCount: insights, heatScore };
       });
 
+      if (sortBy === "heat") {
+        ranked.sort((a, b) => (b.heatScore ?? -1) - (a.heatScore ?? -1));
+        const result = ranked.slice(0, limit);
+        setCache(cacheKey, result, 30000);
+        return res.json(result);
+      }
       if (sortBy === "score") {
         ranked.sort((a, b) => b.discoveryScore - a.discoveryScore);
       }
 
-      res.json(ranked);
+      const result = ranked.slice(0, limit);
+      setCache(cacheKey, result, 30000);
+      res.json(result);
     } catch (error) {
       console.error("Error getting ranked tokens:", error);
       res.status(500).json({ error: "Failed to get ranked tokens" });
     }
   });
 
-  app.get("/api/discovery/ranked-wallets", requireAuth, async (req, res) => {
+  app.get("/api/discovery/ranked-wallets", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
+      const userId = req.session?.userId;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
       const limit = Math.min(parseInt(req.query.limit as string) || 30, 50);
+      const cacheKey = `ranked-wallets:${userId}:${limit}`;
+      const cached = getCached(cacheKey);
+      if (cached) return res.json(cached);
 
       const wallets = await db.select().from(walletStrategies)
+        .where(eq(walletStrategies.userId, userId))
         .orderBy(desc(walletStrategies.winRate))
         .limit(limit);
 
-      const enriched = wallets.map(w => {
-        const winRate = w.winRate ?? 0;
-        const totalTrades = w.totalTrades ?? 0;
-        const avgHoldTime = w.avgHoldTimeMinutes ?? 0;
-        const profitFactor = w.profitFactor ?? 0;
+      if (wallets.length > 0) {
+        const enriched = wallets.map(w => {
+          const winRate = w.winRate ?? 0;
+          const totalTrades = w.totalTrades ?? 0;
+          const avgHoldTime = w.avgHoldTimeMinutes ?? 0;
+          const profitFactor = w.profitFactor ?? 0;
 
-        let score = 0;
-        score += winRate * 40;
-        score += Math.min(20, totalTrades * 0.5);
-        score += Math.min(20, profitFactor * 5);
-        if (avgHoldTime > 5 && avgHoldTime < 1440) score += 10;
-        if (w.strategyType) score += 10;
+          let score = 0;
+          score += winRate * 40;
+          score += Math.min(20, totalTrades * 0.5);
+          score += Math.min(20, profitFactor * 5);
+          if (avgHoldTime > 5 && avgHoldTime < 1440) score += 10;
+          if (w.strategyType) score += 10;
 
-        return { ...w, walletScore: Math.round(score) };
-      });
+          return { ...w, walletScore: Math.round(score) };
+        });
+        enriched.sort((a, b) => b.walletScore - a.walletScore);
+        setCache(cacheKey, enriched, 30000);
+        return res.json(enriched);
+      }
 
-      enriched.sort((a, b) => b.walletScore - a.walletScore);
-      res.json(enriched);
+      const monitored = await db.select({
+        walletAddress: monitoredWallets.walletAddress,
+        label: monitoredWallets.label,
+        enabled: monitoredWallets.enabled,
+        copyTradeEnabled: monitoredWallets.copyTradeEnabled,
+        aiScore: monitoredWallets.aiScore,
+        createdAt: monitoredWallets.createdAt,
+      }).from(monitoredWallets)
+        .where(and(eq(monitoredWallets.userId, userId), eq(monitoredWallets.enabled, true)))
+        .orderBy(desc(monitoredWallets.createdAt))
+        .limit(limit);
+
+      const fallback = monitored.map(w => ({
+        walletAddress: w.walletAddress,
+        walletLabel: w.label,
+        strategyType: w.copyTradeEnabled ? "copy-trade" : "signal",
+        winRate: null,
+        totalTrades: null,
+        avgHoldTimeMinutes: null,
+        profitFactor: null,
+        avgBuySize: null,
+        preferredTokenTypes: null,
+        walletScore: w.aiScore ?? 0,
+      }));
+      setCache(cacheKey, fallback, 30000);
+      res.json(fallback);
     } catch (error) {
       console.error("Error getting ranked wallets:", error);
       res.status(500).json({ error: "Failed to get ranked wallets" });
     }
   });
 
-  app.get("/api/discovery/page-stats", requireAuth, async (req, res) => {
+  app.get("/api/discovery/page-stats", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
+      const userId = req.session?.userId;
+      if (!userId) return res.status(401).json({ error: "Unauthorized" });
+      const cacheKey = `page-stats:${userId}`;
+      const cached = getCached(cacheKey);
+      if (cached) return res.json(cached);
+
       const now = Math.floor(Date.now() / 1000);
       const oneDayAgo = now - 86400;
       const oneHourAgo = now - 3600;
@@ -7296,7 +7367,11 @@ export async function registerRoutes(
       const [activeTokens] = await db.select({ count: count() }).from(tokenDataPool)
         .where(and(eq(tokenDataPool.isActive, true), gte(tokenDataPool.updatedAt, oneDayAgo)));
 
-      const [trackedWallets] = await db.select({ count: count() }).from(walletStrategies);
+      const [strategyWallets] = await db.select({ count: count() }).from(walletStrategies)
+        .where(eq(walletStrategies.userId, userId));
+      const [monitoredCount] = await db.select({ count: count() }).from(monitoredWallets)
+        .where(and(eq(monitoredWallets.userId, userId), eq(monitoredWallets.enabled, true)));
+      const trackedWalletCount = Math.max(Number(strategyWallets?.count ?? 0), Number(monitoredCount?.count ?? 0));
 
       const [eventsToday] = await db.select({ count: count() }).from(discoveryEvents)
         .where(gte(discoveryEvents.firedAt, oneDayAgo));
@@ -7318,9 +7393,9 @@ export async function registerRoutes(
 
       const { getBusStats } = await import("./discovery-event-bus");
 
-      res.json({
+      const result = {
         activeTokens: Number(activeTokens?.count ?? 0),
-        trackedWallets: Number(trackedWallets?.count ?? 0),
+        trackedWallets: trackedWalletCount,
         eventsToday: Number(eventsToday?.count ?? 0),
         eventsLastHour: Number(eventsHour?.count ?? 0),
         activeTriggers: Number(activeTriggers?.count ?? 0),
@@ -7328,7 +7403,9 @@ export async function registerRoutes(
         trendingTokens: Number(trendingTokens?.count ?? 0),
         boostedTokens: Number(boostedTokens?.count ?? 0),
         busStats: getBusStats(),
-      });
+      };
+      setCache(cacheKey, result, 30000);
+      res.json(result);
     } catch (error) {
       console.error("Error getting discovery page stats:", error);
       res.status(500).json({ error: "Failed to get page stats" });
@@ -7338,8 +7415,13 @@ export async function registerRoutes(
   app.get("/api/discovery/recent-insights", requireAuth, async (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+      const cacheKey = `recent-insights:${limit}`;
+      const cached = getCached(cacheKey);
+      if (cached) return res.json(cached);
+
       const { getInsightsForContext } = await import("./insight-bus");
       const insights = await getInsightsForContext({ limit });
+      setCache(cacheKey, insights, 30000);
       res.json(insights);
     } catch (error) {
       console.error("Error getting recent insights:", error);

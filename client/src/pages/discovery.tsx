@@ -43,6 +43,7 @@ interface RankedToken {
   isPumpfun: boolean | null;
   pumpfunGraduated: boolean | null;
   discoveryScore: number;
+  heatScore: number | null;
   eventCount: number;
   insightCount: number;
 }
@@ -203,12 +204,22 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
         </div>
 
         <div className="text-right w-14">
-          <Badge
-            variant={token.discoveryScore > 50 ? "default" : "secondary"}
-            className="text-xs font-mono"
-          >
-            {token.discoveryScore}
-          </Badge>
+          {token.heatScore !== null && token.heatScore !== undefined ? (
+            <Badge
+              variant={token.heatScore >= 60 ? "default" : "secondary"}
+              className="text-xs font-mono"
+            >
+              <Flame className="h-3 w-3 mr-0.5" />
+              {token.heatScore}
+            </Badge>
+          ) : (
+            <Badge
+              variant={token.discoveryScore > 50 ? "default" : "secondary"}
+              className="text-xs font-mono"
+            >
+              {token.discoveryScore}
+            </Badge>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5 w-16 justify-end">
@@ -341,7 +352,7 @@ function InsightCard({ insight }: { insight: Insight }) {
 }
 
 export default function DiscoveryPage() {
-  const [tokenSort, setTokenSort] = useState<string>("score");
+  const [tokenSort, setTokenSort] = useState<string>("heat");
   const [activeTab, setActiveTab] = useState<string>("tokens");
 
   const { data: stats, isLoading: statsLoading } = useQuery<PageStats>({
@@ -370,6 +381,7 @@ export default function DiscoveryPage() {
   });
 
   const sortOptions = [
+    { value: "heat", label: "Heat Score" },
     { value: "score", label: "Discovery Score" },
     { value: "volume", label: "Volume" },
     { value: "trending", label: "Trending" },
@@ -436,7 +448,7 @@ export default function DiscoveryPage() {
                     <span className="flex-1">Token</span>
                     <span className="text-right">Price</span>
                     <span className="text-right hidden md:block w-20">Vol 24h</span>
-                    <span className="text-right w-14">Score</span>
+                    <span className="text-right w-14">{tokenSort === "heat" ? "Heat" : "Score"}</span>
                     <span className="w-16 text-right">Signals</span>
                     <span className="w-4"></span>
                   </div>
