@@ -91,6 +91,12 @@ export async function recordPaperTradeOutcome(position: PaperPosition): Promise<
   const now = Math.floor(Date.now() / 1000);
   const isWin = position.realizedPnl > 0;
   
+  // Apply learning weight multiplier: Tier 2 (batch_30m) positions have 0.5x weight
+  // because conservative candle-based evaluation introduces uncertainty
+  const weight = position.learningWeight ?? 1.0;
+  const weightedPnl = position.realizedPnl * weight;
+  const weightedPnlPercent = (position.realizedPnlPercent || 0) * weight;
+  
   let signalType: string;
   switch (position.paperTradeType) {
     case "experiment":
@@ -111,8 +117,12 @@ export async function recordPaperTradeOutcome(position: PaperPosition): Promise<
       positionId: position.id,
       tokenMint: position.tokenMint,
       tokenSymbol: position.tokenSymbol,
-      pnlSol: position.realizedPnl,
-      pnlPercent: position.realizedPnlPercent,
+      pnlSol: weightedPnl,
+      pnlPercent: weightedPnlPercent,
+      rawPnlSol: position.realizedPnl,
+      rawPnlPercent: position.realizedPnlPercent,
+      learningWeight: weight,
+      priceTier: position.priceTier || "unknown",
       paperTradeType: position.paperTradeType,
       experimentId: position.metaExperimentId,
       theoryId: position.theoryId,
@@ -131,7 +141,10 @@ export async function recordPaperTradeOutcome(position: PaperPosition): Promise<
     signalType,
     signalData: {
       positionId: position.id,
-      pnlSol: position.realizedPnl,
+      pnlSol: weightedPnl,
+      rawPnlSol: position.realizedPnl,
+      learningWeight: weight,
+      priceTier: position.priceTier || "unknown",
       paperTradeType: position.paperTradeType,
     },
     bucketId,

@@ -972,6 +972,56 @@ export async function pruneOldClusters(retentionDays: number = 30, minEvents: nu
   }
 }
 
+// Enrich cluster with whale reputation data from familiar_whales table
+export async function enrichClusterWithWhaleData(cluster: WalletCluster): Promise<WalletCluster & {
+  whaleMembers: Array<{ address: string; monitoringTier: string; tierScore: number; successRate: number }>;
+  whaleOverlapPercent: number;
+  avgWhaleReputation: number;
+}> {
+  try {
+    const { familiarWhales } = await import("@shared/schema");
+
+    const whaleRows = await db.select({
+      address: familiarWhales.address,
+      monitoringTier: familiarWhales.monitoringTier,
+      tierScore: familiarWhales.tierScore,
+      successRate: familiarWhales.successRate,
+    })
+      .from(familiarWhales)
+      .where(inArray(familiarWhales.address, cluster.members));
+
+    const whaleMembers = whaleRows.map(w => ({
+      address: w.address,
+      monitoringTier: w.monitoringTier || "unknown",
+      tierScore: w.tierScore || 0,
+      successRate: w.successRate || 0,
+    }));
+
+    const whaleOverlapPercent = cluster.members.length > 0
+      ? whaleMembers.length / cluster.members.length
+      : 0;
+
+    const avgWhaleReputation = whaleMembers.length > 0
+      ? whaleMembers.reduce((sum, w) => sum + w.tierScore, 0) / whaleMembers.length
+      : 0;
+
+    return {
+      ...cluster,
+      whaleMembers,
+      whaleOverlapPercent,
+      avgWhaleReputation,
+    };
+  } catch (error) {
+    console.error("[Cluster] Whale enrichment failed:", error);
+    return {
+      ...cluster,
+      whaleMembers: [],
+      whaleOverlapPercent: 0,
+      avgWhaleReputation: 0,
+    };
+  }
+}
+
 export function getWalletBehaviorCache(): Map<string, WalletBehavior> {
   return WALLET_BEHAVIOR_CACHE;
 }

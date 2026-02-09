@@ -376,6 +376,33 @@ async function _openDiscoveryTokenTradeInner(params: {
         takeProfitMultiplier: slot.takeProfitMultiplier,
       });
 
+      // Assign price tier: try to get realtime webhook tracking, fall back to batch
+      const { addTokenForPaperPosition, hasWebhookCapacity } = await import("./unified-webhook");
+      let priceTier: "realtime" | "batch_30m" = "batch_30m";
+      let learningWeight = 0.5;
+      
+      if (positionsOpened === 0) { // Only try webhook for first slot of this token
+        const added = await addTokenForPaperPosition(params.tokenMint);
+        if (added) {
+          priceTier = "realtime";
+          learningWeight = 1.0;
+        }
+      } else {
+        // Inherit tier from first slot
+        const firstSlotTier = await db.select({ priceTier: paperPositions.priceTier })
+          .from(paperPositions)
+          .where(and(
+            eq(paperPositions.tokenMint, params.tokenMint),
+            eq(paperPositions.status, "open"),
+            eq(paperPositions.userId, DISCOVERY_USER_ID)
+          ))
+          .limit(1);
+        if (firstSlotTier.length > 0 && firstSlotTier[0].priceTier === "realtime") {
+          priceTier = "realtime";
+          learningWeight = 1.0;
+        }
+      }
+
       await db.update(paperPositions)
         .set({
           paperTradeType: "discovery",
@@ -386,6 +413,10 @@ async function _openDiscoveryTokenTradeInner(params: {
           sourceType: params.sourceType,
           trailingStopPercent: slot.trailingStopPercent,
           theoryId: slot.theoryId,
+          priceTier,
+          learningWeight,
+          discoverySource: params.sourceType === "wallet_copy" ? "signal_wallet" : "event_bus",
+          discoverySourceWallet: params.signalWallet || null,
           updatedAt: Math.floor(Date.now() / 1000),
         })
         .where(eq(paperPositions.id, position.id));
@@ -548,5 +579,61 @@ export function registerDiscoveryPaperTradingHandlers(): void {
 
   setInterval(cleanupStaleLocks, 60000);
 
-  console.log("[DiscoveryPaper] Registered event handlers: 4-5 positions per token (specific/general/exp1/exp2 + wallet_specific for copies), 450+50 token pool, adaptive thresholds, 1 SOL entry, dedup locks");
+  console.log("[DiscoveryPaper] Registered event handlers: 4-5 positions per token (specific/general/exp1/exp2 + wallet_specific for copies), 450+50 token pool, adaptive thresholds, 1 SOL entry, dedup locks, two-tier pricing");
+}
+
+// Discovery source outcome tracking — aggregates paper trade results per source
+export async function getDiscoverySourceOutcomes(): Promise<Record<string, {
+  totalTrades: number;
+  wins: number;
+  losses: number;
+  avgPnlPercent: number;
+  totalPnlSol: number;
+  winRate: number;
+}>> {
+  const closedPositions = await db.select({
+    discoverySource: paperPositions.discoverySource,
+    realizedPnl: paperPositions.realizedPnl,
+    realizedPnlPercent: paperPositions.realizedPnlPercent,
+  })
+    .from(paperPositions)
+    .where(and(
+      eq(paperPositions.status, "closed"),
+      eq(paperPositions.userId, DISCOVERY_USER_ID)
+    ));
+
+  const outcomes: Record<string, {
+    totalTrades: number;
+    wins: number;
+    losses: number;
+    totalPnlPercent: number;
+    totalPnlSol: number;
+  }> = {};
+
+  for (const pos of closedPositions) {
+    const source = pos.discoverySource || "unknown";
+    if (!outcomes[source]) {
+      outcomes[source] = { totalTrades: 0, wins: 0, losses: 0, totalPnlPercent: 0, totalPnlSol: 0 };
+    }
+    const o = outcomes[source];
+    o.totalTrades++;
+    if ((pos.realizedPnl || 0) > 0) o.wins++;
+    else o.losses++;
+    o.totalPnlPercent += pos.realizedPnlPercent || 0;
+    o.totalPnlSol += pos.realizedPnl || 0;
+  }
+
+  const result: Record<string, any> = {};
+  for (const [source, o] of Object.entries(outcomes)) {
+    result[source] = {
+      totalTrades: o.totalTrades,
+      wins: o.wins,
+      losses: o.losses,
+      avgPnlPercent: o.totalTrades > 0 ? o.totalPnlPercent / o.totalTrades : 0,
+      totalPnlSol: o.totalPnlSol,
+      winRate: o.totalTrades > 0 ? o.wins / o.totalTrades : 0,
+    };
+  }
+
+  return result;
 }

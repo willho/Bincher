@@ -792,6 +792,99 @@ export async function registerRoutes(
           continue;
         }
 
+        // Unified webhook routing: classify this event by address type
+        const { routeWebhookEvent } = await import("./unified-webhook");
+        const routing = routeWebhookEvent(swapWalletAddress);
+        
+        if (routing && routing.type === "whale_active") {
+          // Whale wallet swap - extract price data and emit whale event
+          const whaleParsed = parseSwapFromWebhook(payload);
+          if (whaleParsed) {
+            const whaleIsBuy = isBaseCurrency(whaleParsed.fromToken);
+            const whaleTokenMint = whaleIsBuy ? whaleParsed.toToken : whaleParsed.fromToken;
+            const whaleTokenSymbol = whaleIsBuy ? whaleParsed.toTokenSymbol : whaleParsed.fromTokenSymbol;
+            
+            console.log(`[UnifiedWebhook] Whale ${swapWalletAddress.slice(0,8)} ${whaleIsBuy ? 'bought' : 'sold'} ${whaleTokenSymbol || whaleTokenMint.slice(0,8)}`);
+            
+            // Update price from whale swap
+            const { getSolPriceUsd } = await import("./jupiter");
+            const solPriceWhale = await getSolPriceUsd();
+            const baseAmtW = whaleIsBuy ? whaleParsed.fromAmount : whaleParsed.toAmount;
+            const tokenAmtW = whaleIsBuy ? whaleParsed.toAmount : whaleParsed.fromAmount;
+            if (tokenAmtW && tokenAmtW > 0 && baseAmtW && baseAmtW > 0 && solPriceWhale) {
+              const priceSolW = baseAmtW / tokenAmtW;
+              const priceUsdW = priceSolW * solPriceWhale;
+              const { upsertTokenData } = await import("./data-pool");
+              await upsertTokenData(whaleTokenMint, {
+                tokenSymbol: whaleTokenSymbol || undefined,
+                priceUsd: priceUsdW,
+              }, 'whale_swap');
+            }
+            
+            // Whale-sourced token discovery
+            try {
+              const { processWhaleTokenDiscovery, discoverNewWhalesFromToken } = await import("./whale-discovery");
+              await processWhaleTokenDiscovery(
+                swapWalletAddress,
+                whaleTokenMint,
+                whaleTokenSymbol || undefined,
+                whaleIsBuy ? "buy" : "sell"
+              );
+              // Multi-hop: discover new whales from this token's holders
+              if (whaleIsBuy) {
+                discoverNewWhalesFromToken(whaleTokenMint, swapWalletAddress).catch(() => {});
+              }
+            } catch (_) {}
+            
+            // Emit whale discovery event for the event bus
+            try {
+              const { emit } = await import("./discovery-event-bus");
+              await emit({
+                type: whaleIsBuy ? "whale_buy" as any : "whale_sell" as any,
+                tokenMint: whaleTokenMint,
+                tokenSymbol: whaleTokenSymbol || undefined,
+                source: "unified_webhook",
+                data: {
+                  walletAddress: swapWalletAddress,
+                  action: whaleIsBuy ? "buy" : "sell",
+                  fromAmount: whaleParsed.fromAmount,
+                  toAmount: whaleParsed.toAmount,
+                },
+                timestamp: Date.now(),
+                urgency: 7,
+              });
+            } catch (_) {}
+          }
+          continue; // Skip signal wallet processing
+        }
+        
+        if (routing && (routing.type === "paper_position_token" || routing.type === "real_position_token")) {
+          // Token mint swap event - extract price update only
+          const tokenParsed = parseSwapFromWebhook(payload);
+          if (tokenParsed) {
+            const tokenIsBuy = isBaseCurrency(tokenParsed.fromToken);
+            const trackedMint = tokenIsBuy ? tokenParsed.toToken : tokenParsed.fromToken;
+            const trackedSymbol = tokenIsBuy ? tokenParsed.toTokenSymbol : tokenParsed.fromTokenSymbol;
+            
+            const { getSolPriceUsd } = await import("./jupiter");
+            const solPriceToken = await getSolPriceUsd();
+            const baseAmtT = tokenIsBuy ? tokenParsed.fromAmount : tokenParsed.toAmount;
+            const tokenAmtT = tokenIsBuy ? tokenParsed.toAmount : tokenParsed.fromAmount;
+            
+            if (tokenAmtT && tokenAmtT > 0 && baseAmtT && baseAmtT > 0 && solPriceToken) {
+              const priceUsdT = (baseAmtT / tokenAmtT) * solPriceToken;
+              const { upsertTokenData } = await import("./data-pool");
+              await upsertTokenData(trackedMint, {
+                tokenSymbol: trackedSymbol || undefined,
+                priceUsd: priceUsdT,
+              }, 'position_swap');
+              
+              console.log(`[UnifiedWebhook] Price update for ${routing.type} ${trackedSymbol || trackedMint.slice(0,8)}: $${priceUsdT.toFixed(10)}`);
+            }
+          }
+          continue; // Skip signal wallet processing
+        }
+
         // Look up which user is monitoring this wallet (only enabled wallets)
         const userId = await storage.getUserIdByWalletAddress(swapWalletAddress);
         if (!userId) {
@@ -6517,13 +6610,17 @@ export async function registerRoutes(
 
   app.get("/api/clusters/stats", requireAuth, async (req: Request, res: Response) => {
     try {
-      const { getClusterStats, getCachedClusters } = await import("./cluster-detection");
+      const { getClusterStats, getCachedClusters, enrichClusterWithWhaleData } = await import("./cluster-detection");
       const stats = await getClusterStats();
       const clusters = getCachedClusters();
       
+      const enrichedClusters = await Promise.all(
+        clusters.slice(0, 10).map(c => enrichClusterWithWhaleData(c))
+      );
+      
       res.json({
         ...stats,
-        clusters: clusters.slice(0, 10),
+        clusters: enrichedClusters,
       });
     } catch (error) {
       console.error("Error getting cluster stats:", error);
@@ -6544,6 +6641,17 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error refreshing clusters:", error);
       res.status(500).json({ error: "Failed to refresh clusters" });
+    }
+  });
+
+  app.get("/api/discovery/source-outcomes", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getDiscoverySourceOutcomes } = await import("./discovery-paper-trading");
+      const outcomes = await getDiscoverySourceOutcomes();
+      res.json(outcomes);
+    } catch (error) {
+      console.error("Error getting discovery source outcomes:", error);
+      res.status(500).json({ error: "Failed to get discovery source outcomes" });
     }
   });
 

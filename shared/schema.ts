@@ -1845,6 +1845,11 @@ export const familiarWhales = pgTable("familiar_whales", {
   reliabilityScore: real("reliability_score").default(50), // 0-100 composite score
   label: text("label"), // user-assigned or auto-generated label
   
+  // Three-tier monitoring
+  monitoringTier: text("monitoring_tier").default("archive"), // "active" (webhook), "watch" (periodic RPC), "archive" (stored only)
+  tierAssignedAt: integer("tier_assigned_at"),
+  tierScore: real("tier_score").default(0), // composite score for tier rotation
+  
   // Cluster membership
   clusterId: integer("cluster_id"), // References whale_clusters.id
   clusterAssignedAt: integer("cluster_assigned_at"),
@@ -2195,6 +2200,11 @@ export const tokenDataPool = pgTable("token_data_pool", {
   pincherVerdict: text("pincher_verdict"),
   pincherConfidence: text("pincher_confidence"),
   pincherScoredAt: integer("pincher_scored_at"),
+  
+  // Discovery source tracking
+  discoverySource: text("discovery_source"), // "trending" | "boosted" | "whale" | "signal_wallet" | "event_bus"
+  discoverySourceWallet: text("discovery_source_wallet"), // whale or signal wallet address that led to this token
+  discoveryHopDepth: integer("discovery_hop_depth"), // 0=direct, 1=one hop from source whale, etc.
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
@@ -2427,6 +2437,14 @@ export const paperPositions = pgTable("paper_positions", {
   takeProfitMultiplier: real("take_profit_multiplier"),
   stopLossPercent: real("stop_loss_percent"),
   trailingStop: boolean("trailing_stop"),
+  
+  // Two-tier price tracking
+  priceTier: text("price_tier"), // "realtime" (webhook) | "batch_30m" (OHLCV batch)
+  learningWeight: real("learning_weight").default(1.0), // 1.0 for realtime, 0.5 for batch_30m
+  
+  // Discovery source tracking
+  discoverySource: text("discovery_source"), // "trending" | "boosted" | "whale" | "signal_wallet" | "event_bus"
+  discoverySourceWallet: text("discovery_source_wallet"), // whale or signal wallet address that sourced this token
   
   // Status
   status: text("status").notNull().default("open"), // open, closed, expired

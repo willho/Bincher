@@ -110,6 +110,12 @@ app.use((req, res, next) => {
     
     const { startPositionMonitorJob } = await import("./paper-trading");
     startPositionMonitorJob();
+    
+    const { startPaperAutoClose } = await import("./paper-autoclose");
+    startPaperAutoClose();
+    
+    const { initializeWhaleTracker } = await import("./whale-tracker");
+    initializeWhaleTracker();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");

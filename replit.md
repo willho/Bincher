@@ -35,7 +35,9 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - **Scalability**: Achieved through user isolation and webhook-driven event processing.
 - **API Management**: Tracks API usage with limits and uses an admin API key pool for load balancing.
 - **Tiered Price Aggregation**: Uses OHLC+ price data with multi-tier retention for swing detection.
-- **Whale Detection**: Caches top-100 holder lists and broadcasts whale activity events.
+- **Three-Tier Whale Tracking**: Active tier (~50 wallets on webhook for realtime monitoring), Watch tier (~200 wallets with periodic RPC checks), Archive tier (stored only). Weekly rotation based on composite reputation scores (recency, success rate, volume, reliability, early entries). Managed by `whale-tracker.ts`.
+- **Whale-Sourced Token Discovery**: Auto-discovers tokens from whale activity with per-whale 10-token cap, 24h recency filter, and multi-hop whale detection from token holders. Managed by `whale-discovery.ts`.
+- **Whale Detection (Legacy)**: Caches top-100 holder lists and broadcasts whale activity events.
 - **Telegram Integration**: Two-way webhook-based bot for alerts and AI routing.
 - **AI Filter Creation**: Natural language filter creation via AI chat.
 - **USD Conversions**: Live SOL-to-USD conversion using cached price data.
@@ -65,6 +67,10 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - **Discovery Page** (`/discovery`): Ranked token and wallet lists, stats counters, recent insights feed, and engine status panel.
 - **Paper Trading System**: Risk-free strategy testing via simulated trades. Integrated into the Holdings page. Supports manual trades with token preview and auto-close background jobs.
 - **Discovery Auto-Paper-Trading**: Auto-opens paper trades on high-scoring tokens to learn optimal setups. Supports batch-triggered and event-triggered modes with token qualification filters and a 4-5 position strategy per token. Features adaptive thresholds, a 450+50 token pool, 1 SOL entry size, trailing stop exit, and enhanced close conditions. Distinguishes `token_discovery` vs `wallet_copy` trades for separate strategy learning. Includes a dedup guard and data retention policies.
+- **Two-Tier Paper Trading Pricing**: Tier 1 (~100 tokens) gets realtime webhook prices with 1.0x learning weight. Tier 2 uses conservative 30-min OHLCV batch evaluation (0.5x weight) with worst-case candle assumptions (high for TP, low for SL). Tier assignment at position open based on webhook capacity. Managed by `paper-autoclose.ts`.
+- **Unified Webhook Manager**: Single Helius webhook with priority routing handles signal wallets (P1), real positions (P2), paper positions (P3), whale activity (P4). Server-side address registry supports 100k+ addresses with priority-based classification. Managed by `unified-webhook.ts`.
+- **Discovery Source Tracking**: Tags tokens and positions with discovery source (whale, signal_wallet, event_bus, trending, boosted). Aggregates paper trade outcomes per source to measure which discovery channels produce the best results.
+- **Cluster-Whale Enrichment**: Cluster detection enriched with whale reputation data from familiar_whales, providing whale overlap percentage and average reputation scores per cluster.
 
 ## External Dependencies
 

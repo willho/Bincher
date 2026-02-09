@@ -652,7 +652,7 @@ export default function SignalWalletPage() {
               data-testid="button-paper-copy"
             >
               <FileText className="h-4 w-4 mr-2" />
-              Paper Copy
+              Simulate Copy Trading
             </Button>
           </Link>
           <Button 
