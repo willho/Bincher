@@ -148,6 +148,11 @@ export async function fetchTrending(): Promise<void> {
       state.trendingUpdatedAt = now;
       console.log(`[GeckoTerminal] Updated ${trendingEntries.length} trending tokens`);
 
+      const topTrendingMints = trendingEntries.slice(0, 10).map(e => e.tokenMint);
+      import("./whale-context").then(({ batchScanWhaleContext }) => {
+        batchScanWhaleContext(topTrendingMints).catch(() => {});
+      }).catch(() => {});
+
       for (const entry of trendingEntries.slice(0, 10)) {
         const pool = pools[entry.rank - 1];
         const attrs = pool?.attributes || {};

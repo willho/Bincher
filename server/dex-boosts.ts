@@ -86,6 +86,11 @@ async function fetchBoosts(): Promise<void> {
     if (solanaTokens.length > 0) {
       console.log(`[DexBoosts] Fetched ${solanaTokens.length} boosted Solana tokens`);
 
+      const topMints = solanaTokens.slice(0, 10).map(t => t.tokenAddress);
+      import("./whale-context").then(({ batchScanWhaleContext }) => {
+        batchScanWhaleContext(topMints).catch(() => {});
+      }).catch(() => {});
+
       for (const token of solanaTokens.slice(0, 10)) {
         const boostAmount = token.totalAmount ?? token.amount ?? 0;
         emit({

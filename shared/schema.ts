@@ -2205,6 +2205,14 @@ export const tokenDataPool = pgTable("token_data_pool", {
   discoverySource: text("discovery_source"), // "trending" | "boosted" | "whale" | "signal_wallet" | "event_bus"
   discoverySourceWallet: text("discovery_source_wallet"), // whale or signal wallet address that led to this token
   discoveryHopDepth: integer("discovery_hop_depth"), // 0=direct, 1=one hop from source whale, etc.
+  
+  // Whale context (pre-computed for scoring)
+  whaleHolderCount: integer("whale_holder_count").default(0),
+  whaleAvgReputation: real("whale_avg_reputation"),
+  whaleBestReputation: real("whale_best_reputation"),
+  whaleWorstReputation: real("whale_worst_reputation"),
+  whaleNetSentiment: real("whale_net_sentiment"), // positive = good whales dominate, negative = sketchy whales
+  whaleContextUpdatedAt: integer("whale_context_updated_at"),
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });

@@ -718,9 +718,18 @@ ${JSON.stringify(aggregateData, null, 2)}
     prompt += `\nWHALE ACTIVITY:
 - Top 10 holders control: ${whaleData.top10Percent.toFixed(1)}%
 - Total holder count: ${whaleData.holderCount}
-- Recent whale activity detected: ${whaleData.recentWhaleActivity ? 'Yes' : 'No'}
-
-`;
+- Recent whale activity detected: ${whaleData.recentWhaleActivity ? 'Yes' : 'No'}`;
+    const wd = whaleData as any;
+    if (wd.knownWhaleHolders) {
+      prompt += `\n- Known tracked whales holding: ${wd.knownWhaleHolders}`;
+      if (wd.whaleNetSentiment != null) {
+        prompt += `\n- Whale net sentiment: ${wd.whaleNetSentiment >= 0 ? '+' : ''}${wd.whaleNetSentiment.toFixed(1)} (positive = reputable whales, negative = sketchy whales)`;
+      }
+      if (wd.whaleAvgReputation != null) {
+        prompt += `\n- Average whale reputation: ${wd.whaleAvgReputation.toFixed(1)}/100`;
+      }
+    }
+    prompt += `\n\n`;
   }
 
   // Add timeframe price trends (7d/14d/30d)
@@ -879,6 +888,23 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
     }
   } catch (err) {
     console.warn("Failed to fetch holder data for scoring:", err);
+  }
+
+  // Enrich whale context from tokenDataPool if available
+  try {
+    const [tokenRow] = await db.select({
+      whaleHolderCount: tokenDataPool.whaleHolderCount,
+      whaleAvgReputation: tokenDataPool.whaleAvgReputation,
+      whaleNetSentiment: tokenDataPool.whaleNetSentiment,
+    }).from(tokenDataPool).where(eq(tokenDataPool.tokenMint, snapshot.tokenMint)).limit(1);
+    if (tokenRow && tokenRow.whaleHolderCount && tokenRow.whaleHolderCount > 0) {
+      if (!whaleData) whaleData = { top10Percent: 0, holderCount: 0, recentWhaleActivity: false };
+      (whaleData as any).knownWhaleHolders = tokenRow.whaleHolderCount;
+      (whaleData as any).whaleNetSentiment = tokenRow.whaleNetSentiment;
+      (whaleData as any).whaleAvgReputation = tokenRow.whaleAvgReputation;
+    }
+  } catch (err) {
+    // Non-critical
   }
   
   // Fetch timeframe price context (7d/14d/30d price changes from daily snapshots)

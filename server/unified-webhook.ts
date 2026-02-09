@@ -6,7 +6,7 @@ import { createWebhook, updateWebhookUrl, deleteWebhook, getWebhookUrl } from ".
 const WEBHOOK_SECRET = process.env.SESSION_SECRET || "webhook_secret";
 const MAX_TIER1_TOKENS = 100;
 
-type AddressType = "signal_wallet" | "real_position_token" | "paper_position_token" | "whale_active";
+type AddressType = "signal_wallet" | "real_position_token" | "paper_position_token" | "whale_active" | "whale_watch";
 
 interface TrackedAddress {
   address: string;
@@ -146,6 +146,18 @@ export function removeWhaleWallet(walletAddress: string): boolean {
   return false;
 }
 
+export function addWhaleWatchWallet(walletAddress: string, metadata?: Record<string, any>): boolean {
+  return addAddress(walletAddress, "whale_watch", metadata);
+}
+
+export function removeWhaleWatchWallet(walletAddress: string): boolean {
+  const entry = addressRegistry.get(walletAddress);
+  if (entry && entry.type === "whale_watch") {
+    return removeAddress(walletAddress);
+  }
+  return false;
+}
+
 export function addSignalWallet(walletAddress: string): boolean {
   return addAddress(walletAddress, "signal_wallet");
 }
@@ -164,7 +176,8 @@ function getPriority(type: AddressType): number {
     case "real_position_token": return 2;
     case "paper_position_token": return 3;
     case "whale_active": return 4;
-    default: return 5;
+    case "whale_watch": return 5;
+    default: return 6;
   }
 }
 
@@ -266,6 +279,13 @@ export async function initializeUnifiedWebhook(
     }
   }
 
+  // Register watch-tier whales on webhook (P5)
+  const { getWhalesByTier } = await import("./whale-tracker");
+  const watchWhales = await getWhalesByTier("watch");
+  for (const whale of watchWhales) {
+    addAddress(whale.walletAddress, "whale_watch", { whaleId: whale.id });
+  }
+
   webhookDirty = true;
   await syncWebhookAddresses();
 
@@ -286,15 +306,17 @@ export function getRegistryStats(): {
   realTokens: number;
   paperTokens: number;
   whaleWallets: number;
+  whaleWatchWallets: number;
   webhookId: string | null;
 } {
-  let signalWallets = 0, realTokens = 0, paperTokens = 0, whaleWallets = 0;
+  let signalWallets = 0, realTokens = 0, paperTokens = 0, whaleWallets = 0, whaleWatchWallets = 0;
   addressRegistry.forEach(entry => {
     switch (entry.type) {
       case "signal_wallet": signalWallets++; break;
       case "real_position_token": realTokens++; break;
       case "paper_position_token": paperTokens++; break;
       case "whale_active": whaleWallets++; break;
+      case "whale_watch": whaleWatchWallets++; break;
     }
   });
   return {
@@ -303,6 +325,7 @@ export function getRegistryStats(): {
     realTokens,
     paperTokens,
     whaleWallets,
+    whaleWatchWallets,
     webhookId: unifiedWebhookId,
   };
 }

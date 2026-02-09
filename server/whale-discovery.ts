@@ -92,6 +92,10 @@ export async function processWhaleTokenDiscovery(
 
     console.log(`[WhaleDiscovery] New token ${tokenSymbol || tokenMint.slice(0,8)} sourced from whale ${whaleAddress.slice(0,8)} (score=${whaleScore})`);
 
+    import("./whale-context").then(({ scanAndStoreWhaleContext }) => {
+      scanAndStoreWhaleContext(tokenMint).catch(() => {});
+    }).catch(() => {});
+
     // Emit discovery event
     try {
       const { emit } = await import("./discovery-event-bus");

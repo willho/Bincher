@@ -1,17 +1,15 @@
 import { db } from "./db";
 import { familiarWhales, whaleTokenPositions, tokenDataPool, FamiliarWhale } from "@shared/schema";
 import { eq, and, desc, gte, inArray, sql, or } from "drizzle-orm";
-import { addWhaleWallet, removeWhaleWallet } from "./unified-webhook";
+import { addWhaleWallet, removeWhaleWallet, addWhaleWatchWallet, removeWhaleWatchWallet } from "./unified-webhook";
 
 const MAX_ACTIVE_WHALES = 50;
 const MAX_WATCH_WHALES = 200;
-const WATCH_POLL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const TIER_ROTATION_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000; // 1 week
 const WHALE_TOKEN_CAP = 10; // Max tokens per whale in discovery pool
 
 type WhaleTier = "active" | "watch" | "archive";
 
-let watchPollTimer: ReturnType<typeof setInterval> | null = null;
 let rotationTimer: ReturnType<typeof setInterval> | null = null;
 
 function computeTierScore(whale: FamiliarWhale): number {
@@ -72,11 +70,17 @@ export async function setWhaleTier(whaleId: number, tier: WhaleTier): Promise<vo
   
   // Manage webhook registrations
   if (tier === "active" && oldTier !== "active") {
+    if (oldTier === "watch") removeWhaleWatchWallet(whale.walletAddress);
     addWhaleWallet(whale.walletAddress, { whaleId: whale.id });
-    console.log(`[WhaleTracker] Promoted ${whale.walletAddress.slice(0,8)} to ACTIVE (webhook)`);
-  } else if (tier !== "active" && oldTier === "active") {
-    removeWhaleWallet(whale.walletAddress);
-    console.log(`[WhaleTracker] Demoted ${whale.walletAddress.slice(0,8)} from ACTIVE to ${tier.toUpperCase()}`);
+    console.log(`[WhaleTracker] Promoted ${whale.walletAddress.slice(0,8)} to ACTIVE (webhook P4)`);
+  } else if (tier === "watch" && oldTier !== "watch") {
+    if (oldTier === "active") removeWhaleWallet(whale.walletAddress);
+    addWhaleWatchWallet(whale.walletAddress, { whaleId: whale.id });
+    console.log(`[WhaleTracker] Moved ${whale.walletAddress.slice(0,8)} to WATCH (webhook P5)`);
+  } else if (tier === "archive") {
+    if (oldTier === "active") removeWhaleWallet(whale.walletAddress);
+    if (oldTier === "watch") removeWhaleWatchWallet(whale.walletAddress);
+    console.log(`[WhaleTracker] Archived ${whale.walletAddress.slice(0,8)} (removed from webhook)`);
   }
 }
 
@@ -197,53 +201,6 @@ export async function rotateTiers(): Promise<{ promoted: number; demoted: number
   return { promoted, demoted };
 }
 
-async function pollWatchTierWhales(): Promise<void> {
-  const watchWhales = await getWhalesByTier("watch");
-  if (watchWhales.length === 0) return;
-  
-  // Batch check: look for recent transactions from watch-tier whales
-  // Using the Chainstack/Helius RPC to check signatures
-  const batchSize = 20;
-  const now = Math.floor(Date.now() / 1000);
-  const lookbackSeconds = 15 * 60; // 15 minute lookback
-  
-  for (let i = 0; i < watchWhales.length; i += batchSize) {
-    const batch = watchWhales.slice(i, i + batchSize);
-    
-    for (const whale of batch) {
-      try {
-        // Check for recent transaction signatures via RPC
-        const { getSignaturesForAddress } = await import("./rpc-provider");
-        const recentTxs = await getSignaturesForAddress(whale.walletAddress, { limit: 5 });
-        
-        if (recentTxs && recentTxs.length > 0) {
-          // Update last seen
-          await db.update(familiarWhales)
-            .set({ lastSeenAt: now })
-            .where(eq(familiarWhales.id, whale.id));
-          
-          // If whale is very active, consider promoting to active tier
-          const score = computeTierScore({ ...whale, lastSeenAt: now });
-          if (score >= 60) {
-            const activeCount = await getActiveWhaleCount();
-            if (activeCount < MAX_ACTIVE_WHALES) {
-              await setWhaleTier(whale.id, "active");
-              console.log(`[WhaleTracker] Watch whale ${whale.walletAddress.slice(0,8)} promoted to ACTIVE (score=${score})`);
-            }
-          }
-        }
-      } catch (err) {
-        // Silently continue - RPC errors are expected
-      }
-    }
-    
-    // Rate limit between batches
-    if (i + batchSize < watchWhales.length) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    }
-  }
-}
-
 export async function getWhaleTokenCount(whaleAddress: string): Promise<number> {
   const [result] = await db.select({ count: sql<number>`count(*)` })
     .from(whaleTokenPositions)
@@ -274,23 +231,19 @@ export function getTrackerStats(): {
 export async function initializeWhaleTracker(): Promise<void> {
   // Register existing active-tier whales with the unified webhook
   const activeWhales = await getWhalesByTier("active");
-  
   for (const whale of activeWhales) {
     addWhaleWallet(whale.walletAddress, { whaleId: whale.id });
   }
-  
-  console.log(`[WhaleTracker] Initialized: ${activeWhales.length} active whales registered with webhook`);
-  
-  // Start periodic watch-tier polling
-  watchPollTimer = setInterval(async () => {
-    try {
-      await pollWatchTierWhales();
-    } catch (err) {
-      console.error("[WhaleTracker] Watch poll error:", err);
-    }
-  }, WATCH_POLL_INTERVAL_MS);
-  
-  // Start weekly tier rotation
+
+  // Register existing watch-tier whales with the unified webhook (P5)
+  const watchWhales = await getWhalesByTier("watch");
+  for (const whale of watchWhales) {
+    addWhaleWatchWallet(whale.walletAddress, { whaleId: whale.id });
+  }
+
+  console.log(`[WhaleTracker] Initialized: ${activeWhales.length} active (P4) + ${watchWhales.length} watch (P5) whales on webhook`);
+
+  // Start weekly tier rotation (no more polling timer needed)
   rotationTimer = setInterval(async () => {
     try {
       await rotateTiers();
@@ -298,7 +251,7 @@ export async function initializeWhaleTracker(): Promise<void> {
       console.error("[WhaleTracker] Rotation error:", err);
     }
   }, TIER_ROTATION_INTERVAL_MS);
-  
+
   // Run initial rotation after 5 minutes
   setTimeout(() => {
     rotateTiers().catch(err => console.error("[WhaleTracker] Initial rotation error:", err));
@@ -306,10 +259,6 @@ export async function initializeWhaleTracker(): Promise<void> {
 }
 
 export function stopWhaleTracker(): void {
-  if (watchPollTimer) {
-    clearInterval(watchPollTimer);
-    watchPollTimer = null;
-  }
   if (rotationTimer) {
     clearInterval(rotationTimer);
     rotationTimer = null;

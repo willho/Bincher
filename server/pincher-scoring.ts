@@ -128,16 +128,22 @@ async function scoreBatchWithAI(tokens: TokenRow[]): Promise<AIScoreResult[]> {
         ? Math.round((nowSeconds - t.createdAt) / 3600)
         : "?";
 
-    return `${t.tokenSymbol || "?"} | ${t.tokenMint} | ${formatNumber(t.priceUsd)} | ${formatNumber(t.marketCap)} | ${formatNumber(t.liquidity)} | ${formatNumber(t.volume24h)} | ${formatPct(t.priceChange1h)} | ${formatPct(t.priceChange6h)} | ${formatPct(t.priceChange24h)} | ${socialStr} | ${ageHrs}`;
+    const whaleStr = t.whaleHolderCount && t.whaleHolderCount > 0
+      ? `${t.whaleHolderCount}w(${t.whaleNetSentiment != null ? (t.whaleNetSentiment >= 0 ? "+" : "") + t.whaleNetSentiment.toFixed(0) : "?"})`
+      : "0w";
+
+    return `${t.tokenSymbol || "?"} | ${t.tokenMint} | ${formatNumber(t.priceUsd)} | ${formatNumber(t.marketCap)} | ${formatNumber(t.liquidity)} | ${formatNumber(t.volume24h)} | ${formatPct(t.priceChange1h)} | ${formatPct(t.priceChange6h)} | ${formatPct(t.priceChange24h)} | ${socialStr} | ${ageHrs} | ${whaleStr}`;
   });
 
-  const prompt = `You are a Solana token quality analyst. Score each token 0-100 based on fundamentals quality (NOT hype). Consider: liquidity depth, volume-to-liquidity ratio, price trend health, social presence, token age, and crash risk.
+  const prompt = `You are a Solana token quality analyst. Score each token 0-100 based on fundamentals quality (NOT hype). Consider: liquidity depth, volume-to-liquidity ratio, price trend health, social presence, token age, crash risk, and whale holder context.
+
+WHALE column format: Xw(+/-Y) where X = number of known whales holding, Y = net sentiment (positive = reputable whales dominate, negative = sketchy whales dominate). Good whales holding a token is a positive signal. Sketchy whales (negative sentiment) is a red flag but not disqualifying — one bad whale shouldn't ruin an otherwise solid token.
 
 For each token, respond with ONLY a JSON array of objects:
 [{"mint": "...", "score": 0-100, "verdict": "one-line assessment max 60 chars", "confidence": "low|medium|high"}]
 
 Tokens to analyze:
-SYMBOL | MINT | PRICE | MCAP | LIQ | VOL24H | PC1H | PC6H | PC24H | SOCIALS | AGE_HRS
+SYMBOL | MINT | PRICE | MCAP | LIQ | VOL24H | PC1H | PC6H | PC24H | SOCIALS | AGE_HRS | WHALES
 ${rows.join("\n")}`;
 
   try {
