@@ -74,6 +74,25 @@ interface RankedWallet {
   walletScore: number;
 }
 
+interface SocialCallerData {
+  id: number;
+  platform: string;
+  handle: string;
+  displayName: string | null;
+  platformUrl: string | null;
+  callCount: number | null;
+  winCount: number | null;
+  lossCount: number | null;
+  hitRate: number | null;
+  avgReturn: number | null;
+  bestReturn: number | null;
+  worstReturn: number | null;
+  trustScore: number | null;
+  isActive: boolean;
+  lastCallAt: number | null;
+  firstSeenAt: number | null;
+}
+
 interface PageStats {
   activeTokens: number;
   trackedWallets: number;
@@ -366,6 +385,65 @@ function InsightCard({ insight }: { insight: Insight }) {
   );
 }
 
+function CallerRow({ caller, rank }: { caller: SocialCallerData; rank: number }) {
+  const hitRate = caller.hitRate ? (caller.hitRate * 100).toFixed(0) : "0";
+  const trustPct = caller.trustScore ? (caller.trustScore * 100).toFixed(0) : "50";
+
+  return (
+    <div
+      className="flex items-center gap-3 p-3 rounded-md hover-elevate cursor-pointer"
+      data-testid={`row-caller-${caller.id}`}
+    >
+      <span className="text-xs text-muted-foreground w-6 text-right font-mono">
+        {rank}
+      </span>
+
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          {caller.platform === "twitter" ? (
+            <Twitter className="h-3.5 w-3.5 text-sky-400 flex-shrink-0" />
+          ) : (
+            <MessageCircle className="h-3.5 w-3.5 text-blue-400 flex-shrink-0" />
+          )}
+          <span className="font-medium truncate">
+            @{caller.handle}
+          </span>
+          {caller.displayName && (
+            <span className="text-xs text-muted-foreground truncate">{caller.displayName}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 mt-0.5 text-xs text-muted-foreground">
+          <span>{caller.callCount ?? 0} calls</span>
+          <span className="text-muted-foreground/30">|</span>
+          <span>{caller.winCount ?? 0}W / {caller.lossCount ?? 0}L</span>
+          {caller.avgReturn !== null && caller.avgReturn !== undefined && (
+            <>
+              <span className="text-muted-foreground/30">|</span>
+              <span className={caller.avgReturn >= 0 ? "text-green-500" : "text-red-500"}>
+                avg {caller.avgReturn >= 0 ? "+" : ""}{caller.avgReturn.toFixed(0)}%
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="text-right w-16">
+        <div className="text-sm font-mono">{hitRate}%</div>
+        <div className="text-[10px] text-muted-foreground">hit rate</div>
+      </div>
+
+      <div className="text-right w-14">
+        <Badge
+          variant={(caller.trustScore ?? 0) >= 0.7 ? "default" : "secondary"}
+          className="text-xs font-mono"
+        >
+          {trustPct}
+        </Badge>
+      </div>
+    </div>
+  );
+}
+
 export default function DiscoveryPage() {
   const [tokenSort, setTokenSort] = useState<string>("heat");
   const [activeTab, setActiveTab] = useState<string>("tokens");
@@ -394,6 +472,11 @@ export default function DiscoveryPage() {
   const { data: insights, isLoading: insightsLoading } = useQuery<Insight[]>({
     queryKey: ["/api/discovery/recent-insights"],
     refetchInterval: 60000,
+  });
+
+  const { data: callers, isLoading: callersLoading } = useQuery<SocialCallerData[]>({
+    queryKey: ["/api/discovery/social-callers"],
+    refetchInterval: 120000,
   });
 
   const sortOptions = [
@@ -436,6 +519,10 @@ export default function DiscoveryPage() {
                 <TabsTrigger value="wallets" data-testid="tab-wallets">
                   <Wallet className="h-4 w-4 mr-1.5" />
                   Wallets
+                </TabsTrigger>
+                <TabsTrigger value="callers" data-testid="tab-callers">
+                  <Radio className="h-4 w-4 mr-1.5" />
+                  Callers
                 </TabsTrigger>
               </TabsList>
 
@@ -534,6 +621,38 @@ export default function DiscoveryPage() {
                       <Wallet className="h-8 w-8 mx-auto mb-3 opacity-50" />
                       <p className="text-sm">No tracked wallets yet</p>
                       <p className="text-xs mt-1">Add signal wallets to start tracking strategy analysis</p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="callers">
+              <Card>
+                <CardContent className="p-0">
+                  <div className="flex items-center gap-3 px-3 py-2 border-b text-xs text-muted-foreground">
+                    <span className="w-6 text-right">#</span>
+                    <span className="flex-1">Caller</span>
+                    <span className="text-right w-16">Hit Rate</span>
+                    <span className="text-right w-14">Trust</span>
+                  </div>
+                  {callersLoading ? (
+                    <div className="p-6 space-y-3">
+                      {Array.from({ length: 8 }).map((_, i) => (
+                        <Skeleton key={i} className="h-12 w-full" />
+                      ))}
+                    </div>
+                  ) : callers && callers.length > 0 ? (
+                    <div className="divide-y">
+                      {callers.map((caller, i) => (
+                        <CallerRow key={caller.id} caller={caller} rank={i + 1} />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-12 text-center text-muted-foreground">
+                      <Radio className="h-8 w-8 mx-auto mb-3 opacity-50" />
+                      <p className="text-sm">No social callers tracked yet</p>
+                      <p className="text-xs mt-1">Callers from Twitter and Telegram will appear as they are detected</p>
                     </div>
                   )}
                 </CardContent>

@@ -7520,6 +7520,85 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/discovery/social-callers", requireAuth, async (req, res) => {
+    try {
+      const { getTopCallers } = await import("./social-signals");
+      const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+      const callers = await getTopCallers(limit);
+      res.json(callers);
+    } catch (error) {
+      console.error("Error getting social callers:", error);
+      res.status(500).json({ error: "Failed to get social callers" });
+    }
+  });
+
+  app.get("/api/discovery/social-callers/:id", requireAuth, async (req, res) => {
+    try {
+      const { getCallerById, getCallerCalls } = await import("./social-signals");
+      const callerId = parseInt(req.params.id);
+      const caller = await getCallerById(callerId);
+      if (!caller) return res.status(404).json({ error: "Caller not found" });
+      const calls = await getCallerCalls(callerId, 50);
+      res.json({ caller, calls });
+    } catch (error) {
+      console.error("Error getting caller detail:", error);
+      res.status(500).json({ error: "Failed to get caller detail" });
+    }
+  });
+
+  app.post("/api/discovery/social-callers", requireAuth, async (req, res) => {
+    try {
+      const { getOrCreateCaller } = await import("./social-signals");
+      const { platform, handle, displayName, platformUrl } = req.body;
+      if (!platform || !["twitter", "telegram"].includes(platform)) {
+        return res.status(400).json({ error: "platform must be 'twitter' or 'telegram'" });
+      }
+      if (!handle || typeof handle !== "string" || handle.trim().length === 0) {
+        return res.status(400).json({ error: "Valid handle (string) required" });
+      }
+      const caller = await getOrCreateCaller(platform, handle.trim(), displayName, platformUrl);
+      res.json(caller);
+    } catch (error) {
+      console.error("Error creating social caller:", error);
+      res.status(500).json({ error: "Failed to create caller" });
+    }
+  });
+
+  app.post("/api/discovery/social-calls", requireAuth, async (req, res) => {
+    try {
+      const { recordCall } = await import("./social-signals");
+      const { callerId, tokenMint, tokenSymbol, platform, sourceUrl, messageText } = req.body;
+      if (!callerId || typeof callerId !== "number") {
+        return res.status(400).json({ error: "Valid callerId (number) required" });
+      }
+      if (!tokenMint || typeof tokenMint !== "string") {
+        return res.status(400).json({ error: "Valid tokenMint (string) required" });
+      }
+      if (!platform || !["twitter", "telegram"].includes(platform)) {
+        return res.status(400).json({ error: "platform must be 'twitter' or 'telegram'" });
+      }
+      const call = await recordCall({ callerId, tokenMint, tokenSymbol, platform, sourceUrl, messageText });
+      res.json(call);
+    } catch (error: any) {
+      if (error?.message?.includes("not found")) {
+        return res.status(404).json({ error: error.message });
+      }
+      console.error("Error recording social call:", error);
+      res.status(500).json({ error: "Failed to record call" });
+    }
+  });
+
+  app.post("/api/discovery/social-evaluate", requireAuth, async (req, res) => {
+    try {
+      const { evaluatePendingCalls } = await import("./social-signals");
+      const result = await evaluatePendingCalls();
+      res.json(result);
+    } catch (error) {
+      console.error("Error evaluating social calls:", error);
+      res.status(500).json({ error: "Failed to evaluate calls" });
+    }
+  });
+
   app.get("/api/compute/worker-config", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       res.json({

@@ -22,7 +22,9 @@ export type DiscoveryEventType =
   | "volume_spike"
   | "price_surge"
   | "boost_detected"
-  | "multi_signal_convergence";
+  | "multi_signal_convergence"
+  | "social_call"
+  | "social_detected";
 
 interface BusEvent {
   type: DiscoveryEventType;
@@ -276,6 +278,8 @@ function registerDefaultHandlers(): void {
     "volume_spike",
     "price_surge",
     "boost_detected",
+    "social_call",
+    "social_detected",
   ] as DiscoveryEventType[]) {
     onEvent(type, runImmediateDiscoveryScan);
     onEvent(type, publishToInsightBus);
@@ -374,6 +378,70 @@ function registerDefaultHandlers(): void {
         data: { convergenceType: "whale_trending", signalCount: events.length },
         timestamp: Date.now(),
         urgency: 9,
+      });
+    },
+  });
+
+  registerCombo({
+    name: "social_plus_trending",
+    required: ["social_call", "trending_spotted"],
+    windowMs: 10 * 60 * 1000,
+    minUrgency: 4,
+    action: async (events) => {
+      const tokenMint = events[0].tokenMint;
+      const tokenSymbol = events[0].tokenSymbol || "UNKNOWN";
+      await publishInsight({
+        source: "discovery",
+        type: "recommendation",
+        title: `Social caller + trending: ${tokenSymbol}`,
+        payload: {
+          convergenceType: "social_plus_trending",
+          events: events.map((e) => ({ type: e.type, source: e.source, urgency: e.urgency })),
+        },
+        confidence: 0.7,
+        tokenMint,
+        expiresInHours: 4,
+      });
+      await emit({
+        type: "multi_signal_convergence",
+        tokenMint,
+        tokenSymbol,
+        source: "event_bus",
+        data: { convergenceType: "social_plus_trending", signalCount: events.length },
+        timestamp: Date.now(),
+        urgency: 7,
+      });
+    },
+  });
+
+  registerCombo({
+    name: "social_plus_signal_buy",
+    required: ["social_call", "signal_buy"],
+    windowMs: 15 * 60 * 1000,
+    minUrgency: 4,
+    action: async (events) => {
+      const tokenMint = events[0].tokenMint;
+      const tokenSymbol = events[0].tokenSymbol || "UNKNOWN";
+      await publishInsight({
+        source: "discovery",
+        type: "recommendation",
+        title: `Social + signal wallet convergence: ${tokenSymbol}`,
+        payload: {
+          convergenceType: "social_plus_signal",
+          events: events.map((e) => ({ type: e.type, source: e.source, urgency: e.urgency })),
+        },
+        confidence: 0.75,
+        tokenMint,
+        expiresInHours: 4,
+      });
+      await emit({
+        type: "multi_signal_convergence",
+        tokenMint,
+        tokenSymbol,
+        source: "event_bus",
+        data: { convergenceType: "social_plus_signal", signalCount: events.length },
+        timestamp: Date.now(),
+        urgency: 8,
       });
     },
   });
@@ -479,5 +547,5 @@ export function initEventBus(): void {
   setInterval(runIndicatorScan, 15 * 60 * 1000);
   setTimeout(runIndicatorScan, 60_000);
 
-  console.log("[EventBus] Initialized with 3 combos, 7 event types, indicator scanner (15min)");
+  console.log(`[EventBus] Initialized with ${combos.length} combos, ${handlers.size} event types, indicator scanner (15min)`);
 }

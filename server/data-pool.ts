@@ -131,6 +131,25 @@ export async function upsertTokenData(
     const hasSocialsNow = data.hasTwitter || data.hasTelegram || data.hasWebsite;
     if (!hadSocials && hasSocialsNow) {
       updateData.socialFirstDetectedAt = now;
+      try {
+        const { emit } = await import("./discovery-event-bus");
+        await emit({
+          type: "social_detected" as any,
+          tokenMint,
+          tokenSymbol: data.tokenSymbol || existing.tokenSymbol || undefined,
+          source: source,
+          data: {
+            hasTwitter: data.hasTwitter,
+            hasTelegram: data.hasTelegram,
+            hasWebsite: data.hasWebsite,
+            twitterUrl: data.twitterUrl,
+            telegramUrl: data.telegramUrl,
+            websiteUrl: data.websiteUrl,
+          },
+          timestamp: Date.now(),
+          urgency: 4,
+        });
+      } catch (e) {}
     }
     if (data.hasTwitter !== undefined || data.hasTelegram !== undefined || data.hasWebsite !== undefined) {
       updateData.socialCheckedAt = now;

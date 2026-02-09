@@ -98,6 +98,9 @@ app.use((req, res, next) => {
     
     const { startOptimizer } = await import("./discovery-optimizer");
     startOptimizer();
+    
+    const { startSocialEvaluationJob } = await import("./social-signals");
+    startSocialEvaluationJob();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");
