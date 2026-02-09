@@ -204,22 +204,13 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
         </div>
 
         <div className="text-right w-14">
-          {token.heatScore !== null && token.heatScore !== undefined ? (
-            <Badge
-              variant={token.heatScore >= 60 ? "default" : "secondary"}
-              className="text-xs font-mono"
-            >
-              <Flame className="h-3 w-3 mr-0.5" />
-              {token.heatScore}
-            </Badge>
-          ) : (
-            <Badge
-              variant={token.discoveryScore > 50 ? "default" : "secondary"}
-              className="text-xs font-mono"
-            >
-              {token.discoveryScore}
-            </Badge>
-          )}
+          <Badge
+            variant={(token.heatScore ?? 0) >= 60 ? "default" : "secondary"}
+            className="text-xs font-mono"
+          >
+            <Flame className="h-3 w-3 mr-0.5" />
+            {token.heatScore ?? 0}
+          </Badge>
         </div>
 
         <div className="flex items-center gap-1.5 w-16 justify-end">

@@ -7244,12 +7244,12 @@ export async function registerRoutes(
 
       const insightMap = new Map(insightCounts.map(i => [i.tokenMint, Number(i.insightCount)]));
 
-      let heatMap = new Map<string, number>();
-      if (sortBy === "heat") {
+      let tradingHeatMap = new Map<string, number>();
+      try {
         const { getHotTokens } = await import("./heat-score");
         const heatData = await getHotTokens();
-        heatMap = new Map(heatData.map(h => [h.tokenMint, h.heatScore]));
-      }
+        tradingHeatMap = new Map(heatData.map(h => [h.tokenMint, h.heatScore]));
+      } catch (e) {}
 
       const ranked = tokens.map(t => {
         let score = 0;
@@ -7261,18 +7261,25 @@ export async function registerRoutes(
         score += events * 5;
         const insights = insightMap.get(t.tokenMint) || 0;
         score += insights * 3;
-        const heatScore = heatMap.get(t.tokenMint) ?? null;
+
+        let heatScore = tradingHeatMap.get(t.tokenMint) ?? 0;
+        if (t.boostRank && t.boostRank <= 30) heatScore += Math.max(0, 31 - t.boostRank) * 3;
+        if (t.trendingRank && t.trendingRank <= 20) heatScore += Math.max(0, 21 - t.trendingRank) * 4;
+        if (t.volume24h && t.volume24h > 0) heatScore += Math.min(25, Math.log10(Math.max(1, t.volume24h)) * 3);
+        if (t.priceChange24h && t.priceChange24h > 0) heatScore += Math.min(15, t.priceChange24h);
+        heatScore += events * 3;
+        heatScore += insights * 2;
+        const ageSeconds = now - (t.updatedAt ?? 0);
+        if (ageSeconds < 3600) heatScore += 10;
+        else if (ageSeconds < 7200) heatScore += 5;
+        heatScore = Math.round(heatScore);
 
         return { ...t, discoveryScore: Math.round(score), eventCount: events, insightCount: insights, heatScore };
       });
 
       if (sortBy === "heat") {
-        ranked.sort((a, b) => (b.heatScore ?? -1) - (a.heatScore ?? -1));
-        const result = ranked.slice(0, limit);
-        setCache(cacheKey, result, 30000);
-        return res.json(result);
-      }
-      if (sortBy === "score") {
+        ranked.sort((a, b) => (b.heatScore ?? 0) - (a.heatScore ?? 0));
+      } else if (sortBy === "score") {
         ranked.sort((a, b) => b.discoveryScore - a.discoveryScore);
       }
 
