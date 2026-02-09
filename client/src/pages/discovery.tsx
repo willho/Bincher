@@ -70,9 +70,11 @@ interface PageStats {
   trendingTokens: number;
   boostedTokens: number;
   busStats: {
-    totalProcessed: number;
-    combosFired: number;
-    errors: number;
+    totalEmitted: number;
+    combosTriggered: number;
+    droppedCooldown: number;
+    recentCount: number;
+    combosRegistered: number;
   };
 }
 
@@ -232,11 +234,15 @@ function WalletRow({ wallet, rank }: { wallet: RankedWallet; rank: number }) {
   const winRate = wallet.winRate ? (wallet.winRate * 100).toFixed(0) : "0";
 
   return (
-    <Link href={wallet.walletLabel ? `/signal/${wallet.walletAddress}` : `/trading/${wallet.walletAddress}`}>
-      <div
-        className="flex items-center gap-3 p-3 rounded-md hover-elevate cursor-pointer"
-        data-testid={`row-wallet-${wallet.walletAddress}`}
-      >
+    <div
+      className="flex items-center gap-3 p-3 rounded-md hover-elevate cursor-pointer"
+      data-testid={`row-wallet-${wallet.walletAddress}`}
+      onClick={() => {
+        if (wallet.walletAddress) {
+          navigator.clipboard.writeText(wallet.walletAddress);
+        }
+      }}
+    >
         <span className="text-xs text-muted-foreground w-6 text-right font-mono">
           {rank}
         </span>
@@ -285,7 +291,6 @@ function WalletRow({ wallet, rank }: { wallet: RankedWallet; rank: number }) {
 
         <ChevronRight className="h-4 w-4 text-muted-foreground" />
       </div>
-    </Link>
   );
 }
 
@@ -384,7 +389,7 @@ export default function DiscoveryPage() {
             <Activity className="h-3 w-3 text-green-500 animate-pulse" />
             <span data-testid="text-events-hour">{stats.eventsLastHour} events/hr</span>
             <span className="text-muted-foreground/50">|</span>
-            <span data-testid="text-bus-processed">{stats.busStats.totalProcessed.toLocaleString()} processed</span>
+            <span data-testid="text-bus-processed">{stats.busStats.totalEmitted.toLocaleString()} processed</span>
           </div>
         )}
       </div>
@@ -546,11 +551,11 @@ export default function DiscoveryPage() {
                   </div>
                   <div className="flex justify-between gap-2">
                     <span className="text-muted-foreground">Combos Fired</span>
-                    <span className="font-mono" data-testid="text-combos-fired">{stats.busStats.combosFired}</span>
+                    <span className="font-mono" data-testid="text-combos-fired">{stats.busStats.combosTriggered}</span>
                   </div>
                   <div className="flex justify-between gap-2">
-                    <span className="text-muted-foreground">Bus Errors</span>
-                    <span className="font-mono" data-testid="text-bus-errors">{stats.busStats.errors}</span>
+                    <span className="text-muted-foreground">Cooldown Drops</span>
+                    <span className="font-mono" data-testid="text-cooldown-drops">{stats.busStats.droppedCooldown}</span>
                   </div>
                 </div>
               </CardContent>
