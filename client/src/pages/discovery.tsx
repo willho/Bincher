@@ -164,7 +164,7 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium truncate">
-              {token.tokenSymbol || formatMint(token.tokenMint)}
+              {token.tokenSymbol || (token.tokenName ? token.tokenName.split(" / ")[0] : formatMint(token.tokenMint))}
             </span>
             {token.trendingRank && (
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
@@ -184,11 +184,9 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
               </Badge>
             )}
           </div>
-          {token.tokenName && (
-            <span className="text-xs text-muted-foreground truncate block">
-              {token.tokenName}
-            </span>
-          )}
+          <span className="text-xs text-muted-foreground truncate block">
+            {formatMint(token.tokenMint)}
+          </span>
         </div>
 
         <div className="text-right flex flex-col items-end gap-0.5">
