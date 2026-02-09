@@ -216,16 +216,48 @@ export async function checkPositionExits(): Promise<{ closed: number; checked: n
     .where(eq(paperPositions.status, "open"));
   
   let closed = 0;
+  const checkedMints = new Map<string, { priceUsd: number; liquidity: number | undefined; volume24h: number | undefined }>();
   
   for (const position of openPositions) {
-    const tokenData = await fetchTokenWithFallback(position.tokenMint);
-    if (!tokenData.priceUsd) continue;
+    let tokenInfo = checkedMints.get(position.tokenMint);
+    if (!tokenInfo) {
+      const tokenData = await fetchTokenWithFallback(position.tokenMint);
+      tokenInfo = {
+        priceUsd: tokenData.priceUsd || 0,
+        liquidity: tokenData.liquidity,
+        volume24h: tokenData.volume24h,
+      };
+      checkedMints.set(position.tokenMint, tokenInfo);
+    }
+
+    if (!tokenInfo.priceUsd) continue;
     
-    const currentPrice = tokenData.priceUsd;
+    const currentPrice = tokenInfo.priceUsd;
     await updatePositionPriceTracking(position.id, currentPrice);
     
     const priceChange = (currentPrice - position.entryPrice) / position.entryPrice;
     const stopLoss = normalizeStopLoss(position.stopLossPercent);
+
+    if (position.paperTradeType === "discovery") {
+      const liq = tokenInfo.liquidity;
+      if (liq !== undefined && liq !== null && liq <= 0) {
+        await closePositionInternal(position.id, "dead_token", position.experimentId);
+        closed++;
+        continue;
+      }
+      if (currentPrice < 0.0000000001) {
+        await closePositionInternal(position.id, "dead_token", position.experimentId);
+        closed++;
+        continue;
+      }
+
+      const vol = tokenInfo.volume24h;
+      if (vol !== undefined && vol !== null && priceChange > 0.5 && vol < 500) {
+        await closePositionInternal(position.id, "volume_death", position.experimentId);
+        closed++;
+        continue;
+      }
+    }
     
     if (position.takeProfitMultiplier && currentPrice >= position.entryPrice * position.takeProfitMultiplier) {
       await closePositionInternal(position.id, "take_profit", position.experimentId);
@@ -239,10 +271,10 @@ export async function checkPositionExits(): Promise<{ closed: number; checked: n
       continue;
     }
     
-    if (position.trailingStop && position.highestPrice && currentPrice > position.entryPrice) {
-      const trailingThreshold = stopLoss || 0.2;
+    if (position.trailingStop && position.highestPrice) {
+      const trailingPercent = position.trailingStopPercent || stopLoss || 0.25;
       const dropFromHigh = (position.highestPrice - currentPrice) / position.highestPrice;
-      if (dropFromHigh >= trailingThreshold) {
+      if (dropFromHigh >= trailingPercent && currentPrice > position.entryPrice) {
         await closePositionInternal(position.id, "trailing_stop", position.experimentId);
         closed++;
       }

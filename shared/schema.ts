@@ -2418,6 +2418,11 @@ export const paperPositions = pgTable("paper_positions", {
   reactionSpeedMs: integer("reaction_speed_ms"), // time from trigger to position open in ms
   triggerEventId: text("trigger_event_id"), // reference to the event that triggered this trade
   
+  // Discovery strategy slots
+  strategySlot: text("strategy_slot"), // "specific" | "general" | "experimental_1" | "experimental_2"
+  sourceType: text("source_type"), // "token_discovery" | "wallet_copy" | "manual"
+  trailingStopPercent: real("trailing_stop_percent"), // actual trailing stop % as fraction (0.25 = 25%)
+  
   // Config at entry
   takeProfitMultiplier: real("take_profit_multiplier"),
   stopLossPercent: real("stop_loss_percent"),

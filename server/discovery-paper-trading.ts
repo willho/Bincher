@@ -1,48 +1,60 @@
 import { db } from "./db";
-import { tokenDataPool, paperPositions } from "@shared/schema";
-import { eq, and, gte } from "drizzle-orm";
+import { tokenDataPool, paperPositions, walletStrategies } from "@shared/schema";
+import { eq, and, gte, sql } from "drizzle-orm";
 import { openPaperPosition } from "./paper-trading";
 import { onEvent, registerCombo, type DiscoveryEventType } from "./discovery-event-bus";
 import { fetchTokenWithFallback } from "./data-pool";
+import { getBestTheory, getActiveTheories, type BestTheory } from "./paper-experiments";
 
 const DISCOVERY_USER_ID = 1;
 
-const MIN_PINCHER_SCORE_BATCH = 70;
-const MIN_PINCHER_SCORE_EVENT = 60;
+const MAX_TOKEN_SLOTS = 450;
+const RESERVE_TOKEN_SLOTS = 50;
+const TOTAL_TOKEN_CAP = MAX_TOKEN_SLOTS + RESERVE_TOKEN_SLOTS;
+const POSITIONS_PER_TOKEN = 4;
+const ENTRY_SOL = 1;
+const MIN_SCORE_FLOOR = 30;
+const RESERVE_SCORE_THRESHOLD = 80;
+
 const MIN_LIQUIDITY = 10000;
+const MIN_LIQUIDITY_EXPLORATORY = 5000;
 const MIN_AGE_HOURS = 2;
-const MAX_OPEN_DISCOVERY_POSITIONS = 20;
-const MAX_DAILY_DISCOVERY_TRADES = 10;
-const DEFAULT_ENTRY_SOL = 0.05;
+const MIN_VOLUME = 1000;
 
-const BATCH_TP_MULTIPLIER = 2.0;
-const BATCH_SL_PERCENT = 0.35;
-const EVENT_TP_MULTIPLIER = 1.8;
-const EVENT_SL_PERCENT = 0.30;
+const CRASH_1H_NORMAL = -30;
+const CRASH_24H_NORMAL = -50;
+const CRASH_1H_EXPLORATORY = -40;
+const CRASH_24H_EXPLORATORY = -60;
 
-const dailyTradeCount = { date: "", count: 0 };
-const recentDiscoveryMints = new Set<string>();
+const DEFAULT_SL_PERCENT = 0.35;
+const DEFAULT_TRAILING_PERCENT = 0.25;
+
+const dailyTokenCount = { date: "", count: 0 };
+const activeTokenMints = new Set<string>();
+
+type StrategySlot = "specific" | "general" | "experimental_1" | "experimental_2";
+type SourceType = "token_discovery" | "wallet_copy";
+
+interface SlotConfig {
+  strategySlot: StrategySlot;
+  stopLossPercent: number;
+  trailingStopPercent: number;
+  trailingStop: boolean;
+  takeProfitMultiplier?: number;
+  theoryId?: string;
+}
 
 function getTodayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function canOpenMoreTrades(): boolean {
+function recordTokenOpened(): void {
   const today = getTodayKey();
-  if (dailyTradeCount.date !== today) {
-    dailyTradeCount.date = today;
-    dailyTradeCount.count = 0;
+  if (dailyTokenCount.date !== today) {
+    dailyTokenCount.date = today;
+    dailyTokenCount.count = 0;
   }
-  return dailyTradeCount.count < MAX_DAILY_DISCOVERY_TRADES;
-}
-
-function recordTradeOpened(): void {
-  const today = getTodayKey();
-  if (dailyTradeCount.date !== today) {
-    dailyTradeCount.date = today;
-    dailyTradeCount.count = 0;
-  }
-  dailyTradeCount.count++;
+  dailyTokenCount.count++;
 }
 
 interface TokenQualification {
@@ -50,7 +62,7 @@ interface TokenQualification {
   reason?: string;
 }
 
-function qualifyTokenForDiscoveryTrade(token: {
+function qualifyToken(token: {
   tokenMint: string;
   liquidity?: number | null;
   priceUsd?: number | null;
@@ -59,16 +71,16 @@ function qualifyTokenForDiscoveryTrade(token: {
   priceChange1h?: number | null;
   priceChange24h?: number | null;
   volume24h?: number | null;
-  marketCap?: number | null;
-}): TokenQualification {
+}, isExploratory: boolean = false): TokenQualification {
   const nowSeconds = Math.floor(Date.now() / 1000);
 
   if (!token.priceUsd || token.priceUsd <= 0) {
     return { qualified: false, reason: "no_price" };
   }
 
+  const minLiq = isExploratory ? MIN_LIQUIDITY_EXPLORATORY : MIN_LIQUIDITY;
   const liquidity = token.liquidity || 0;
-  if (liquidity < MIN_LIQUIDITY) {
+  if (liquidity < minLiq) {
     return { qualified: false, reason: `liquidity_too_low:${liquidity}` };
   }
 
@@ -80,34 +92,142 @@ function qualifyTokenForDiscoveryTrade(token: {
     }
   }
 
+  const crash1h = isExploratory ? CRASH_1H_EXPLORATORY : CRASH_1H_NORMAL;
+  const crash24h = isExploratory ? CRASH_24H_EXPLORATORY : CRASH_24H_NORMAL;
+
   const pc1h = token.priceChange1h || 0;
-  if (pc1h < -30) {
+  if (pc1h < crash1h) {
     return { qualified: false, reason: `crashing_1h:${pc1h.toFixed(0)}%` };
   }
 
   const pc24h = token.priceChange24h || 0;
-  if (pc24h < -50) {
+  if (pc24h < crash24h) {
     return { qualified: false, reason: `crashing_24h:${pc24h.toFixed(0)}%` };
   }
 
   const volume = token.volume24h || 0;
-  if (volume < 1000) {
+  if (volume < MIN_VOLUME) {
     return { qualified: false, reason: `low_volume:${volume}` };
   }
 
   return { qualified: true };
 }
 
-async function getOpenDiscoveryCount(): Promise<number> {
-  const positions = await db.select().from(paperPositions)
+async function getOpenDiscoveryTokenCount(): Promise<number> {
+  const result = await db
+    .select({ count: sql<number>`COUNT(DISTINCT ${paperPositions.tokenMint})` })
+    .from(paperPositions)
     .where(and(
       eq(paperPositions.status, "open"),
       eq(paperPositions.paperTradeType, "discovery")
     ));
-  return positions.length;
+  return Number(result[0]?.count || 0);
 }
 
-export async function openDiscoveryPaperTrade(params: {
+async function isTokenAlreadyOpen(tokenMint: string): Promise<boolean> {
+  const [existing] = await db.select({ id: paperPositions.id }).from(paperPositions)
+    .where(and(
+      eq(paperPositions.tokenMint, tokenMint),
+      eq(paperPositions.paperTradeType, "discovery"),
+      eq(paperPositions.status, "open")
+    ))
+    .limit(1);
+  return !!existing;
+}
+
+async function getSlotConfigs(
+  sourceType: SourceType,
+  tokenMint: string,
+  signalWallet?: string
+): Promise<SlotConfig[]> {
+  const slots: SlotConfig[] = [];
+
+  let specificConfig: Partial<SlotConfig> = {};
+  if (sourceType === "wallet_copy" && signalWallet) {
+    const [walletStrat] = await db.select().from(walletStrategies)
+      .where(and(
+        eq(walletStrategies.walletAddress, signalWallet),
+        eq(walletStrategies.userId, DISCOVERY_USER_ID)
+      ))
+      .limit(1);
+
+    if (walletStrat && walletStrat.sampleSize && walletStrat.sampleSize >= 3) {
+      specificConfig = {
+        stopLossPercent: walletStrat.stopLossPercent || DEFAULT_SL_PERCENT,
+        trailingStopPercent: walletStrat.trailingSellEnabled ? 0.20 : DEFAULT_TRAILING_PERCENT,
+        trailingStop: true,
+      };
+    }
+  } else if (sourceType === "token_discovery") {
+    const [tokenRow] = await db.select().from(tokenDataPool)
+      .where(eq(tokenDataPool.tokenMint, tokenMint))
+      .limit(1);
+
+    if (tokenRow) {
+      const vol = tokenRow.volume24h || 0;
+      const mcap = tokenRow.marketCap || 0;
+      if (vol > 100000 && mcap > 500000) {
+        specificConfig = {
+          stopLossPercent: 0.25,
+          trailingStopPercent: 0.20,
+          trailingStop: true,
+        };
+      } else if (vol > 10000) {
+        specificConfig = {
+          stopLossPercent: 0.35,
+          trailingStopPercent: 0.30,
+          trailingStop: true,
+        };
+      }
+    }
+  }
+
+  slots.push({
+    strategySlot: "specific",
+    stopLossPercent: specificConfig.stopLossPercent || DEFAULT_SL_PERCENT,
+    trailingStopPercent: specificConfig.trailingStopPercent || DEFAULT_TRAILING_PERCENT,
+    trailingStop: specificConfig.trailingStop ?? true,
+  });
+
+  const bestTheory = await getBestTheory();
+  if (bestTheory && bestTheory.config) {
+    const slPercent = bestTheory.config.stopLossPercent
+      ? (bestTheory.config.stopLossPercent > 1 ? bestTheory.config.stopLossPercent / 100 : bestTheory.config.stopLossPercent)
+      : DEFAULT_SL_PERCENT;
+    slots.push({
+      strategySlot: "general",
+      stopLossPercent: slPercent,
+      trailingStopPercent: bestTheory.config.trailingStopPercent || DEFAULT_TRAILING_PERCENT,
+      trailingStop: true,
+      theoryId: bestTheory.id,
+    });
+  } else {
+    slots.push({
+      strategySlot: "general",
+      stopLossPercent: DEFAULT_SL_PERCENT,
+      trailingStopPercent: DEFAULT_TRAILING_PERCENT,
+      trailingStop: true,
+    });
+  }
+
+  slots.push({
+    strategySlot: "experimental_1",
+    stopLossPercent: 0.45,
+    trailingStopPercent: 0.15,
+    trailingStop: true,
+  });
+
+  slots.push({
+    strategySlot: "experimental_2",
+    stopLossPercent: 0.30,
+    trailingStopPercent: 0.45,
+    trailingStop: true,
+  });
+
+  return slots;
+}
+
+export async function openDiscoveryTokenTrade(params: {
   tokenMint: string;
   tokenSymbol?: string;
   tokenName?: string;
@@ -115,26 +235,27 @@ export async function openDiscoveryPaperTrade(params: {
   triggerEventId?: string;
   triggerTimestamp: number;
   pincherScore?: number;
-  entrySol?: number;
-  takeProfitMultiplier?: number;
-  stopLossPercent?: number;
-}): Promise<boolean> {
+  sourceType: SourceType;
+  signalWallet?: string;
+  isExploratory?: boolean;
+}): Promise<number> {
   const startTime = Date.now();
 
-  if (!canOpenMoreTrades()) {
-    console.log(`[DiscoveryPaper] Daily trade limit reached, skipping ${params.tokenMint}`);
-    return false;
+  if (await isTokenAlreadyOpen(params.tokenMint)) {
+    return 0;
   }
 
-  const openCount = await getOpenDiscoveryCount();
-  if (openCount >= MAX_OPEN_DISCOVERY_POSITIONS) {
-    console.log(`[DiscoveryPaper] Max open positions (${MAX_OPEN_DISCOVERY_POSITIONS}) reached, skipping`);
-    return false;
+  const openTokens = await getOpenDiscoveryTokenCount();
+  const isReserveEligible = (params.pincherScore || 0) >= RESERVE_SCORE_THRESHOLD;
+
+  if (openTokens >= TOTAL_TOKEN_CAP) {
+    console.log(`[DiscoveryPaper] Total token cap (${TOTAL_TOKEN_CAP}) reached, skipping ${params.tokenMint}`);
+    return 0;
   }
 
-  if (recentDiscoveryMints.has(params.tokenMint)) {
-    console.log(`[DiscoveryPaper] Already traded ${params.tokenMint} recently, skipping`);
-    return false;
+  if (openTokens >= MAX_TOKEN_SLOTS && !isReserveEligible) {
+    console.log(`[DiscoveryPaper] Main slots full (${MAX_TOKEN_SLOTS}), score ${params.pincherScore} below reserve threshold ${RESERVE_SCORE_THRESHOLD}`);
+    return 0;
   }
 
   let tokenData;
@@ -142,99 +263,131 @@ export async function openDiscoveryPaperTrade(params: {
     tokenData = await fetchTokenWithFallback(params.tokenMint);
   } catch (err: any) {
     console.error(`[DiscoveryPaper] Failed to fetch token data for ${params.tokenMint}:`, err.message);
-    return false;
+    return 0;
   }
 
-  const qualification = qualifyTokenForDiscoveryTrade({
+  const [poolRow] = await db.select().from(tokenDataPool)
+    .where(eq(tokenDataPool.tokenMint, params.tokenMint))
+    .limit(1);
+
+  const qualification = qualifyToken({
     tokenMint: params.tokenMint,
     liquidity: tokenData.liquidity,
     priceUsd: tokenData.priceUsd,
-    pairCreatedAt: tokenData.pairCreatedAt,
-    createdAt: tokenData.createdAt,
-    priceChange1h: tokenData.priceChange1h,
+    pairCreatedAt: poolRow?.pairCreatedAt,
+    createdAt: poolRow?.createdAt,
+    priceChange1h: poolRow?.priceChange1h,
     priceChange24h: tokenData.priceChange24h,
     volume24h: tokenData.volume24h,
-    marketCap: tokenData.marketCap,
-  });
+  }, params.isExploratory);
 
   if (!qualification.qualified) {
     console.log(`[DiscoveryPaper] Token ${params.tokenSymbol || params.tokenMint.slice(0, 8)} disqualified: ${qualification.reason}`);
-    return false;
+    return 0;
   }
 
-  const isBatch = params.triggerType === "batch_scoring";
-  const tp = params.takeProfitMultiplier || (isBatch ? BATCH_TP_MULTIPLIER : EVENT_TP_MULTIPLIER);
-  const sl = params.stopLossPercent || (isBatch ? BATCH_SL_PERCENT : EVENT_SL_PERCENT);
-  const entrySol = params.entrySol || DEFAULT_ENTRY_SOL;
+  const slotConfigs = await getSlotConfigs(params.sourceType, params.tokenMint, params.signalWallet);
+  let positionsOpened = 0;
+  const reactionSpeedMs = Date.now() - params.triggerTimestamp;
 
-  try {
-    const position = await openPaperPosition({
-      userId: DISCOVERY_USER_ID,
-      tokenMint: params.tokenMint,
-      tokenSymbol: params.tokenSymbol || tokenData.tokenSymbol,
-      tokenName: params.tokenName || tokenData.tokenName,
-      entrySol,
-      takeProfitMultiplier: tp,
-      stopLossPercent: sl,
-    });
+  for (const slot of slotConfigs) {
+    try {
+      const position = await openPaperPosition({
+        userId: DISCOVERY_USER_ID,
+        tokenMint: params.tokenMint,
+        tokenSymbol: params.tokenSymbol || tokenData.tokenSymbol,
+        tokenName: params.tokenName || tokenData.tokenName,
+        entrySol: ENTRY_SOL,
+        signalWallet: params.signalWallet,
+        stopLossPercent: slot.stopLossPercent,
+        trailingStop: slot.trailingStop,
+        takeProfitMultiplier: slot.takeProfitMultiplier,
+      });
 
-    const reactionSpeedMs = Date.now() - params.triggerTimestamp;
+      await db.update(paperPositions)
+        .set({
+          paperTradeType: "discovery",
+          triggerType: params.triggerType,
+          reactionSpeedMs,
+          triggerEventId: params.triggerEventId,
+          strategySlot: slot.strategySlot,
+          sourceType: params.sourceType,
+          trailingStopPercent: slot.trailingStopPercent,
+          theoryId: slot.theoryId,
+          updatedAt: Math.floor(Date.now() / 1000),
+        })
+        .where(eq(paperPositions.id, position.id));
 
-    await db.update(paperPositions)
-      .set({
-        paperTradeType: "discovery",
-        triggerType: params.triggerType,
-        reactionSpeedMs,
-        triggerEventId: params.triggerEventId,
-        updatedAt: Math.floor(Date.now() / 1000),
-      })
-      .where(eq(paperPositions.id, position.id));
-
-    recordTradeOpened();
-    recentDiscoveryMints.add(params.tokenMint);
-    setTimeout(() => recentDiscoveryMints.delete(params.tokenMint), 4 * 3600 * 1000);
-
-    console.log(`[DiscoveryPaper] Opened ${params.triggerType} trade #${position.id}: ${params.tokenSymbol || params.tokenMint.slice(0, 8)} | ${entrySol} SOL | TP:${((tp - 1) * 100).toFixed(0)}% SL:${(sl * 100).toFixed(0)}% | reaction:${reactionSpeedMs}ms`);
-    return true;
-  } catch (error: any) {
-    console.error(`[DiscoveryPaper] Failed to open trade for ${params.tokenMint}:`, error.message);
-    return false;
+      positionsOpened++;
+    } catch (error: any) {
+      console.error(`[DiscoveryPaper] Failed to open ${slot.strategySlot} position for ${params.tokenMint}:`, error.message);
+    }
   }
+
+  if (positionsOpened > 0) {
+    recordTokenOpened();
+    activeTokenMints.add(params.tokenMint);
+    const symbol = params.tokenSymbol || params.tokenMint.slice(0, 8);
+    const slotUsed = isReserveEligible && openTokens >= MAX_TOKEN_SLOTS ? "RESERVE" : "regular";
+    console.log(`[DiscoveryPaper] Opened ${positionsOpened} positions on ${symbol} | source:${params.sourceType} | trigger:${params.triggerType} | score:${params.pincherScore || '?'} | slot:${slotUsed} | reaction:${reactionSpeedMs}ms`);
+  }
+
+  return positionsOpened;
 }
 
-export async function processHighScoringTokens(scoredTokens: Array<{ mint: string; score: number; confidence: string }>): Promise<number> {
-  let tradesOpened = 0;
+export async function processHighScoringTokens(
+  scoredTokens: Array<{ mint: string; score: number; confidence: string }>
+): Promise<number> {
+  let tokensTraded = 0;
 
-  const qualified = scoredTokens
-    .filter(t => t.score >= MIN_PINCHER_SCORE_BATCH && t.confidence !== "low")
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+  const sorted = scoredTokens
+    .filter(t => t.score >= MIN_SCORE_FLOOR && t.confidence !== "low")
+    .sort((a, b) => b.score - a.score);
+
+  if (sorted.length === 0) {
+    console.log(`[DiscoveryPaper] No tokens above floor score ${MIN_SCORE_FLOOR}`);
+    return 0;
+  }
+
+  const topTokens = sorted.slice(0, 8);
+
+  const exploratoryPool = sorted.filter(t => t.score >= 40 && t.score < 60);
+  const exploratoryPicks = exploratoryPool
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 2);
+
+  const allPicks = [...topTokens];
+  for (const pick of exploratoryPicks) {
+    if (!allPicks.find(t => t.mint === pick.mint)) {
+      allPicks.push(pick);
+    }
+  }
 
   const triggerTimestamp = Date.now();
 
-  for (const token of qualified) {
+  for (const token of allPicks) {
     const tokenData = await fetchTokenWithFallback(token.mint);
+    const isExploratory = token.score < 60;
 
-    const success = await openDiscoveryPaperTrade({
+    const opened = await openDiscoveryTokenTrade({
       tokenMint: token.mint,
       tokenSymbol: tokenData.tokenSymbol || undefined,
       tokenName: tokenData.tokenName || undefined,
       triggerType: "batch_scoring",
       triggerTimestamp,
       pincherScore: token.score,
-      entrySol: DEFAULT_ENTRY_SOL,
-      takeProfitMultiplier: BATCH_TP_MULTIPLIER,
-      stopLossPercent: BATCH_SL_PERCENT,
+      sourceType: "token_discovery",
+      isExploratory,
     });
 
-    if (success) tradesOpened++;
+    if (opened > 0) tokensTraded++;
   }
 
-  if (tradesOpened > 0) {
-    console.log(`[DiscoveryPaper] Batch scoring opened ${tradesOpened} discovery trades`);
+  if (tokensTraded > 0) {
+    console.log(`[DiscoveryPaper] Batch scoring opened trades on ${tokensTraded} tokens (${allPicks.length} candidates, ${exploratoryPicks.length} exploratory)`);
   }
 
-  return tradesOpened;
+  return tokensTraded;
 }
 
 async function handleEventTriggeredTrade(event: {
@@ -246,7 +399,7 @@ async function handleEventTriggeredTrade(event: {
   timestamp: number;
   urgency: number;
 }): Promise<void> {
-  if (event.urgency < 60) return;
+  if (event.urgency < 50) return;
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const oneDayAgo = nowSeconds - 86400;
@@ -261,9 +414,17 @@ async function handleEventTriggeredTrade(event: {
   if (!tokenRow) return;
 
   const pincherScore = tokenRow.pincherScore || 0;
-  if (pincherScore < MIN_PINCHER_SCORE_EVENT) return;
 
-  await openDiscoveryPaperTrade({
+  if (pincherScore < MIN_SCORE_FLOOR) return;
+
+  const isWalletSignal = event.type === "signal_buy" && event.data?.walletAddress;
+  const sourceType: SourceType = isWalletSignal ? "wallet_copy" : "token_discovery";
+  const signalWallet = isWalletSignal ? event.data.walletAddress : undefined;
+
+  const isExploratory = pincherScore < 60 && Math.random() < 0.2;
+  if (pincherScore < 60 && !isExploratory) return;
+
+  await openDiscoveryTokenTrade({
     tokenMint: event.tokenMint,
     tokenSymbol: event.tokenSymbol || tokenRow.tokenSymbol || undefined,
     tokenName: tokenRow.tokenName || undefined,
@@ -271,9 +432,9 @@ async function handleEventTriggeredTrade(event: {
     triggerEventId: `${event.type}_${event.timestamp}`,
     triggerTimestamp: event.timestamp,
     pincherScore,
-    entrySol: DEFAULT_ENTRY_SOL,
-    takeProfitMultiplier: EVENT_TP_MULTIPLIER,
-    stopLossPercent: EVENT_SL_PERCENT,
+    sourceType,
+    signalWallet,
+    isExploratory,
   });
 }
 
@@ -313,5 +474,5 @@ export function registerDiscoveryPaperTradingHandlers(): void {
     },
   });
 
-  console.log("[DiscoveryPaper] Registered event handlers for discovery paper trading");
+  console.log("[DiscoveryPaper] Registered event handlers: 4 positions per token (specific/general/exp1/exp2), 450+50 token pool, adaptive thresholds, 1 SOL entry");
 }
