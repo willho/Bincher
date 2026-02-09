@@ -645,7 +645,7 @@ export default function SignalWalletPage() {
             <Copy className="h-4 w-4 mr-2" />
             {wallet.copyTradeEnabled ? "Copy Trading Active" : "Configure Copy Trading"}
           </Button>
-          <Link href={`/paper?wallet=${wallet.address}&mode=copy`}>
+          <Link href={`/holdings?paperToken=&wallet=${wallet.address}`}>
             <Button 
               variant="secondary"
               size="sm"

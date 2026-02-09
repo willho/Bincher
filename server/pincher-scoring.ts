@@ -2,6 +2,7 @@ import { db } from "./db";
 import { tokenDataPool } from "@shared/schema";
 import { eq, and, gte, isNull, desc, sql } from "drizzle-orm";
 import { publishInsight } from "./insight-bus";
+import { processHighScoringTokens } from "./discovery-paper-trading";
 import OpenAI from "openai";
 
 const openai = new OpenAI({
@@ -290,6 +291,15 @@ export async function runPincherBatchScoring(): Promise<void> {
     console.log(
       `[PincherScoring] Batch complete: ${updatedCount}/${results.length} tokens updated`
     );
+
+    try {
+      const discoveryTradesOpened = await processHighScoringTokens(results);
+      if (discoveryTradesOpened > 0) {
+        console.log(`[PincherScoring] Opened ${discoveryTradesOpened} discovery paper trades from batch`);
+      }
+    } catch (err) {
+      console.error("[PincherScoring] Discovery paper trading failed:", err);
+    }
 
     try {
       const avgScore =

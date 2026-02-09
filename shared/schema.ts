@@ -2408,10 +2408,15 @@ export const paperPositions = pgTable("paper_positions", {
   experimentId: integer("experiment_id"),
   
   // Paper trade type for learning system
-  paperTradeType: text("paper_trade_type").default("manual"), // "manual" | "experiment" | "best_theory"
+  paperTradeType: text("paper_trade_type").default("manual"), // "manual" | "experiment" | "best_theory" | "discovery"
   metaExperimentId: text("meta_experiment_id"), // Links to meta_experiments for experiment types
   theoryId: text("theory_id"), // Links to winning theories for best_theory type
   experimentVariant: text("experiment_variant"), // "control" | "variant" for A/B experiments
+  
+  // Discovery trigger tracking
+  triggerType: text("trigger_type"), // "batch_scoring" | "event_bus" | "manual"
+  reactionSpeedMs: integer("reaction_speed_ms"), // time from trigger to position open in ms
+  triggerEventId: text("trigger_event_id"), // reference to the event that triggered this trade
   
   // Config at entry
   takeProfitMultiplier: real("take_profit_multiplier"),

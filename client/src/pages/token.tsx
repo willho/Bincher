@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink, Loader2, RefreshCw, FlaskConical } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useState, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
@@ -400,16 +400,10 @@ export default function TokenPage() {
             <div className="pt-3 border-t">
               <p className="text-xs text-muted-foreground mb-2">Paper Trading (risk-free simulation)</p>
               <div className="flex gap-2 flex-wrap">
-                <Link href={`/paper?token=${tokenMint}&action=buy`}>
+                <Link href={`/holdings?paperToken=${tokenMint}`}>
                   <Button variant="secondary" size="sm" data-testid="button-paper-buy">
-                    <TrendingUp className="h-4 w-4 mr-2 text-green-500" />
+                    <FlaskConical className="h-4 w-4 mr-2" />
                     Paper Buy
-                  </Button>
-                </Link>
-                <Link href={`/paper?token=${tokenMint}&action=sell`}>
-                  <Button variant="secondary" size="sm" data-testid="button-paper-sell">
-                    <TrendingUp className="h-4 w-4 mr-2 rotate-180 text-red-500" />
-                    Paper Sell
                   </Button>
                 </Link>
               </div>

@@ -6619,6 +6619,25 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/paper/token-lookup/:mint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { fetchTokenWithFallback } = await import("./data-pool");
+      const tokenData = await fetchTokenWithFallback(req.params.mint);
+      res.json({
+        tokenMint: req.params.mint,
+        tokenSymbol: tokenData.tokenSymbol || null,
+        tokenName: tokenData.tokenName || null,
+        priceUsd: tokenData.priceUsd || null,
+        marketCap: tokenData.marketCap || null,
+        liquidity: tokenData.liquidity || null,
+        volume24h: tokenData.volume24h || null,
+      });
+    } catch (error) {
+      console.error("Error looking up token:", error);
+      res.status(404).json({ error: "Token not found" });
+    }
+  });
+
   app.get("/api/paper/positions", requireAuth, async (req: Request, res: Response) => {
     try {
       const { getOpenPositions } = await import("./paper-trading");

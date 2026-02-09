@@ -361,6 +361,12 @@ export async function runBestTheoryValidationCycle(): Promise<{
   theoriesFailing: number;
 }> {
   const theories = await getActiveTheories();
+
+  if (theories.length === 0) {
+    console.log("[PaperExperiments] No active theories to validate, skipping cycle");
+    return { theoriesChecked: 0, theoriesPassing: 0, theoriesFailing: 0 };
+  }
+
   let passing = 0;
   let failing = 0;
   

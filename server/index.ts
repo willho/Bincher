@@ -86,6 +86,9 @@ app.use((req, res, next) => {
     const { initEventBus } = await import("./discovery-event-bus");
     initEventBus();
     
+    const { registerDiscoveryPaperTradingHandlers } = await import("./discovery-paper-trading");
+    registerDiscoveryPaperTradingHandlers();
+    
     const { startGeckoScheduler } = await import("./gecko-terminal");
     startGeckoScheduler();
     
@@ -104,6 +107,9 @@ app.use((req, res, next) => {
     
     const { startPincherScoringJob } = await import("./pincher-scoring");
     startPincherScoringJob();
+    
+    const { startPositionMonitorJob } = await import("./paper-trading");
+    startPositionMonitorJob();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");

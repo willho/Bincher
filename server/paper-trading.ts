@@ -153,13 +153,30 @@ export async function closePaperPosition(
   return closePositionInternal(positionId, exitReason, position.experimentId, exitTxSignature);
 }
 
-export async function getOpenPositions(userId: number): Promise<PaperPosition[]> {
-  return db.select().from(paperPositions)
+export async function getOpenPositions(userId: number): Promise<(PaperPosition & { currentPrice?: number; unrealizedPnl?: number; unrealizedPnlPercent?: number })[]> {
+  const positions = await db.select().from(paperPositions)
     .where(and(
       eq(paperPositions.userId, userId),
       eq(paperPositions.status, "open")
     ))
     .orderBy(desc(paperPositions.entryTimestamp));
+  
+  const enriched = await Promise.all(positions.map(async (pos) => {
+    try {
+      const tokenData = await fetchTokenWithFallback(pos.tokenMint);
+      const currentPrice = tokenData.priceUsd || pos.entryPrice;
+      const pnlPercent = ((currentPrice - pos.entryPrice) / pos.entryPrice) * 100;
+      const solPrice = await getSolPriceUsd();
+      const currentValueUsd = pos.entryTokens * currentPrice;
+      const entryValueUsd = pos.entrySol * solPrice;
+      const unrealizedPnl = (currentValueUsd - (pos.entrySol * solPrice)) / solPrice;
+      return { ...pos, currentPrice, unrealizedPnl, unrealizedPnlPercent: pnlPercent };
+    } catch {
+      return { ...pos, currentPrice: pos.entryPrice, unrealizedPnl: 0, unrealizedPnlPercent: 0 };
+    }
+  }));
+  
+  return enriched;
 }
 
 export async function getPositionHistory(userId: number, limit: number = 50): Promise<PaperPosition[]> {
@@ -256,6 +273,34 @@ export async function handleMirrorSell(
   }
   
   return closedCount;
+}
+
+const POSITION_CHECK_INTERVAL_MS = 2 * 60 * 1000;
+
+export function startPositionMonitorJob(): void {
+  console.log("[PaperTrading] Starting position monitor job (every 2 minutes)");
+
+  setTimeout(async () => {
+    try {
+      const result = await checkPositionExits();
+      if (result.closed > 0) {
+        console.log(`[PaperTrading] Auto-close check: ${result.closed}/${result.checked} positions closed`);
+      }
+    } catch (err) {
+      console.error("[PaperTrading] Initial position check failed:", err);
+    }
+  }, 30_000);
+
+  setInterval(async () => {
+    try {
+      const result = await checkPositionExits();
+      if (result.closed > 0) {
+        console.log(`[PaperTrading] Auto-close check: ${result.closed}/${result.checked} positions closed`);
+      }
+    } catch (err) {
+      console.error("[PaperTrading] Position check failed:", err);
+    }
+  }, POSITION_CHECK_INTERVAL_MS);
 }
 
 // =====================
