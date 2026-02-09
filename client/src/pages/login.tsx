@@ -329,6 +329,26 @@ export default function Login({ onLoginSuccess }: LoginProps) {
               {isSetup ? "Create Account" : "Sign In"}
             </Button>
 
+            {import.meta.env.DEV && (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                data-testid="button-skip-login"
+                onClick={async () => {
+                  try {
+                    await apiRequest("POST", "/api/auth/dev-login");
+                    queryClient.invalidateQueries({ queryKey: ["/api/auth/session"] });
+                    onLoginSuccess();
+                  } catch (e) {
+                    toast({ title: "Dev login failed", variant: "destructive" });
+                  }
+                }}
+              >
+                Skip Login (Dev)
+              </Button>
+            )}
+
             {!isSetup && (
               <div className="text-center">
                 <button

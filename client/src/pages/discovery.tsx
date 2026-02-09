@@ -6,12 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Activity,
   ArrowDown,
   ArrowUp,
   BarChart3,
   Brain,
+  Bug,
   ChevronRight,
   Compass,
   Eye,
@@ -47,12 +49,14 @@ interface RankedToken {
   trendingSource: string | null;
   isPumpfun: boolean | null;
   pumpfunGraduated: boolean | null;
-  discoveryScore: number;
   heatScore: number | null;
+  pincherScore: number | null;
+  pincherVerdict: string | null;
+  pincherConfidence: string | null;
+  combinedScore: number | null;
   eventCount: number;
   insightCount: number;
   selectedPriceChange: number | null;
-  crashMultiplier: number | null;
   hasTwitter: boolean | null;
   hasTelegram: boolean | null;
   hasWebsite: boolean | null;
@@ -179,9 +183,23 @@ function StatsCards({ stats, isLoading }: { stats?: PageStats; isLoading: boolea
   );
 }
 
+function scoreColor(score: number): string {
+  if (score >= 70) return "text-green-500";
+  if (score >= 40) return "text-yellow-500";
+  return "text-red-500";
+}
+
+function scoreBg(score: number): string {
+  if (score >= 70) return "bg-green-500/10 border-green-500/20";
+  if (score >= 40) return "bg-yellow-500/10 border-yellow-500/20";
+  return "bg-red-500/10 border-red-500/20";
+}
+
 function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
   const priceChange = token.selectedPriceChange ?? token.priceChange24h ?? 0;
   const isPositive = priceChange > 0;
+  const heat = token.heatScore ?? 0;
+  const pincher = token.pincherScore;
 
   return (
     <Link href={`/trading/${token.tokenMint}`}>
@@ -246,14 +264,32 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
           <span className="text-sm font-mono text-muted-foreground">{formatVolume(token.volume24h)}</span>
         </div>
 
-        <div className="text-right w-14">
-          <Badge
-            variant={(token.heatScore ?? 0) >= 60 ? "default" : "secondary"}
-            className="text-xs font-mono"
-          >
-            <Flame className="h-3 w-3 mr-0.5" />
-            {token.heatScore ?? 0}
-          </Badge>
+        <div className="text-right w-12" data-testid={`score-heat-${token.tokenMint}`}>
+          <div className={`inline-flex items-center gap-0.5 text-xs font-mono px-1.5 py-0.5 rounded border ${scoreBg(heat)}`}>
+            <Flame className={`h-3 w-3 ${scoreColor(heat)}`} />
+            <span className={scoreColor(heat)}>{heat}</span>
+          </div>
+        </div>
+
+        <div className="text-right w-14" data-testid={`score-pincher-${token.tokenMint}`}>
+          {pincher != null ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className={`inline-flex items-center gap-0.5 text-xs font-mono px-1.5 py-0.5 rounded border ${scoreBg(pincher)}`}>
+                  <Bug className={`h-3 w-3 ${scoreColor(pincher)}`} />
+                  <span className={scoreColor(pincher)}>{pincher}</span>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="left" className="max-w-[200px]">
+                <p className="text-xs font-medium">{token.pincherVerdict || "No verdict"}</p>
+                {token.pincherConfidence && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5 capitalize">Confidence: {token.pincherConfidence}</p>
+                )}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <span className="text-[10px] text-muted-foreground italic" data-testid={`text-pending-${token.tokenMint}`}>pending</span>
+          )}
         </div>
 
         <div className="flex items-center gap-1.5 w-16 justify-end">
@@ -445,7 +481,7 @@ function CallerRow({ caller, rank }: { caller: SocialCallerData; rank: number })
 }
 
 export default function DiscoveryPage() {
-  const [tokenSort, setTokenSort] = useState<string>("heat");
+  const [tokenSort, setTokenSort] = useState<string>("pincher");
   const [activeTab, setActiveTab] = useState<string>("tokens");
   const [timeframe, setTimeframe] = useState<string>("24h");
 
@@ -480,8 +516,9 @@ export default function DiscoveryPage() {
   });
 
   const sortOptions = [
-    { value: "heat", label: "Heat Score" },
-    { value: "score", label: "Discovery Score" },
+    { value: "pincher", label: "Pincher" },
+    { value: "heat", label: "Heat" },
+    { value: "combined", label: "Combined" },
     { value: "volume", label: "Volume" },
     { value: "trending", label: "Trending" },
     { value: "boost", label: "Boosted" },
@@ -567,7 +604,8 @@ export default function DiscoveryPage() {
                     <span className="flex-1">Token</span>
                     <span className="text-right">Price / {timeframe}</span>
                     <span className="text-right hidden md:block w-20">Vol 24h</span>
-                    <span className="text-right w-14">{tokenSort === "heat" ? "Heat" : "Score"}</span>
+                    <span className="text-right w-12">Heat</span>
+                    <span className="text-right w-14">Pincher</span>
                     <span className="w-16 text-right">Signals</span>
                     <span className="w-4"></span>
                   </div>

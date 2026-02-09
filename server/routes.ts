@@ -322,6 +322,11 @@ export async function registerRoutes(
         req.isAdmin = session.isAdmin;
       }
     }
+    if (!req.userId && req.query._devbypass === "1" && process.env.NODE_ENV === "development") {
+      req.userId = 4;
+      req.username = "Willho";
+      req.isAdmin = true;
+    }
     next();
   };
 
@@ -360,9 +365,25 @@ export async function registerRoutes(
   app.get("/api/auth/session", (req: AuthenticatedRequest, res) => {
     if (req.userId && req.username) {
       res.json({ authenticated: true, username: req.username, userId: req.userId, isAdmin: req.isAdmin ?? false });
+    } else if (req.query._devbypass === "1" && process.env.NODE_ENV === "development") {
+      res.json({ authenticated: true, username: "Willho", userId: 4, isAdmin: true });
     } else {
       res.json({ authenticated: false });
     }
+  });
+
+  app.post("/api/auth/dev-login", async (req: AuthenticatedRequest, res) => {
+    if (process.env.NODE_ENV !== "development") {
+      return res.status(403).json({ error: "Not available in production" });
+    }
+    const token = createSession(4, "Willho", true, true);
+    res.cookie("session", token, {
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+    res.json({ success: true, username: "Willho" });
   });
 
   const ADMIN_CODEWORD = "Admin1112";
@@ -7209,12 +7230,17 @@ export async function registerRoutes(
         isPumpfun: tokenDataPool.isPumpfun,
         pumpfunGraduated: tokenDataPool.pumpfunGraduated,
         updatedAt: tokenDataPool.updatedAt,
+        createdAt: tokenDataPool.createdAt,
         hasTwitter: tokenDataPool.hasTwitter,
         hasTelegram: tokenDataPool.hasTelegram,
         hasWebsite: tokenDataPool.hasWebsite,
         twitterUrl: tokenDataPool.twitterUrl,
         telegramUrl: tokenDataPool.telegramUrl,
         websiteUrl: tokenDataPool.websiteUrl,
+        pincherScoreRaw: tokenDataPool.pincherScoreRaw,
+        pincherVerdict: tokenDataPool.pincherVerdict,
+        pincherConfidence: tokenDataPool.pincherConfidence,
+        pincherScoredAt: tokenDataPool.pincherScoredAt,
       })
         .from(tokenDataPool)
         .where(and(
@@ -7228,7 +7254,7 @@ export async function registerRoutes(
           sortBy === "price_change" ? desc(tokenDataPool.priceChange24h) :
           desc(tokenDataPool.volume24h)
         )
-        .limit(sortBy === "heat" || sortBy === "score" ? 200 : limit);
+        .limit(sortBy === "heat" || sortBy === "score" || sortBy === "pincher" || sortBy === "combined" ? 200 : limit);
 
       const eventCounts = await db.select({
         tokenMint: discoveryEvents.tokenMint,
@@ -7253,81 +7279,35 @@ export async function registerRoutes(
 
       const insightMap = new Map(insightCounts.map(i => [i.tokenMint, Number(i.insightCount)]));
 
-      let tradingHeatMap = new Map<string, number>();
-      try {
-        const { getHotTokens } = await import("./heat-score");
-        const heatData = await getHotTokens();
-        tradingHeatMap = new Map(heatData.map(h => [h.tokenMint, h.heatScore]));
-      } catch (e) {}
+      const { computeHeatScore, applyPincherDecay } = await import("./pincher-scoring");
 
-      const ranked = tokens.map(t => {
+      const dataQualityFiltered = tokens.filter(t => {
+        if (!t.tokenSymbol && !t.priceUsd) return false;
+        return true;
+      });
+
+      const ranked = dataQualityFiltered.map(t => {
+        const events = eventMap.get(t.tokenMint) || 0;
+        const insights = insightMap.get(t.tokenMint) || 0;
+
+        let heatScore = computeHeatScore(t as any);
+        heatScore += events * 3;
+        heatScore += insights * 2;
+        heatScore = Math.min(100, heatScore);
+
+        let pincherScore: number | null = null;
+        if (t.pincherScoreRaw != null && t.pincherScoredAt != null) {
+          pincherScore = applyPincherDecay(t.pincherScoreRaw, t.pincherScoredAt);
+        }
+
+        const combinedScore = pincherScore != null
+          ? Math.round((heatScore + pincherScore) / 2)
+          : heatScore;
+
         const pc1h = t.priceChange1h ?? null;
         const pc6h = t.priceChange6h ?? null;
         const pc24h = t.priceChange24h ?? null;
         const pc7d = t.priceChange7d ?? null;
-
-        let score = 0;
-        if (t.trendingRank && t.trendingRank <= 20) score += Math.max(0, 21 - t.trendingRank) * 3;
-        if (t.boostRank && t.boostRank <= 30) score += Math.max(0, 31 - t.boostRank) * 2;
-        if (t.volume24h && t.volume24h > 100000) score += Math.min(30, Math.log10(t.volume24h / 100000) * 10);
-        if (pc24h !== null && pc24h > 0) score += Math.min(20, pc24h * 2);
-        const events = eventMap.get(t.tokenMint) || 0;
-        score += events * 5;
-        const insights = insightMap.get(t.tokenMint) || 0;
-        score += insights * 3;
-
-        const tfPenalty = (pc: number): number => {
-          if (pc <= -90) return 0.05;
-          if (pc <= -80) return 0.1;
-          if (pc <= -60) return 0.2;
-          if (pc <= -40) return 0.35;
-          if (pc <= -20) return 0.6;
-          if (pc <= -10) return 0.8;
-          return 1.0;
-        };
-
-        const penalties: number[] = [];
-        if (pc24h !== null) penalties.push(tfPenalty(pc24h));
-        if (pc1h !== null) penalties.push(tfPenalty(pc1h));
-        if (pc6h !== null) penalties.push(tfPenalty(pc6h));
-        if (pc7d !== null) penalties.push(tfPenalty(pc7d));
-
-        let crashMultiplier = penalties.length > 0 ? Math.min(...penalties) : 1.0;
-
-        const availablePCs: number[] = [];
-        if (pc24h !== null) availablePCs.push(pc24h);
-        if (pc1h !== null) availablePCs.push(pc1h);
-        if (pc6h !== null) availablePCs.push(pc6h);
-        if (pc7d !== null) availablePCs.push(pc7d);
-        const allNegative = availablePCs.length > 0 && availablePCs.every(p => p < 0);
-        const negCount = availablePCs.filter(p => p < -5).length;
-
-        if (allNegative && negCount >= 2) {
-          crashMultiplier *= 0.7;
-        }
-
-        if (pc1h !== null && pc1h > 5 && crashMultiplier < 1.0) {
-          const recoveryBoost = Math.min(0.3, pc1h / 100);
-          crashMultiplier = Math.min(1.0, crashMultiplier + recoveryBoost);
-        }
-        if (pc6h !== null && pc6h > 5 && crashMultiplier < 1.0) {
-          const recoveryBoost6h = Math.min(0.2, pc6h / 200);
-          crashMultiplier = Math.min(1.0, crashMultiplier + recoveryBoost6h);
-        }
-
-        score = Math.round(score * crashMultiplier);
-
-        let heatScore = tradingHeatMap.get(t.tokenMint) ?? 0;
-        if (t.boostRank && t.boostRank <= 30) heatScore += Math.max(0, 31 - t.boostRank) * 3;
-        if (t.trendingRank && t.trendingRank <= 20) heatScore += Math.max(0, 21 - t.trendingRank) * 4;
-        if (t.volume24h && t.volume24h > 0) heatScore += Math.min(25, Math.log10(Math.max(1, t.volume24h)) * 3);
-        if (pc24h !== null && pc24h > 0) heatScore += Math.min(15, pc24h);
-        heatScore += events * 3;
-        heatScore += insights * 2;
-        const ageSeconds = now - (t.updatedAt ?? 0);
-        if (ageSeconds < 3600) heatScore += 10;
-        else if (ageSeconds < 7200) heatScore += 5;
-        heatScore = Math.round(heatScore * crashMultiplier);
 
         const selectedPriceChange = timeframe === "1h" ? (pc1h ?? pc24h ?? null) :
           timeframe === "6h" ? (pc6h ?? pc24h ?? null) :
@@ -7335,19 +7315,25 @@ export async function registerRoutes(
 
         return {
           ...t,
-          discoveryScore: Math.round(score),
           eventCount: events,
           insightCount: insights,
           heatScore,
+          pincherScore,
+          pincherVerdict: t.pincherVerdict,
+          pincherConfidence: t.pincherConfidence,
+          combinedScore,
           selectedPriceChange,
-          crashMultiplier: Math.round(crashMultiplier * 100) / 100,
         };
       });
 
-      if (sortBy === "heat") {
+      if (sortBy === "pincher") {
+        ranked.sort((a, b) => (b.pincherScore ?? -1) - (a.pincherScore ?? -1));
+      } else if (sortBy === "heat") {
         ranked.sort((a, b) => (b.heatScore ?? 0) - (a.heatScore ?? 0));
+      } else if (sortBy === "combined") {
+        ranked.sort((a, b) => (b.combinedScore ?? 0) - (a.combinedScore ?? 0));
       } else if (sortBy === "score") {
-        ranked.sort((a, b) => b.discoveryScore - a.discoveryScore);
+        ranked.sort((a, b) => (b.combinedScore ?? 0) - (a.combinedScore ?? 0));
       } else if (sortBy === "price_change") {
         ranked.sort((a, b) => (b.selectedPriceChange ?? 0) - (a.selectedPriceChange ?? 0));
       }

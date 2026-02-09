@@ -2188,6 +2188,13 @@ export const tokenDataPool = pgTable("token_data_pool", {
   twitterMentions: integer("twitter_mentions").default(0),
   telegramMentions: integer("telegram_mentions").default(0),
   socialCheckedAt: integer("social_checked_at"),
+
+  // Pincher AI scoring
+  pincherScore: real("pincher_score"),
+  pincherScoreRaw: real("pincher_score_raw"),
+  pincherVerdict: text("pincher_verdict"),
+  pincherConfidence: text("pincher_confidence"),
+  pincherScoredAt: integer("pincher_scored_at"),
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
