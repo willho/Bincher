@@ -11,7 +11,8 @@ const DISCOVERY_USER_ID = 1;
 const MAX_TOKEN_SLOTS = 450;
 const RESERVE_TOKEN_SLOTS = 50;
 const TOTAL_TOKEN_CAP = MAX_TOKEN_SLOTS + RESERVE_TOKEN_SLOTS;
-const POSITIONS_PER_TOKEN = 4;
+const POSITIONS_PER_TOKEN_DISCOVERY = 4;
+const POSITIONS_PER_TOKEN_WALLET = 5;
 const ENTRY_SOL = 1;
 const MIN_SCORE_FLOOR = 30;
 const RESERVE_SCORE_THRESHOLD = 80;
@@ -32,7 +33,34 @@ const DEFAULT_TRAILING_PERCENT = 0.25;
 const dailyTokenCount = { date: "", count: 0 };
 const activeTokenMints = new Set<string>();
 
-type StrategySlot = "specific" | "general" | "experimental_1" | "experimental_2";
+const mintLocks = new Map<string, number>();
+const MINT_LOCK_TTL_MS = 30000;
+
+function acquireMintLock(tokenMint: string): boolean {
+  const now = Date.now();
+  const lockTime = mintLocks.get(tokenMint);
+  if (lockTime && now - lockTime < MINT_LOCK_TTL_MS) {
+    return false;
+  }
+  mintLocks.set(tokenMint, now);
+  return true;
+}
+
+function releaseMintLock(tokenMint: string): void {
+  mintLocks.delete(tokenMint);
+}
+
+function cleanupStaleLocks(): void {
+  const now = Date.now();
+  const entries = Array.from(mintLocks.entries());
+  for (const [mint, lockTime] of entries) {
+    if (now - lockTime >= MINT_LOCK_TTL_MS) {
+      mintLocks.delete(mint);
+    }
+  }
+}
+
+type StrategySlot = "specific" | "general" | "experimental_1" | "experimental_2" | "wallet_specific";
 type SourceType = "token_discovery" | "wallet_copy";
 
 interface SlotConfig {
@@ -142,22 +170,24 @@ async function getSlotConfigs(
 ): Promise<SlotConfig[]> {
   const slots: SlotConfig[] = [];
 
-  let specificConfig: Partial<SlotConfig> = {};
+  let walletStrat: typeof walletStrategies.$inferSelect | null = null;
   if (sourceType === "wallet_copy" && signalWallet) {
-    const [walletStrat] = await db.select().from(walletStrategies)
+    const [ws] = await db.select().from(walletStrategies)
       .where(and(
         eq(walletStrategies.walletAddress, signalWallet),
         eq(walletStrategies.userId, DISCOVERY_USER_ID)
       ))
       .limit(1);
+    walletStrat = ws || null;
+  }
 
-    if (walletStrat && walletStrat.sampleSize && walletStrat.sampleSize >= 3) {
-      specificConfig = {
-        stopLossPercent: walletStrat.stopLossPercent || DEFAULT_SL_PERCENT,
-        trailingStopPercent: walletStrat.trailingSellEnabled ? 0.20 : DEFAULT_TRAILING_PERCENT,
-        trailingStop: true,
-      };
-    }
+  let specificConfig: Partial<SlotConfig> = {};
+  if (sourceType === "wallet_copy" && walletStrat && walletStrat.sampleSize && walletStrat.sampleSize >= 5) {
+    specificConfig = {
+      stopLossPercent: walletStrat.stopLossPercent || DEFAULT_SL_PERCENT,
+      trailingStopPercent: walletStrat.trailingSellEnabled ? 0.20 : DEFAULT_TRAILING_PERCENT,
+      trailingStop: true,
+    };
   } else if (sourceType === "token_discovery") {
     const [tokenRow] = await db.select().from(tokenDataPool)
       .where(eq(tokenDataPool.tokenMint, tokenMint))
@@ -224,6 +254,24 @@ async function getSlotConfigs(
     trailingStop: true,
   });
 
+  if (sourceType === "wallet_copy") {
+    if (walletStrat && walletStrat.sampleSize && walletStrat.sampleSize >= 5) {
+      slots.push({
+        strategySlot: "wallet_specific",
+        stopLossPercent: walletStrat.stopLossPercent || DEFAULT_SL_PERCENT,
+        trailingStopPercent: walletStrat.trailingSellEnabled ? 0.18 : DEFAULT_TRAILING_PERCENT,
+        trailingStop: true,
+      });
+    } else {
+      slots.push({
+        strategySlot: "wallet_specific",
+        stopLossPercent: DEFAULT_SL_PERCENT,
+        trailingStopPercent: 0.22,
+        trailingStop: true,
+      });
+    }
+  }
+
   return slots;
 }
 
@@ -241,6 +289,30 @@ export async function openDiscoveryTokenTrade(params: {
 }): Promise<number> {
   const startTime = Date.now();
 
+  if (!acquireMintLock(params.tokenMint)) {
+    console.log(`[DiscoveryPaper] Skipping ${params.tokenMint.slice(0, 8)} - concurrent trade in progress`);
+    return 0;
+  }
+
+  try {
+    return await _openDiscoveryTokenTradeInner(params);
+  } finally {
+    releaseMintLock(params.tokenMint);
+  }
+}
+
+async function _openDiscoveryTokenTradeInner(params: {
+  tokenMint: string;
+  tokenSymbol?: string;
+  tokenName?: string;
+  triggerType: "batch_scoring" | "event_bus";
+  triggerEventId?: string;
+  triggerTimestamp: number;
+  pincherScore?: number;
+  sourceType: SourceType;
+  signalWallet?: string;
+  isExploratory?: boolean;
+}): Promise<number> {
   if (await isTokenAlreadyOpen(params.tokenMint)) {
     return 0;
   }
@@ -474,5 +546,7 @@ export function registerDiscoveryPaperTradingHandlers(): void {
     },
   });
 
-  console.log("[DiscoveryPaper] Registered event handlers: 4 positions per token (specific/general/exp1/exp2), 450+50 token pool, adaptive thresholds, 1 SOL entry");
+  setInterval(cleanupStaleLocks, 60000);
+
+  console.log("[DiscoveryPaper] Registered event handlers: 4-5 positions per token (specific/general/exp1/exp2 + wallet_specific for copies), 450+50 token pool, adaptive thresholds, 1 SOL entry, dedup locks");
 }

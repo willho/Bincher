@@ -2419,7 +2419,7 @@ export const paperPositions = pgTable("paper_positions", {
   triggerEventId: text("trigger_event_id"), // reference to the event that triggered this trade
   
   // Discovery strategy slots
-  strategySlot: text("strategy_slot"), // "specific" | "general" | "experimental_1" | "experimental_2"
+  strategySlot: text("strategy_slot"), // "specific" | "general" | "experimental_1" | "experimental_2" | "wallet_specific"
   sourceType: text("source_type"), // "token_discovery" | "wallet_copy" | "manual"
   trailingStopPercent: real("trailing_stop_percent"), // actual trailing stop % as fraction (0.25 = 25%)
   

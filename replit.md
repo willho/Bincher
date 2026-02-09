@@ -1,7 +1,7 @@
 # Penny Pincher
 
 ## Overview
-Penny Pincher is an automated Solana trading platform designed for copy trading from signal wallets, manual trading, and AI-driven trading. It aims to be a comprehensive, intelligent, and secure solution on the Solana blockchain, offering automated risk management, adaptive AI learning, and pattern-based swing trading to improve user profitability and experience in decentralized finance.
+Penny Pincher is an automated Solana trading platform offering copy trading from signal wallets, manual trading, and AI-driven trading. It aims to be a comprehensive, intelligent, and secure solution on the Solana blockchain, focusing on automated risk management, adaptive AI learning, and pattern-based swing trading to enhance user profitability and experience in decentralized finance.
 
 ## User Preferences
 - I prefer simple language.
@@ -16,76 +16,55 @@ Penny Pincher is an automated Solana trading platform designed for copy trading 
 ## System Architecture
 
 ### High-Level Design
-The application employs a client-server architecture, featuring a React frontend, an Express.js backend, and a PostgreSQL database. Real-time communication is facilitated by WebSockets, and Helius webhooks are utilized for push-based swap detection. User data is strictly isolated.
+The application uses a client-server architecture with a React frontend, an Express.js backend, and a PostgreSQL database. Real-time communication is handled by WebSockets, and Helius webhooks enable push-based swap detection. User data is strictly isolated.
 
 ### Frontend
-The UI is built with React and Vite, featuring a dark theme with crypto-themed green accents. It includes a Dashboard, Watchlist, Trading (with Token sub-page), Settings, and an omnipresent AI chat component (Pincher Footer). Navigation is dashboard-centric, utilizing panels as the primary navigation mechanism.
+The UI is built with React and Vite, featuring a dark theme with crypto-themed green accents. It includes a Dashboard, Watchlist, Trading (with Token sub-page), Settings, and an omnipresent AI chat component. Navigation is dashboard-centric, using panels.
 
 ### Backend
-The Express backend handles user authentication (session-based), Solana service integrations, and business logic. It processes Helius webhooks, uses Resend for email, and integrates Jupiter for token swaps. A WebSocket server broadcasts real-time updates.
+The Express backend manages user authentication (session-based), Solana service integrations, and business logic. It processes Helius webhooks, uses Resend for email, and integrates Jupiter for token swaps. A WebSocket server broadcasts real-time updates.
 
 ### Database
-PostgreSQL is used for persistent storage of user accounts, sessions, monitored wallets, swap history, settings, copy trading configurations, and AI-related data, with strict user data isolation.
+PostgreSQL stores user accounts, sessions, monitored wallets, swap history, settings, copy trading configurations, and AI-related data, with strict user data isolation.
 
 ### Key Features & Design Patterns
-- **Real-time Swap Monitoring**: Leverages Helius webhooks for immediate transaction detection.
-- **Automated Copy Trading**: Features a hot wallet system with advanced encryption, dynamic priority fees, split buy systems, progressive take-profit, unique disposable token wallets per buy, and backup gas funding. Includes configurable initial buy modes, budget controls, and mirror trading options.
+- **Real-time Swap Monitoring**: Utilizes Helius webhooks for immediate transaction detection.
+- **Automated Copy Trading**: Includes a hot wallet system with advanced encryption, dynamic priority fees, split buy systems, progressive take-profit, unique disposable token wallets, and backup gas funding. Offers configurable initial buy modes, budget controls, and mirror trading options.
 - **AI Token Analysis (Miss Pincher)**: A GPT-4o-mini powered AI provides dynamic token heat scoring and qualitative analysis via a chat interface, requiring explicit user confirmation for trades.
-- **Security**: Robust authentication (PBKDF2, secure sessions), encrypted data, PIN protection, daily spend limits, withdrawal address whitelisting, and Telegram confirmation for large transfers.
+- **Security**: Robust authentication, encrypted data, PIN protection, daily spend limits, withdrawal address whitelisting, and Telegram confirmation for large transfers.
 - **Scalability**: Achieved through user isolation and webhook-driven event processing.
-- **API Management**: Tracks API usage with limits and uses an admin API key pool for load balancing across providers.
+- **API Management**: Tracks API usage with limits and uses an admin API key pool for load balancing.
 - **Tiered Price Aggregation**: Uses OHLC+ price data with multi-tier retention for swing detection.
 - **Whale Detection**: Caches top-100 holder lists and broadcasts whale activity events.
-- **Enhanced Heat Scoring**: Token heat scores incorporate whale activity, recent buys, price volatility, user attention, and recency.
-- **Telegram Integration**: Two-way webhook-based bot for alerts and routing non-command messages to Miss Pincher AI.
-- **AI Filter Creation**: Natural language filter creation via Miss Pincher chat.
+- **Telegram Integration**: Two-way webhook-based bot for alerts and AI routing.
+- **AI Filter Creation**: Natural language filter creation via AI chat.
 - **USD Conversions**: Live SOL-to-USD conversion using cached price data.
-- **AI Budget System**: Manages AI interactions with throttling and heat-gated analysis.
 - **Network Mode**: Supports dynamic switching between Devnet and Mainnet.
 - **Position Model**: Each trading position is stored in the `holdings` table, tracking token details, source, and per-position configurations, allowing multiple positions on the same token.
 - **Risk Management**: Configurable take-profit, stop-loss, auto-mirroring, and trading budget limits.
 - **Adaptive AI with Dampening**: Dual learning systems with adaptive dampening for weight shifts based on data confidence.
-- **Familiar Whale Tracking**: Tracks whales across tokens and builds success profiles.
-- **Tiered Event Buckets**: Position snapshots store journey data in compressed tiers.
-- **Stop-Loss Mode**: Per-position `stopLossMode` setting: "auto" (immediate sell) or "alert" (notify and wait for user confirmation).
-- **Signal Wallet Detail Page**: Displays individual wallet activity, trade history, hit rate, P&L, trading style analysis, and timeframe filters, with real-time WebSocket updates.
-- **AI-Controlled Blacklist**: Miss Pincher can add, remove, and list blacklisted tokens via natural language commands.
-- **AI Relationship System**: Tracks user affinity, relationship type, trades won, and warnings followed/ignored, with auto-adjustment of relationship type.
 - **Production System Logging**: Separated logging architecture with dedicated tables for AI, API, webhook, trade, and error logs for faster queries and independent retention.
-- **Copy Trade Decision Logging**: All copy trade decisions are logged to `trade_logs` with full context, including user, signal wallet, token, copy settings, and check results.
-- **Budget & API Management System**: Implements per-minute rate limiting for all providers (GeckoTerminal, DexScreener, Helius, OpenAI) with smooth throttling and exponential backoff on 429 errors.
-- **Dual-Source Price System**: Primary prices from swap webhooks, with batched DexScreener calls as a secondary source for market data. Includes price discrepancy detection.
-- **Batched DexScreener Refresh**: Background job for refreshing DexScreener data, targeting 80% of the daily budget, with dynamic interval adjustment.
-- **Browser-Based Discovery Worker**: Distributed task queue for token metadata lookups using user browsers, with atomic tasks and auto-requeue on disconnect.
-- **Memory-First Caching**: In-memory token data cache with 5-minute flush cycles to the database, reducing DB writes by approximately 90%.
+- **Budget & API Management System**: Implements per-minute rate limiting for all providers with smooth throttling and exponential backoff.
+- **Dual-Source Price System**: Primary prices from swap webhooks, with batched DexScreener calls as a secondary source. Includes price discrepancy detection.
+- **Browser-Based Discovery Worker**: Distributed task queue for token metadata lookups using user browsers.
+- **Memory-First Caching**: In-memory token data cache with 5-minute flush cycles to the database.
 - **Storage Bucketing**: Tiered data compression (1-day→3-day→weekly buckets) with a daily scheduler to manage database costs.
-- **GeckoTerminal Integration**: Primary data source for trending tokens and new Solana pools, with rate-limited scheduling and error handling.
-- **Daily Price Snapshots**: Midnight UTC snapshots with pre-computed 7d/14d/30d price change calculations and summary jobs for wallet profiles, token popularity, and cross-wallet correlations.
+- **Daily Price Snapshots**: Midnight UTC snapshots with pre-computed price change calculations and summary jobs for wallet profiles, token popularity, and cross-wallet correlations.
 - **Discovery Metrics**: 8 computed metrics per token: trending_momentum, boost_intensity, multi_wallet_convergence, deployer_track_record, price_slope, crash_recovery, repeat_interest, wallet_quality.
-- **Historical Context System**: Tracks token history (rugpulls, relaunches), wallet pattern analysis, and holder overlap analysis.
-- **Context-Aware Scanning**: Urgency scoring system for discovery scans with context logging and a self-improvement system for generating new scan triggers.
-- **Social Signal System**: Tracks Twitter/Telegram callers as alpha sources with `socialCallers` and `socialCalls` tables. Records calls with price-at-call snapshots, evaluates outcomes (win/loss/neutral) after 24h, computes trust scores and hit rates. DexScreener batch fetcher extracts social links (Twitter, Telegram, website). Emits `social_call` and `social_detected` events to the Event Bus for combo detection. 15-minute background evaluation job. Discovery page shows social icons on tokens and a Callers tab.
-- **Discovery Event Bus**: Reactive event bus connecting all data sources, with event types like `trending_spotted`, `signal_buy`, `new_token`, `social_call`, `social_detected`, and combo detection (including social+trending, social+signal_buy combos). Triggers immediate discovery scans and generates vector updates.
-- **Discovery Optimizer**: Adaptive review scheduler, LLM graduation system to skip LLM when rules exceed confidence, and self-adjusting thresholds based on win/loss outcomes.
-- **Distributed Compute Framework**: Expanded `computeTasks` table supporting backend, compute-node, and browser worker types. Includes trust scoring, task prioritization, spot-checking, and dynamic TTLs.
+- **Historical Context System**: Tracks token history, wallet pattern analysis, and holder overlap analysis.
+- **Social Signal System**: Tracks Twitter/Telegram callers as alpha sources, recording calls with price-at-call snapshots and evaluating outcomes to compute trust scores and hit rates.
+- **Discovery Event Bus**: Reactive event bus connecting all data sources, with various event types and combo detection, triggering immediate discovery scans and vector updates.
+- **Discovery Optimizer**: Adaptive review scheduler, LLM graduation system, and self-adjusting thresholds based on win/loss outcomes.
+- **Distributed Compute Framework**: Expanded `computeTasks` table supporting backend, compute-node, and browser worker types, including trust scoring, task prioritization, and dynamic TTLs.
 - **Vector Learning**: Incorporates multi-dimensional personality and trading vectors, strategy clustering, unified vector routing, and 8-hour bucket aggregation for self-optimization.
-- **System Insight Bus**: Cross-system knowledge sharing via `systemInsights` table. Facilitates LLM→Trigger flow for rule creation and Trigger→LLM flow for AI context injection and rule performance feedback.
-- **Admin Chat Interface**: Conversational AI interface for system monitoring with dynamic system context injection, summary cards, and recent observations.
-- **Discovery-Enhanced Strategy Analysis**: Signal wallet strategy analysis integrates discovery engine insights for behavior classification and leader/follower relationships, with smart auto-caching.
-- **Token Detail Page**: Enhanced `/trading/:token` page with DexScreener price chart, external resource links, and Paper Buy/Sell buttons.
-- **Signal Wallet Page Enhancements**: Paper Copy button for simulated copy trading, and improved visibility of Trade History.
-- **Technical Indicators Engine**: Computes EMA(12/26), RSI(14), MACD, Bollinger Bands(20,2), OBV, and Stochastic(14,3,3) from priceHistoryCache OHLCV candles with 5-minute caching and composite scoring (0-100 with buy/sell/neutral bias).
-- **Discovery Event Bus Indicator Scanner**: Runs every 15 minutes on top 50 active tokens, emits price_surge events when indicators cross thresholds, publishes insights to the System Insight Bus.
-- **Discovery Page** (`/discovery`): Ranked token list (sortable by discovery score, volume, trending, boost, price change), ranked wallet list (by win rate and composite wallet score), stats counters (active tokens, tracked wallets, events, insights, trending, boosted), recent insights feed, and engine status panel. API routes aggregate from discoveryEvents, tokenDataPool, walletStrategies, and systemInsights tables.
-- **Paper Trading System**: Risk-free strategy testing via simulated trades. Integrated into Holdings page with Holdings/Paper tabs (persisted in localStorage). Supports manual trades with token preview (mint lookup shows symbol/name/price/mcap/liquidity before opening). Backend enriches open positions with current prices for live unrealized P&L. Auto-close background job runs every 2 minutes checking TP/SL targets.
-- **Discovery Auto-Paper-Trading** (`server/discovery-paper-trading.ts`): Auto-opens paper trades on high-scoring tokens to learn which setups work. Two trigger modes: batch-triggered (30min scoring cycle) and event-triggered (from discovery event bus, ~1min reaction). Token qualification filters: min $10k liquidity, 2h+ age, not crashing (>-30% 1h, >-50% 24h), volume >$1k. Tracks reaction speed per trade via `reactionSpeedMs` field. Limits: 10 trades/day, 20 max open, 4h mint cooldown. Event handlers for signal_buy, whale_activity, multi_signal_convergence, price_surge, plus social+trending combo.
-  - **4-Position Strategy Per Token**: Each discovered token/wallet gets 4 positions: (A) specific theory (token/wallet-specific learned settings), (B) general theory (best overall strategy from theory system), (C) experimental #1 (tight trailing stop, wide SL), (D) experimental #2 (loose trailing stop, tighter SL). Tagged with `strategySlot` field.
-  - **Adaptive Thresholds**: No fixed score cutoffs. Batch mode sorts qualified tokens by score and trades the best available (minimum floor of 30). Event mode scales similarly. Exploratory trades sample the 40-60 score range for learning bad patterns.
-  - **450+50 Token Pool**: 450 regular token slots shared between discovered tokens and wallet copy trades, plus 50 reserve slots for high-scoring (80+) opportunities. No new positions on a token until all 4 close.
-  - **1 SOL Entry Size**: All discovery paper trades use 1 SOL for clean, easy math.
-  - **Trailing Stop Exit (No Fixed TP Cap)**: Positions use SL + trailing stop with no ceiling on gains. Trailing stop rides winners up and exits only when price reverses from highWaterMark by the trailing %. Each slot uses different trail % from the theory system.
-  - **Enhanced Close Conditions**: (1) Stop loss from entry, (2) trailing stop trigger, (3) dead token (zero liquidity or near-zero price), (4) volume death (position in profit + 24h volume below $500).
-  - **Dual Source Types**: `sourceType` field distinguishes "token_discovery" vs "wallet_copy" trades for separate strategy learning.
+- **System Insight Bus**: Cross-system knowledge sharing via `systemInsights` table, facilitating LLM→Trigger and Trigger→LLM flows for rule creation and AI context.
+- **Admin Chat Interface**: Conversational AI interface for system monitoring with dynamic system context injection.
+- **Discovery-Enhanced Strategy Analysis**: Signal wallet strategy analysis integrates discovery engine insights for behavior classification and leader/follower relationships.
+- **Technical Indicators Engine**: Computes EMA, RSI, MACD, Bollinger Bands, OBV, and Stochastic from priceHistoryCache OHLCV candles with 5-minute caching and composite scoring.
+- **Discovery Event Bus Indicator Scanner**: Runs every 15 minutes on top 50 active tokens, emitting `price_surge` events and publishing insights to the System Insight Bus.
+- **Discovery Page** (`/discovery`): Ranked token and wallet lists, stats counters, recent insights feed, and engine status panel.
+- **Paper Trading System**: Risk-free strategy testing via simulated trades. Integrated into the Holdings page. Supports manual trades with token preview and auto-close background jobs.
+- **Discovery Auto-Paper-Trading**: Auto-opens paper trades on high-scoring tokens to learn optimal setups. Supports batch-triggered and event-triggered modes with token qualification filters and a 4-5 position strategy per token. Features adaptive thresholds, a 450+50 token pool, 1 SOL entry size, trailing stop exit, and enhanced close conditions. Distinguishes `token_discovery` vs `wallet_copy` trades for separate strategy learning. Includes a dedup guard and data retention policies.
 
 ## External Dependencies
 
@@ -97,6 +76,3 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **DexScreener**: Secondary source for token metadata (price, market cap, liquidity, FDV, volume) and boost tracking.
 - **GeckoTerminal**: Primary token metadata provider for trending tokens and new Solana pools.
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
-
-## Paused Tasks / Backlog
-- **Bubblemaps Integration**: Embed Bubblemaps holder distribution and wallet activity iframes on token and signal wallet pages. Requires domain whitelisting with Bubblemaps for production embedding (demo partnerId only works on localhost). Re-add when whitelisting is available.

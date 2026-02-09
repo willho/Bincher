@@ -1,8 +1,11 @@
 import { db } from "./db";
-import { eq, and, lt, sql, desc, asc, lte, gte } from "drizzle-orm";
+import { eq, and, lt, sql, desc, asc, lte, gte, ne, notInArray, inArray } from "drizzle-orm";
 import {
   priceSnapshots,
   storageBucketStatus,
+  paperPositions,
+  tokenDataPool,
+  discoveryEvents,
   PriceSnapshot,
 } from "@shared/schema";
 
@@ -360,6 +363,96 @@ function aggregateOHLC(snapshots: PriceSnapshot[]): {
   return { open, high, low, close, volume, volumeBuckets, marketCap, liquidity, holderCount };
 }
 
+const PAPER_POSITION_RETENTION_DAYS = 14;
+const TOKEN_POOL_STALE_DAYS = 7;
+
+export async function archiveOldPaperPositions(): Promise<number> {
+  const cutoffTimestamp = Math.floor(Date.now() / 1000) - PAPER_POSITION_RETENTION_DAYS * 86400;
+
+  try {
+    const oldPositions = await db.select({ id: paperPositions.id })
+      .from(paperPositions)
+      .where(and(
+        eq(paperPositions.status, "closed"),
+        lt(paperPositions.exitTimestamp, cutoffTimestamp)
+      ));
+
+    if (oldPositions.length === 0) return 0;
+
+    const batchSize = 100;
+    let deleted = 0;
+
+    for (let i = 0; i < oldPositions.length; i += batchSize) {
+      const batch = oldPositions.slice(i, i + batchSize);
+      const ids = batch.map(p => p.id);
+
+      await db.delete(paperPositions)
+        .where(inArray(paperPositions.id, ids));
+
+      deleted += ids.length;
+    }
+
+    if (deleted > 0) {
+      console.log(`[Retention] Archived ${deleted} closed paper positions older than ${PAPER_POSITION_RETENTION_DAYS} days`);
+    }
+
+    return deleted;
+  } catch (error) {
+    console.error("[Retention] Error archiving old paper positions:", error);
+    return 0;
+  }
+}
+
+export async function pruneStaleTokenPoolEntries(): Promise<number> {
+  const cutoffTimestamp = Math.floor(Date.now() / 1000) - TOKEN_POOL_STALE_DAYS * 86400;
+
+  try {
+    const openMints = await db.selectDistinct({ mint: paperPositions.tokenMint })
+      .from(paperPositions)
+      .where(eq(paperPositions.status, "open"));
+
+    const openMintSet = new Set(openMints.map(r => r.mint));
+
+    const recentEventMints = await db.selectDistinct({ mint: discoveryEvents.tokenMint })
+      .from(discoveryEvents)
+      .where(gte(discoveryEvents.firedAt, cutoffTimestamp));
+
+    const recentMintSet = new Set(recentEventMints.map(r => r.mint));
+
+    const staleTokens = await db.select({ id: tokenDataPool.id, mint: tokenDataPool.tokenMint })
+      .from(tokenDataPool)
+      .where(lt(tokenDataPool.updatedAt, cutoffTimestamp));
+
+    const toDelete = staleTokens.filter(t =>
+      !openMintSet.has(t.mint) && !recentMintSet.has(t.mint)
+    );
+
+    if (toDelete.length === 0) return 0;
+
+    const batchSize = 100;
+    let deleted = 0;
+
+    for (let i = 0; i < toDelete.length; i += batchSize) {
+      const batch = toDelete.slice(i, i + batchSize);
+      const ids = batch.map(t => t.id);
+
+      await db.delete(tokenDataPool)
+        .where(inArray(tokenDataPool.id, ids));
+
+      deleted += ids.length;
+    }
+
+    if (deleted > 0) {
+      console.log(`[Retention] Pruned ${deleted} stale token pool entries (not updated in ${TOKEN_POOL_STALE_DAYS}+ days, no open positions or recent events)`);
+    }
+
+    return deleted;
+  } catch (error) {
+    console.error("[Retention] Error pruning stale token pool entries:", error);
+    return 0;
+  }
+}
+
 export async function runCompressionCycle(): Promise<{
   dailyCompressed: number;
   threeDayCompressed: number;
@@ -371,6 +464,9 @@ export async function runCompressionCycle(): Promise<{
   const dailyCompressed = await compressDailyToThreeDay();
   const threeDayCompressed = await compressThreeDayToWeekly();
   const weeklyCompressed = await compressWeeklyToMonthly();
+
+  const positionsArchived = await archiveOldPaperPositions();
+  const tokensPruned = await pruneStaleTokenPoolEntries();
 
   const storageReport = await getStorageReport();
 
