@@ -73,6 +73,9 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **Discovery-Enhanced Strategy Analysis**: Signal wallet strategy analysis integrates discovery engine insights for behavior classification and leader/follower relationships, with smart auto-caching.
 - **Token Detail Page**: Enhanced `/trading/:token` page with DexScreener price chart, external resource links, and Paper Buy/Sell buttons.
 - **Signal Wallet Page Enhancements**: Paper Copy button for simulated copy trading, and improved visibility of Trade History.
+- **Technical Indicators Engine**: Computes EMA(12/26), RSI(14), MACD, Bollinger Bands(20,2), OBV, and Stochastic(14,3,3) from priceHistoryCache OHLCV candles with 5-minute caching and composite scoring (0-100 with buy/sell/neutral bias).
+- **Discovery Event Bus Indicator Scanner**: Runs every 15 minutes on top 50 active tokens, emits price_surge events when indicators cross thresholds, publishes insights to the System Insight Bus.
+- **Discovery Page** (`/discovery`): Ranked token list (sortable by discovery score, volume, trending, boost, price change), ranked wallet list (by win rate and composite wallet score), stats counters (active tokens, tracked wallets, events, insights, trending, boosted), recent insights feed, and engine status panel. API routes aggregate from discoveryEvents, tokenDataPool, walletStrategies, and systemInsights tables.
 
 ## External Dependencies
 
@@ -86,5 +89,4 @@ PostgreSQL is used for persistent storage of user accounts, sessions, monitored 
 - **GPT-4o-mini (via Replit AI Integrations)**: Powers AI Token Analysis features.
 
 ## Paused Tasks / Backlog
-- **Discovery Page Update** (9 tasks): Insight Bus migration (user notes → insights for wallets and tokens), AI context unification via buildContextForAI, technical indicators engine (EMA, RSI, MACD, Bollinger, OBV, Stochastic from priceHistoryCache OHLC), wire indicators into discovery + insight bus as signals, discovery page with ranked token/wallet lists and stats counters, discovery page API routes aggregating from discoveryEvents/tokenDataPool/walletStrategies/discoveryTriggers.
 - **Bubblemaps Integration**: Embed Bubblemaps holder distribution and wallet activity iframes on token and signal wallet pages. Requires domain whitelisting with Bubblemaps for production embedding (demo partnerId only works on localhost). Re-add when whitelisting is available.

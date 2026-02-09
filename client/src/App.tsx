@@ -30,15 +30,17 @@ import PaperTradingPage from "@/pages/paper-trading";
 import SettingsPage from "@/pages/settings";
 import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
+import DiscoveryPage from "@/pages/discovery";
 import NotFound from "@/pages/not-found";
 import { PincherFooter } from "@/components/pincher-footer";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, Coins, Radio, FlaskConical } from "lucide-react";
+import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, Coins, Radio, FlaskConical, Compass } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { SidebarGroupLabel } from "@/components/ui/sidebar";
 import { apiRequest } from "@/lib/queryClient";
 
 const overviewItems = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { title: "Discovery", href: "/discovery", icon: Compass },
 ];
 
 const tradingItems = [
@@ -236,6 +238,7 @@ function AuthenticatedApp() {
             <Switch>
               <Route path="/" component={DashboardPage} />
               <Route path="/dashboard" component={DashboardPage} />
+              <Route path="/discovery" component={DiscoveryPage} />
               <Route path="/holdings" component={HoldingsPage} />
               <Route path="/holdings/:token" component={HoldingsPage} />
               <Route path="/signals" component={SignalsPage} />
