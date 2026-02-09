@@ -149,17 +149,28 @@ export async function calculateTokenHeat(tokenMint: string): Promise<TokenHeatDa
 
   if (snapshots.length >= 2) {
     const priceChanges: number[] = [];
+    let netDirection = 0;
     for (let i = 1; i < snapshots.length; i++) {
       const prev = snapshots[i].priceUsd || 0;
       const curr = snapshots[i - 1].priceUsd || 0;
       if (prev > 0) {
-        priceChanges.push(Math.abs((curr - prev) / prev) * 100);
+        const pctChange = ((curr - prev) / prev) * 100;
+        priceChanges.push(Math.abs(pctChange));
+        netDirection += pctChange;
       }
     }
     const avgChange = priceChanges.reduce((a, b) => a + b, 0) / (priceChanges.length || 1);
     priceVolatilityScore = Math.min(100, avgChange * 2);
+    if (netDirection < -30) priceVolatilityScore *= 0.2;
+    else if (netDirection < -15) priceVolatilityScore *= 0.5;
+    else if (netDirection < -5) priceVolatilityScore *= 0.75;
   } else if (snapshots.length === 1 && snapshots[0].priceChange24h) {
-    priceVolatilityScore = Math.min(100, Math.abs(snapshots[0].priceChange24h) * 2);
+    const pc24 = snapshots[0].priceChange24h;
+    if (pc24 >= 0) {
+      priceVolatilityScore = Math.min(100, pc24 * 2);
+    } else {
+      priceVolatilityScore = Math.max(0, Math.min(100, Math.abs(pc24) * 2) * (pc24 <= -50 ? 0.1 : pc24 <= -20 ? 0.3 : 0.6));
+    }
   }
 
   // Whale activity score based on recent holder cache activity

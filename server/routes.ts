@@ -7262,6 +7262,17 @@ export async function registerRoutes(
         const insights = insightMap.get(t.tokenMint) || 0;
         score += insights * 3;
 
+        const pc = t.priceChange24h ?? 0;
+        let crashMultiplier = 1.0;
+        if (pc <= -90) crashMultiplier = 0.05;
+        else if (pc <= -80) crashMultiplier = 0.1;
+        else if (pc <= -60) crashMultiplier = 0.2;
+        else if (pc <= -40) crashMultiplier = 0.35;
+        else if (pc <= -20) crashMultiplier = 0.6;
+        else if (pc <= -10) crashMultiplier = 0.8;
+
+        score = Math.round(score * crashMultiplier);
+
         let heatScore = tradingHeatMap.get(t.tokenMint) ?? 0;
         if (t.boostRank && t.boostRank <= 30) heatScore += Math.max(0, 31 - t.boostRank) * 3;
         if (t.trendingRank && t.trendingRank <= 20) heatScore += Math.max(0, 21 - t.trendingRank) * 4;
@@ -7272,7 +7283,7 @@ export async function registerRoutes(
         const ageSeconds = now - (t.updatedAt ?? 0);
         if (ageSeconds < 3600) heatScore += 10;
         else if (ageSeconds < 7200) heatScore += 5;
-        heatScore = Math.round(heatScore);
+        heatScore = Math.round(heatScore * crashMultiplier);
 
         return { ...t, discoveryScore: Math.round(score), eventCount: events, insightCount: insights, heatScore };
       });
