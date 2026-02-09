@@ -379,6 +379,81 @@ function registerDefaultHandlers(): void {
   });
 }
 
+async function runIndicatorScan(): Promise<void> {
+  try {
+    const { getIndicators } = await import("./technical-indicators");
+    const activeTokens = await db.select({ tokenMint: tokenDataPool.tokenMint, tokenSymbol: tokenDataPool.tokenSymbol })
+      .from(tokenDataPool)
+      .where(gte(tokenDataPool.updatedAt, Math.floor(Date.now() / 1000) - 86400))
+      .limit(50);
+
+    let emitted = 0;
+    for (const token of activeTokens) {
+      const result = await getIndicators(token.tokenMint, "1h");
+      if (!result) continue;
+
+      const signals: string[] = [];
+      if (result.rsi && result.rsi.value < 25) signals.push(`RSI oversold (${result.rsi.value.toFixed(1)})`);
+      if (result.rsi && result.rsi.value > 80) signals.push(`RSI overbought (${result.rsi.value.toFixed(1)})`);
+      if (result.macd && Math.abs(result.macd.histogram) > 0 && result.macd.trend === "bullish" && result.composite.score >= 65) {
+        signals.push(`MACD bullish crossover`);
+      }
+      if (result.bollinger && result.bollinger.position === "below") signals.push(`Below Bollinger lower band`);
+      if (result.stochastic && result.stochastic.signal === "oversold") signals.push(`Stochastic oversold (K=${result.stochastic.k.toFixed(1)})`);
+      if (result.obv && result.obv.trend === "accumulating" && result.composite.score >= 60) signals.push(`OBV accumulating`);
+
+      if (signals.length >= 2 || result.composite.score >= 75 || result.composite.score <= 20) {
+        const urgency = result.composite.score >= 75 ? 7 : result.composite.score <= 20 ? 6 : 5;
+        await emit({
+          type: "price_surge",
+          tokenMint: token.tokenMint,
+          tokenSymbol: token.tokenSymbol || undefined,
+          source: "technical_indicators",
+          data: {
+            compositeScore: result.composite.score,
+            bias: result.composite.bias,
+            signals,
+            rsi: result.rsi?.value,
+            macdTrend: result.macd?.trend,
+            bollingerPosition: result.bollinger?.position,
+          },
+          timestamp: Date.now(),
+          urgency,
+        });
+
+        await publishInsight({
+          source: "discovery",
+          type: result.composite.score >= 60 ? "recommendation" : "warning",
+          title: `Technical: ${token.tokenSymbol || token.tokenMint.slice(0, 8)} → ${result.composite.bias.replace('_', ' ')}`,
+          payload: {
+            compositeScore: result.composite.score,
+            bias: result.composite.bias,
+            signals,
+            indicators: {
+              rsi: result.rsi,
+              macd: result.macd ? { trend: result.macd.trend, histogram: result.macd.histogram } : null,
+              bollinger: result.bollinger ? { position: result.bollinger.position, bandwidth: result.bollinger.bandwidth } : null,
+              obv: result.obv ? { trend: result.obv.trend } : null,
+              stochastic: result.stochastic ? { k: result.stochastic.k, signal: result.stochastic.signal } : null,
+            },
+          },
+          confidence: Math.min(1.0, result.composite.score >= 50 ? result.composite.score / 100 : (100 - result.composite.score) / 100),
+          tokenMint: token.tokenMint,
+          expiresInHours: 4,
+        });
+
+        emitted++;
+      }
+    }
+
+    if (emitted > 0) {
+      console.log(`[EventBus] Indicator scan: ${emitted} signal(s) from ${activeTokens.length} tokens`);
+    }
+  } catch (err) {
+    console.error("[EventBus] Indicator scan error:", err);
+  }
+}
+
 let initialized = false;
 
 export function initEventBus(): void {
@@ -401,5 +476,8 @@ export function initEventBus(): void {
     }
   }, 60_000);
 
-  console.log("[EventBus] Initialized with 3 combos, 7 event types");
+  setInterval(runIndicatorScan, 15 * 60 * 1000);
+  setTimeout(runIndicatorScan, 60_000);
+
+  console.log("[EventBus] Initialized with 3 combos, 7 event types, indicator scanner (15min)");
 }

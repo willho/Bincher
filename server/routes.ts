@@ -45,8 +45,8 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs } from "@shared/schema";
-import { eq, and, or, isNotNull, desc, gte, sql, like, inArray, count } from "drizzle-orm";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs, tokenDataPool, walletStrategies, discoveryEvents, systemInsights } from "@shared/schema";
+import { eq, and, or, isNotNull, desc, gte, sql, like, inArray, count, asc } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs, logWebhook, logErrorToTable, logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
@@ -7162,6 +7162,203 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error analyzing patterns:", error);
       res.status(500).json({ error: "Failed to analyze patterns" });
+    }
+  });
+
+  // ============ Discovery Page Routes ============
+
+  app.get("/api/discovery/ranked-tokens", requireAuth, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const sortBy = (req.query.sort as string) || "score";
+      
+      const now = Math.floor(Date.now() / 1000);
+      const oneDayAgo = now - 86400;
+
+      const tokens = await db.select({
+        tokenMint: tokenDataPool.tokenMint,
+        tokenSymbol: tokenDataPool.tokenSymbol,
+        tokenName: tokenDataPool.tokenName,
+        priceUsd: tokenDataPool.priceUsd,
+        priceUpdatedAt: tokenDataPool.priceUpdatedAt,
+        marketCap: tokenDataPool.marketCap,
+        liquidity: tokenDataPool.liquidity,
+        volume24h: tokenDataPool.volume24h,
+        priceChange24h: tokenDataPool.priceChange24h,
+        priceChange7d: tokenDataPool.priceChange7d,
+        boostRank: tokenDataPool.boostRank,
+        trendingRank: tokenDataPool.trendingRank,
+        trendingSource: tokenDataPool.trendingSource,
+        isPumpfun: tokenDataPool.isPumpfun,
+        pumpfunGraduated: tokenDataPool.pumpfunGraduated,
+        updatedAt: tokenDataPool.updatedAt,
+      })
+        .from(tokenDataPool)
+        .where(and(
+          eq(tokenDataPool.isActive, true),
+          gte(tokenDataPool.updatedAt, oneDayAgo)
+        ))
+        .orderBy(
+          sortBy === "volume" ? desc(tokenDataPool.volume24h) :
+          sortBy === "trending" ? asc(tokenDataPool.trendingRank) :
+          sortBy === "boost" ? asc(tokenDataPool.boostRank) :
+          sortBy === "price_change" ? desc(tokenDataPool.priceChange24h) :
+          desc(tokenDataPool.volume24h)
+        )
+        .limit(limit);
+
+      const eventCounts = await db.select({
+        tokenMint: discoveryEvents.tokenMint,
+        eventCount: count(discoveryEvents.id),
+      })
+        .from(discoveryEvents)
+        .where(gte(discoveryEvents.firedAt, oneDayAgo))
+        .groupBy(discoveryEvents.tokenMint);
+
+      const eventMap = new Map(eventCounts.map(e => [e.tokenMint, Number(e.eventCount)]));
+
+      const insightCounts = await db.select({
+        tokenMint: systemInsights.tokenMint,
+        insightCount: count(systemInsights.id),
+      })
+        .from(systemInsights)
+        .where(and(
+          gte(systemInsights.createdAt, oneDayAgo),
+          eq(systemInsights.status, 'active')
+        ))
+        .groupBy(systemInsights.tokenMint);
+
+      const insightMap = new Map(insightCounts.map(i => [i.tokenMint, Number(i.insightCount)]));
+
+      const ranked = tokens.map(t => {
+        let score = 0;
+        if (t.trendingRank && t.trendingRank <= 20) score += Math.max(0, 21 - t.trendingRank) * 3;
+        if (t.boostRank && t.boostRank <= 30) score += Math.max(0, 31 - t.boostRank) * 2;
+        if (t.volume24h && t.volume24h > 100000) score += Math.min(30, Math.log10(t.volume24h / 100000) * 10);
+        if (t.priceChange24h && t.priceChange24h > 0) score += Math.min(20, t.priceChange24h * 2);
+        const events = eventMap.get(t.tokenMint) || 0;
+        score += events * 5;
+        const insights = insightMap.get(t.tokenMint) || 0;
+        score += insights * 3;
+
+        return { ...t, discoveryScore: Math.round(score), eventCount: events, insightCount: insights };
+      });
+
+      if (sortBy === "score") {
+        ranked.sort((a, b) => b.discoveryScore - a.discoveryScore);
+      }
+
+      res.json(ranked);
+    } catch (error) {
+      console.error("Error getting ranked tokens:", error);
+      res.status(500).json({ error: "Failed to get ranked tokens" });
+    }
+  });
+
+  app.get("/api/discovery/ranked-wallets", requireAuth, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 30, 50);
+
+      const wallets = await db.select().from(walletStrategies)
+        .orderBy(desc(walletStrategies.winRate))
+        .limit(limit);
+
+      const enriched = wallets.map(w => {
+        const winRate = w.winRate ?? 0;
+        const totalTrades = w.totalTrades ?? 0;
+        const avgHoldTime = w.avgHoldTimeMinutes ?? 0;
+        const profitFactor = w.profitFactor ?? 0;
+
+        let score = 0;
+        score += winRate * 40;
+        score += Math.min(20, totalTrades * 0.5);
+        score += Math.min(20, profitFactor * 5);
+        if (avgHoldTime > 5 && avgHoldTime < 1440) score += 10;
+        if (w.strategyType) score += 10;
+
+        return { ...w, walletScore: Math.round(score) };
+      });
+
+      enriched.sort((a, b) => b.walletScore - a.walletScore);
+      res.json(enriched);
+    } catch (error) {
+      console.error("Error getting ranked wallets:", error);
+      res.status(500).json({ error: "Failed to get ranked wallets" });
+    }
+  });
+
+  app.get("/api/discovery/page-stats", requireAuth, async (req, res) => {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const oneDayAgo = now - 86400;
+      const oneHourAgo = now - 3600;
+
+      const [activeTokens] = await db.select({ count: count() }).from(tokenDataPool)
+        .where(and(eq(tokenDataPool.isActive, true), gte(tokenDataPool.updatedAt, oneDayAgo)));
+
+      const [trackedWallets] = await db.select({ count: count() }).from(walletStrategies);
+
+      const [eventsToday] = await db.select({ count: count() }).from(discoveryEvents)
+        .where(gte(discoveryEvents.firedAt, oneDayAgo));
+
+      const [eventsHour] = await db.select({ count: count() }).from(discoveryEvents)
+        .where(gte(discoveryEvents.firedAt, oneHourAgo));
+
+      const [activeTriggers] = await db.select({ count: count() }).from(discoveryTriggers)
+        .where(eq(discoveryTriggers.enabled, true));
+
+      const [activeInsights] = await db.select({ count: count() }).from(systemInsights)
+        .where(and(eq(systemInsights.status, 'active'), gte(systemInsights.expiresAt, now)));
+
+      const [trendingTokens] = await db.select({ count: count() }).from(tokenDataPool)
+        .where(and(eq(tokenDataPool.isActive, true), isNotNull(tokenDataPool.trendingRank)));
+
+      const [boostedTokens] = await db.select({ count: count() }).from(tokenDataPool)
+        .where(and(eq(tokenDataPool.isActive, true), isNotNull(tokenDataPool.boostRank)));
+
+      const { getBusStats } = await import("./discovery-event-bus");
+
+      res.json({
+        activeTokens: Number(activeTokens?.count ?? 0),
+        trackedWallets: Number(trackedWallets?.count ?? 0),
+        eventsToday: Number(eventsToday?.count ?? 0),
+        eventsLastHour: Number(eventsHour?.count ?? 0),
+        activeTriggers: Number(activeTriggers?.count ?? 0),
+        activeInsights: Number(activeInsights?.count ?? 0),
+        trendingTokens: Number(trendingTokens?.count ?? 0),
+        boostedTokens: Number(boostedTokens?.count ?? 0),
+        busStats: getBusStats(),
+      });
+    } catch (error) {
+      console.error("Error getting discovery page stats:", error);
+      res.status(500).json({ error: "Failed to get page stats" });
+    }
+  });
+
+  app.get("/api/discovery/recent-insights", requireAuth, async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+      const { getInsightsForContext } = await import("./insight-bus");
+      const insights = await getInsightsForContext({ limit });
+      res.json(insights);
+    } catch (error) {
+      console.error("Error getting recent insights:", error);
+      res.status(500).json({ error: "Failed to get insights" });
+    }
+  });
+
+  app.get("/api/discovery/token-indicators/:tokenMint", requireAuth, async (req, res) => {
+    try {
+      const { getIndicators } = await import("./technical-indicators");
+      const timeframe = (req.query.timeframe as string) || "1h";
+      const result = await getIndicators(req.params.tokenMint, timeframe);
+      if (!result) {
+        return res.json({ available: false, message: "Not enough price data for indicators" });
+      }
+      res.json({ available: true, ...result });
+    } catch (error) {
+      console.error("Error getting indicators:", error);
+      res.status(500).json({ error: "Failed to get indicators" });
     }
   });
 
