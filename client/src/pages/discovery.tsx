@@ -35,6 +35,8 @@ interface RankedToken {
   marketCap: number | null;
   liquidity: number | null;
   volume24h: number | null;
+  priceChange1h: number | null;
+  priceChange6h: number | null;
   priceChange24h: number | null;
   priceChange7d: number | null;
   boostRank: number | null;
@@ -46,6 +48,8 @@ interface RankedToken {
   heatScore: number | null;
   eventCount: number;
   insightCount: number;
+  selectedPriceChange: number | null;
+  crashMultiplier: number | null;
 }
 
 interface RankedWallet {
@@ -148,7 +152,7 @@ function StatsCards({ stats, isLoading }: { stats?: PageStats; isLoading: boolea
 }
 
 function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
-  const priceChange = token.priceChange24h ?? 0;
+  const priceChange = token.selectedPriceChange ?? token.priceChange24h ?? 0;
   const isPositive = priceChange > 0;
 
   return (
@@ -343,6 +347,7 @@ function InsightCard({ insight }: { insight: Insight }) {
 export default function DiscoveryPage() {
   const [tokenSort, setTokenSort] = useState<string>("heat");
   const [activeTab, setActiveTab] = useState<string>("tokens");
+  const [timeframe, setTimeframe] = useState<string>("24h");
 
   const { data: stats, isLoading: statsLoading } = useQuery<PageStats>({
     queryKey: ["/api/discovery/page-stats"],
@@ -350,9 +355,9 @@ export default function DiscoveryPage() {
   });
 
   const { data: tokens, isLoading: tokensLoading } = useQuery<RankedToken[]>({
-    queryKey: ["/api/discovery/ranked-tokens", tokenSort],
+    queryKey: ["/api/discovery/ranked-tokens", tokenSort, timeframe],
     queryFn: async () => {
-      const res = await fetch(`/api/discovery/ranked-tokens?sort=${tokenSort}`, { credentials: "include" });
+      const res = await fetch(`/api/discovery/ranked-tokens?sort=${tokenSort}&timeframe=${timeframe}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch tokens");
       return res.json();
     },
@@ -413,18 +418,34 @@ export default function DiscoveryPage() {
               </TabsList>
 
               {activeTab === "tokens" && (
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {sortOptions.map((opt) => (
-                    <Button
-                      key={opt.value}
-                      variant={tokenSort === opt.value ? "default" : "ghost"}
-                      size="sm"
-                      onClick={() => setTokenSort(opt.value)}
-                      data-testid={`button-sort-${opt.value}`}
-                    >
-                      {opt.label}
-                    </Button>
-                  ))}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-1">
+                    {(["1h", "6h", "24h", "7d"] as const).map((tf) => (
+                      <Button
+                        key={tf}
+                        variant={timeframe === tf ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setTimeframe(tf)}
+                        data-testid={`button-timeframe-${tf}`}
+                      >
+                        {tf}
+                      </Button>
+                    ))}
+                  </div>
+                  <span className="text-muted-foreground/30">|</span>
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {sortOptions.map((opt) => (
+                      <Button
+                        key={opt.value}
+                        variant={tokenSort === opt.value ? "default" : "ghost"}
+                        size="sm"
+                        onClick={() => setTokenSort(opt.value)}
+                        data-testid={`button-sort-${opt.value}`}
+                      >
+                        {opt.label}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -435,7 +456,7 @@ export default function DiscoveryPage() {
                   <div className="flex items-center gap-3 px-3 py-2 border-b text-xs text-muted-foreground">
                     <span className="w-6 text-right">#</span>
                     <span className="flex-1">Token</span>
-                    <span className="text-right">Price</span>
+                    <span className="text-right">Price / {timeframe}</span>
                     <span className="text-right hidden md:block w-20">Vol 24h</span>
                     <span className="text-right w-14">{tokenSort === "heat" ? "Heat" : "Score"}</span>
                     <span className="w-16 text-right">Signals</span>

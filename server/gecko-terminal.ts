@@ -122,6 +122,8 @@ export async function fetchTrending(): Promise<void> {
       const fdvStr = attrs.fdv_usd;
       const volStr = attrs.volume_usd?.h24;
       const priceChangeStr = attrs.price_change_percentage?.h24;
+      const priceChange1hStr = attrs.price_change_percentage?.h1;
+      const priceChange6hStr = attrs.price_change_percentage?.h6;
 
       await upsertTokenData(
         tokenMint,
@@ -133,6 +135,8 @@ export async function fetchTrending(): Promise<void> {
           fdv: fdvStr ? parseFloat(fdvStr) : undefined,
           volume24h: volStr ? parseFloat(volStr) : undefined,
           priceChange24h: priceChangeStr ? parseFloat(priceChangeStr) : undefined,
+          priceChange1h: priceChange1hStr ? parseFloat(priceChange1hStr) : undefined,
+          priceChange6h: priceChange6hStr ? parseFloat(priceChange6hStr) : undefined,
           pairAddress: attrs.address || undefined,
         },
         "geckoterminal"
@@ -221,6 +225,8 @@ export async function fetchNewPools(): Promise<void> {
       const fdvStr = attrs.fdv_usd;
       const volStr = attrs.volume_usd?.h24;
       const priceChangeStr = attrs.price_change_percentage?.h24;
+      const priceChange1hStr = attrs.price_change_percentage?.h1;
+      const priceChange6hStr = attrs.price_change_percentage?.h6;
 
       await upsertTokenData(
         tokenMint,
@@ -232,6 +238,8 @@ export async function fetchNewPools(): Promise<void> {
           fdv: fdvStr ? parseFloat(fdvStr) : undefined,
           volume24h: volStr ? parseFloat(volStr) : undefined,
           priceChange24h: priceChangeStr ? parseFloat(priceChangeStr) : undefined,
+          priceChange1h: priceChange1hStr ? parseFloat(priceChange1hStr) : undefined,
+          priceChange6h: priceChange6hStr ? parseFloat(priceChange6hStr) : undefined,
           pairAddress: attrs.address || undefined,
           dexId: attrs.dex_id || undefined,
           pairCreatedAt: createdAt,

@@ -7182,7 +7182,8 @@ export async function registerRoutes(
     try {
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
       const sortBy = (req.query.sort as string) || "heat";
-      const cacheKey = `ranked-tokens:${sortBy}:${limit}`;
+      const timeframe = (req.query.timeframe as string) || "24h";
+      const cacheKey = `ranked-tokens:${sortBy}:${timeframe}:${limit}`;
       const cached = getCached(cacheKey);
       if (cached) return res.json(cached);
       
@@ -7198,6 +7199,8 @@ export async function registerRoutes(
         marketCap: tokenDataPool.marketCap,
         liquidity: tokenDataPool.liquidity,
         volume24h: tokenDataPool.volume24h,
+        priceChange1h: tokenDataPool.priceChange1h,
+        priceChange6h: tokenDataPool.priceChange6h,
         priceChange24h: tokenDataPool.priceChange24h,
         priceChange7d: tokenDataPool.priceChange7d,
         boostRank: tokenDataPool.boostRank,
@@ -7252,24 +7255,59 @@ export async function registerRoutes(
       } catch (e) {}
 
       const ranked = tokens.map(t => {
+        const pc1h = t.priceChange1h ?? null;
+        const pc6h = t.priceChange6h ?? null;
+        const pc24h = t.priceChange24h ?? null;
+        const pc7d = t.priceChange7d ?? null;
+
         let score = 0;
         if (t.trendingRank && t.trendingRank <= 20) score += Math.max(0, 21 - t.trendingRank) * 3;
         if (t.boostRank && t.boostRank <= 30) score += Math.max(0, 31 - t.boostRank) * 2;
         if (t.volume24h && t.volume24h > 100000) score += Math.min(30, Math.log10(t.volume24h / 100000) * 10);
-        if (t.priceChange24h && t.priceChange24h > 0) score += Math.min(20, t.priceChange24h * 2);
+        if (pc24h !== null && pc24h > 0) score += Math.min(20, pc24h * 2);
         const events = eventMap.get(t.tokenMint) || 0;
         score += events * 5;
         const insights = insightMap.get(t.tokenMint) || 0;
         score += insights * 3;
 
-        const pc = t.priceChange24h ?? 0;
-        let crashMultiplier = 1.0;
-        if (pc <= -90) crashMultiplier = 0.05;
-        else if (pc <= -80) crashMultiplier = 0.1;
-        else if (pc <= -60) crashMultiplier = 0.2;
-        else if (pc <= -40) crashMultiplier = 0.35;
-        else if (pc <= -20) crashMultiplier = 0.6;
-        else if (pc <= -10) crashMultiplier = 0.8;
+        const tfPenalty = (pc: number): number => {
+          if (pc <= -90) return 0.05;
+          if (pc <= -80) return 0.1;
+          if (pc <= -60) return 0.2;
+          if (pc <= -40) return 0.35;
+          if (pc <= -20) return 0.6;
+          if (pc <= -10) return 0.8;
+          return 1.0;
+        };
+
+        const penalties: number[] = [];
+        if (pc24h !== null) penalties.push(tfPenalty(pc24h));
+        if (pc1h !== null) penalties.push(tfPenalty(pc1h));
+        if (pc6h !== null) penalties.push(tfPenalty(pc6h));
+        if (pc7d !== null) penalties.push(tfPenalty(pc7d));
+
+        let crashMultiplier = penalties.length > 0 ? Math.min(...penalties) : 1.0;
+
+        const availablePCs: number[] = [];
+        if (pc24h !== null) availablePCs.push(pc24h);
+        if (pc1h !== null) availablePCs.push(pc1h);
+        if (pc6h !== null) availablePCs.push(pc6h);
+        if (pc7d !== null) availablePCs.push(pc7d);
+        const allNegative = availablePCs.length > 0 && availablePCs.every(p => p < 0);
+        const negCount = availablePCs.filter(p => p < -5).length;
+
+        if (allNegative && negCount >= 2) {
+          crashMultiplier *= 0.7;
+        }
+
+        if (pc1h !== null && pc1h > 5 && crashMultiplier < 1.0) {
+          const recoveryBoost = Math.min(0.3, pc1h / 100);
+          crashMultiplier = Math.min(1.0, crashMultiplier + recoveryBoost);
+        }
+        if (pc6h !== null && pc6h > 5 && crashMultiplier < 1.0) {
+          const recoveryBoost6h = Math.min(0.2, pc6h / 200);
+          crashMultiplier = Math.min(1.0, crashMultiplier + recoveryBoost6h);
+        }
 
         score = Math.round(score * crashMultiplier);
 
@@ -7277,7 +7315,7 @@ export async function registerRoutes(
         if (t.boostRank && t.boostRank <= 30) heatScore += Math.max(0, 31 - t.boostRank) * 3;
         if (t.trendingRank && t.trendingRank <= 20) heatScore += Math.max(0, 21 - t.trendingRank) * 4;
         if (t.volume24h && t.volume24h > 0) heatScore += Math.min(25, Math.log10(Math.max(1, t.volume24h)) * 3);
-        if (t.priceChange24h && t.priceChange24h > 0) heatScore += Math.min(15, t.priceChange24h);
+        if (pc24h !== null && pc24h > 0) heatScore += Math.min(15, pc24h);
         heatScore += events * 3;
         heatScore += insights * 2;
         const ageSeconds = now - (t.updatedAt ?? 0);
@@ -7285,13 +7323,27 @@ export async function registerRoutes(
         else if (ageSeconds < 7200) heatScore += 5;
         heatScore = Math.round(heatScore * crashMultiplier);
 
-        return { ...t, discoveryScore: Math.round(score), eventCount: events, insightCount: insights, heatScore };
+        const selectedPriceChange = timeframe === "1h" ? (pc1h ?? pc24h ?? null) :
+          timeframe === "6h" ? (pc6h ?? pc24h ?? null) :
+          timeframe === "7d" ? (pc7d ?? pc24h ?? null) : (pc24h ?? null);
+
+        return {
+          ...t,
+          discoveryScore: Math.round(score),
+          eventCount: events,
+          insightCount: insights,
+          heatScore,
+          selectedPriceChange,
+          crashMultiplier: Math.round(crashMultiplier * 100) / 100,
+        };
       });
 
       if (sortBy === "heat") {
         ranked.sort((a, b) => (b.heatScore ?? 0) - (a.heatScore ?? 0));
       } else if (sortBy === "score") {
         ranked.sort((a, b) => b.discoveryScore - a.discoveryScore);
+      } else if (sortBy === "price_change") {
+        ranked.sort((a, b) => (b.selectedPriceChange ?? 0) - (a.selectedPriceChange ?? 0));
       }
 
       const result = ranked.slice(0, limit);

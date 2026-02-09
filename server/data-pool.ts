@@ -66,6 +66,8 @@ export async function upsertTokenData(
     liquidity: number;
     volume24h: number;
     priceChange24h: number;
+    priceChange1h: number;
+    priceChange6h: number;
     pairAddress: string;
     dexId: string;
     pairCreatedAt: number;
@@ -96,12 +98,15 @@ export async function upsertTokenData(
 
     if (data.marketCap !== undefined || data.fdv !== undefined || 
         data.liquidity !== undefined || data.volume24h !== undefined ||
-        data.priceChange24h !== undefined) {
+        data.priceChange24h !== undefined || data.priceChange1h !== undefined ||
+        data.priceChange6h !== undefined) {
       if (data.marketCap !== undefined) updateData.marketCap = data.marketCap;
       if (data.fdv !== undefined) updateData.fdv = data.fdv;
       if (data.liquidity !== undefined) updateData.liquidity = data.liquidity;
       if (data.volume24h !== undefined) updateData.volume24h = data.volume24h;
       if (data.priceChange24h !== undefined) updateData.priceChange24h = data.priceChange24h;
+      if (data.priceChange1h !== undefined) updateData.priceChange1h = data.priceChange1h;
+      if (data.priceChange6h !== undefined) updateData.priceChange6h = data.priceChange6h;
       updateData.marketDataUpdatedAt = now;
     }
 
@@ -127,6 +132,8 @@ export async function upsertTokenData(
     liquidity: data.liquidity ?? null,
     volume24h: data.volume24h ?? null,
     priceChange24h: data.priceChange24h ?? null,
+    priceChange1h: data.priceChange1h ?? null,
+    priceChange6h: data.priceChange6h ?? null,
     marketDataUpdatedAt: now,
     pairAddress: data.pairAddress ?? null,
     dexId: data.dexId ?? null,

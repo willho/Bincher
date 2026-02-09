@@ -2167,6 +2167,8 @@ export const tokenDataPool = pgTable("token_data_pool", {
   trendingUpdatedAt: integer("trending_updated_at"),
   
   // Multi-timeframe price changes
+  priceChange1h: real("price_change_1h"),
+  priceChange6h: real("price_change_6h"),
   priceChange7d: real("price_change_7d"),
   priceChange14d: real("price_change_14d"),
   priceChange30d: real("price_change_30d"),
