@@ -26,7 +26,7 @@ interface GeckoState {
 }
 
 interface LowPriorityTask {
-  type: "price" | "ohlcv";
+  type: "price" | "ohlcv" | "token_info";
   tokenMint: string;
   poolAddress?: string;
   timeframe?: string;
@@ -47,6 +47,8 @@ const state: GeckoState = {
 };
 
 const lowPriorityQueue: LowPriorityTask[] = [];
+const recentTokenInfoFetches = new Set<string>();
+let lastTokenInfoCleanup = Date.now();
 
 function resetMinuteCounterIfNeeded(): void {
   const now = Date.now();
@@ -164,6 +166,11 @@ export async function fetchTrending(): Promise<void> {
       }
 
       const topTrendingMints = trendingEntries.slice(0, 10).map(e => e.tokenMint);
+      
+      for (const mint of topTrendingMints) {
+        queueLowPriorityFetch({ type: "token_info", tokenMint: mint });
+      }
+
       import("./whale-context").then(({ batchScanWhaleContext }) => {
         batchScanWhaleContext(topTrendingMints).catch(() => {});
       }).catch(() => {});
@@ -288,6 +295,13 @@ export async function fetchNewPools(): Promise<void> {
     state.newPoolsUpdatedAt = now;
     if (addedCount > 0) {
       console.log(`[GeckoTerminal] Added ${addedCount} new pools`);
+      
+      const newPoolMints = pools.slice(0, 5)
+        .map(p => extractMintFromRelationship(p))
+        .filter((m): m is string => m !== null);
+      for (const mint of newPoolMints) {
+        queueLowPriorityFetch({ type: "token_info", tokenMint: mint });
+      }
     }
   } catch (error) {
     console.error("[GeckoTerminal] Error fetching new pools:", error);
@@ -429,6 +443,79 @@ export async function fetchOHLCV(
   }
 }
 
+export async function fetchTokenInfo(tokenMint: string): Promise<{
+  holderCount: number | null;
+  hasTwitter: boolean;
+  hasTelegram: boolean;
+  hasWebsite: boolean;
+  twitterUrl: string | null;
+  telegramUrl: string | null;
+  websiteUrl: string | null;
+  description: string | null;
+  gtScore: number | null;
+} | null> {
+  try {
+    const budget = await shouldAllowApiCall("geckoterminal");
+    if (!budget.allowed) return null;
+
+    if (!canMakeCall()) return null;
+
+    const response = await fetch(`${GECKO_BASE_URL}/networks/solana/tokens/${tokenMint}/info`, {
+      headers: { Accept: "application/json" },
+    });
+
+    recordCall();
+    await trackApiCall("geckoterminal", "token_info", 1);
+
+    if (!response.ok) {
+      if (response.status === 429) record429("geckoterminal");
+      state.errors++;
+      return null;
+    }
+
+    const data = await response.json();
+    const attrs = data?.data?.attributes;
+    if (!attrs) return null;
+
+    const holderCount = attrs.holders?.count ?? null;
+    const twitterHandle = attrs.twitter_handle;
+    const telegramHandle = attrs.telegram_handle;
+    const websites = attrs.websites;
+
+    const result = {
+      holderCount: typeof holderCount === "number" ? holderCount : null,
+      hasTwitter: !!twitterHandle,
+      hasTelegram: !!telegramHandle,
+      hasWebsite: Array.isArray(websites) && websites.length > 0,
+      twitterUrl: twitterHandle ? `https://twitter.com/${twitterHandle}` : null,
+      telegramUrl: telegramHandle ? `https://t.me/${telegramHandle}` : null,
+      websiteUrl: Array.isArray(websites) && websites.length > 0 ? websites[0] : null,
+      description: attrs.description || null,
+      gtScore: typeof attrs.gt_score === "number" ? attrs.gt_score : null,
+    };
+
+    await upsertTokenData(
+      tokenMint,
+      {
+        holderCount: result.holderCount ?? undefined,
+        hasTwitter: result.hasTwitter,
+        hasTelegram: result.hasTelegram,
+        hasWebsite: result.hasWebsite,
+        twitterUrl: result.twitterUrl ?? undefined,
+        telegramUrl: result.telegramUrl ?? undefined,
+        websiteUrl: result.websiteUrl ?? undefined,
+      },
+      "geckoterminal"
+    );
+
+    return result;
+  } catch (error) {
+    console.error(`[GeckoTerminal] Error fetching token info for ${tokenMint}:`, error);
+    state.errors++;
+    return null;
+  }
+}
+
 async function processHighPriority(): Promise<void> {
   if (state.alternator) {
     await fetchTrending();
@@ -448,6 +535,8 @@ async function processLowPriority(): Promise<void> {
       await fetchTokenPrice(task.tokenMint);
     } else if (task.type === "ohlcv" && task.poolAddress) {
       await fetchOHLCV(task.poolAddress, task.timeframe || "day", task.limit || 30);
+    } else if (task.type === "token_info") {
+      await fetchTokenInfo(task.tokenMint);
     }
   } catch (error) {
     console.error("[GeckoTerminal] Low priority task error:", error);
@@ -456,12 +545,20 @@ async function processLowPriority(): Promise<void> {
 }
 
 export function queueLowPriorityFetch(task: {
-  type: "price" | "ohlcv";
+  type: "price" | "ohlcv" | "token_info";
   tokenMint: string;
   poolAddress?: string;
   timeframe?: string;
   limit?: number;
 }): void {
+  if (task.type === "token_info") {
+    if (Date.now() - lastTokenInfoCleanup > 3600_000) {
+      recentTokenInfoFetches.clear();
+      lastTokenInfoCleanup = Date.now();
+    }
+    if (recentTokenInfoFetches.has(task.tokenMint)) return;
+    recentTokenInfoFetches.add(task.tokenMint);
+  }
   if (lowPriorityQueue.length >= LOW_PRIORITY_QUEUE_MAX) {
     lowPriorityQueue.shift();
   }

@@ -2215,6 +2215,9 @@ export const tokenDataPool = pgTable("token_data_pool", {
   whaleWorstReputation: real("whale_worst_reputation"),
   whaleNetSentiment: real("whale_net_sentiment"), // positive = good whales dominate, negative = sketchy whales
   whaleContextUpdatedAt: integer("whale_context_updated_at"),
+  
+  holderCount: integer("holder_count"),
+  holderCountUpdatedAt: integer("holder_count_updated_at"),
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });

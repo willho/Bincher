@@ -5066,6 +5066,7 @@ export async function registerRoutes(
           volume24h: poolData.volume24h,
           priceChange24h: poolData.priceChange24h,
           pairAddress: poolData.pairAddress || null,
+          holders: poolData.holderCount || null,
           source: 'tokenDataPool',
           lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
           isFallback: true,
@@ -5209,10 +5210,29 @@ export async function registerRoutes(
         };
       });
 
-      const isEstimate = holderCache.totalCount <= holderCache.holders.length;
+      let totalCount = holderCache.totalCount;
+      let isEstimate = holderCache.totalCount <= holderCache.holders.length;
+      
+      try {
+        const { getTokenData } = await import("./data-pool");
+        const tokenData = await getTokenData(tokenMint);
+        if (tokenData?.holderCount && tokenData.holderCount > totalCount) {
+          totalCount = tokenData.holderCount;
+          isEstimate = false;
+        }
+        
+        const holderCountAge = tokenData?.holderCountUpdatedAt 
+          ? Math.floor(Date.now() / 1000) - tokenData.holderCountUpdatedAt 
+          : Infinity;
+        if (holderCountAge > 3600) {
+          const { queueLowPriorityFetch } = await import("./gecko-terminal");
+          queueLowPriorityFetch({ type: "token_info", tokenMint });
+        }
+      } catch {}
+
       res.json({
         holders,
-        totalCount: holderCache.totalCount,
+        totalCount,
         isEstimate,
         lastFetchedAt: holderCache.lastFetchedAt,
         top10Concentration,

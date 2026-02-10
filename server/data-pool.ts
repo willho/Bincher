@@ -79,6 +79,7 @@ export async function upsertTokenData(
     websiteUrl: string;
     twitterMentions: number;
     telegramMentions: number;
+    holderCount: number;
   }>,
   source: string = 'backend',
   fetchedBy?: number
@@ -126,6 +127,10 @@ export async function upsertTokenData(
     if (data.websiteUrl) updateData.websiteUrl = data.websiteUrl;
     if (data.twitterMentions !== undefined) updateData.twitterMentions = data.twitterMentions;
     if (data.telegramMentions !== undefined) updateData.telegramMentions = data.telegramMentions;
+    if (data.holderCount !== undefined) {
+      updateData.holderCount = data.holderCount;
+      updateData.holderCountUpdatedAt = now;
+    }
 
     const hadSocials = existing.hasTwitter || existing.hasTelegram || existing.hasWebsite;
     const hasSocialsNow = data.hasTwitter || data.hasTelegram || data.hasWebsite;
@@ -220,6 +225,22 @@ export async function upsertTokenData(
     twitterMentions: data.twitterMentions ?? 0,
     telegramMentions: data.telegramMentions ?? 0,
     socialCheckedAt: (data.hasTwitter !== undefined || data.hasTelegram !== undefined || data.hasWebsite !== undefined) ? now : null,
+    pincherScore: null,
+    pincherScoreRaw: null,
+    pincherVerdict: null,
+    pincherConfidence: null,
+    pincherScoredAt: null,
+    discoverySource: null,
+    discoverySourceWallet: null,
+    discoveryHopDepth: null,
+    whaleHolderCount: 0,
+    whaleAvgReputation: null,
+    whaleBestReputation: null,
+    whaleWorstReputation: null,
+    whaleNetSentiment: null,
+    whaleContextUpdatedAt: null,
+    holderCount: data.holderCount ?? null,
+    holderCountUpdatedAt: data.holderCount ? now : null,
   };
 
   memoryCache.setToken(tokenMint, newEntry, true);
