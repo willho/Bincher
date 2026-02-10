@@ -769,7 +769,6 @@ export async function registerRoutes(
       // Verify webhook secret
       const providedSecret = req.query.secret as string;
       if (providedSecret !== WEBHOOK_SECRET) {
-        console.warn("Invalid webhook secret provided");
         return res.status(401).json({ error: "Unauthorized" });
       }
 

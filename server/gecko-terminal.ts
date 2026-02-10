@@ -2,7 +2,8 @@ import { memoryCache } from "./memory-cache";
 import { upsertTokenData } from "./data-pool";
 import { shouldAllowApiCall, trackApiCall, record429 } from "./api-budget";
 import { db } from "./db";
-import { priceSnapshots } from "@shared/schema";
+import { priceSnapshots, tokenDataPool } from "@shared/schema";
+import { and, sql } from "drizzle-orm";
 import { emit } from "./discovery-event-bus";
 
 const GECKO_BASE_URL = "https://api.geckoterminal.com/api/v2";
@@ -147,6 +148,20 @@ export async function fetchTrending(): Promise<void> {
       memoryCache.setTrending(trendingEntries);
       state.trendingUpdatedAt = now;
       console.log(`[GeckoTerminal] Updated ${trendingEntries.length} trending tokens`);
+
+      const allTrendingMints = trendingEntries.map(e => e.tokenMint);
+      if (allTrendingMints.length > 0) {
+        try {
+          await db.update(tokenDataPool)
+            .set({ discoverySource: "trending", discoverySourceWallet: null })
+            .where(and(
+              sql`${tokenDataPool.tokenMint} IN (${sql.join(allTrendingMints.map(m => sql`${m}`), sql`, `)})`,
+              sql`${tokenDataPool.discoverySource} IS NULL`
+            ));
+        } catch (err) {
+          // silent
+        }
+      }
 
       const topTrendingMints = trendingEntries.slice(0, 10).map(e => e.tokenMint);
       import("./whale-context").then(({ batchScanWhaleContext }) => {

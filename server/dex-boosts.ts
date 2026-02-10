@@ -78,6 +78,20 @@ async function fetchBoosts(): Promise<void> {
       }
     }
 
+    const boostMints = solanaTokens.map(t => t.tokenAddress);
+    if (boostMints.length > 0) {
+      try {
+        await db.update(tokenDataPool)
+          .set({ discoverySource: "boosted", discoverySourceWallet: null })
+          .where(and(
+            sql`${tokenDataPool.tokenMint} IN (${sql.join(boostMints.map(m => sql`${m}`), sql`, `)})`,
+            sql`${tokenDataPool.discoverySource} IS NULL`
+          ));
+      } catch (err) {
+        // silent
+      }
+    }
+
     boostStats.totalFetches++;
     boostStats.lastFetchAt = now;
     boostStats.lastFetchCount = solanaTokens.length;

@@ -3,7 +3,7 @@ import { paperPositions, holdings } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { createWebhook, updateWebhookUrl, deleteWebhook, getWebhookUrl } from "./helius";
 
-const WEBHOOK_SECRET = process.env.SESSION_SECRET || "webhook_secret";
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
 const MAX_TIER1_TOKENS = 100;
 
 type AddressType = "signal_wallet" | "real_position_token" | "paper_position_token" | "whale_active" | "whale_watch";
