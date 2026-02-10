@@ -668,7 +668,8 @@ async function buildScoringPrompt(
   historicalData?: TokenSnapshot[],
   aggregateData?: { tier: string; open: number; high: number; low: number; close: number; volume: number; buys: number; sells: number; marketCap: number }[],
   whaleData?: { top10Percent: number; holderCount: number; recentWhaleActivity: boolean },
-  timeframeContext?: { period: string; priceChange: number; volumeTrend: string; highLow: string }[]
+  timeframeContext?: { period: string; priceChange: number; volumeTrend: string; highLow: string }[],
+  individualHolders?: { rank: number; percent: number; isLP?: boolean }[]
 ): Promise<string> {
   const data = {
     token: snapshot.tokenSymbol,
@@ -730,6 +731,20 @@ ${JSON.stringify(aggregateData, null, 2)}
       }
     }
     prompt += `\n\n`;
+  }
+
+  // Add individual holder breakdown for concentration analysis
+  if (individualHolders && individualHolders.length > 0) {
+    prompt += `\nINDIVIDUAL HOLDER BREAKDOWN (top holders by supply %):
+${individualHolders.map(h => `- Holder #${h.rank}: ${h.percent.toFixed(1)}% of supply${h.isLP ? ' (LP/pool)' : ''}`).join('\n')}
+`;
+    const nonLPHolders = individualHolders.filter(h => !h.isLP);
+    if (nonLPHolders.length > 0 && nonLPHolders[0].percent >= 50) {
+      prompt += `\n*** CRITICAL WARNING: Single non-LP holder controls ${nonLPHolders[0].percent.toFixed(1)}% of supply — EXTREME rug pull risk ***\n`;
+    } else if (nonLPHolders.length > 0 && nonLPHolders[0].percent >= 30) {
+      prompt += `\n*** WARNING: Single non-LP holder controls ${nonLPHolders[0].percent.toFixed(1)}% of supply — HIGH concentration risk ***\n`;
+    }
+    prompt += `\n`;
   }
 
   // Add timeframe price trends (7d/14d/30d)
@@ -814,11 +829,19 @@ Reference the matching bucket stats in your summary. Example: "This token has $$
   "greenFlags": ["<list positive indicators>"]
 }
 
-Key factors to consider:
+MANDATORY RISK THRESHOLDS (these override all other factors):
+- Single non-LP holder with 50%+ supply → EXTREME rug risk, score MUST be 0-15 regardless of other factors. Flag as "Single holder controls X% — imminent rug risk"
+- Single non-LP holder with 30-50% supply → HIGH rug risk, score MUST be 0-30. Flag as critical red flag
+- Top 10 holders control 70%+ (excluding LP) → score capped at 35
+- Under 50 holders → score capped at 40 unless other signals are very strong
+- Liquidity under $5K → score capped at 25
+- No social presence AND under 100 holders → score capped at 20
+
+Key factors to consider (after mandatory thresholds):
 - Liquidity vs market cap ratio (healthy is 10-30%)
 - Token age (newer can be riskier but higher potential)
 - Buy/sell ratio and volume
-- Holder distribution (high top holder % is risky)
+- Holder distribution — review the INDIVIDUAL HOLDER BREAKDOWN carefully, not just aggregates. A token with "20% top 10" is very different from one where holder #1 has 18% and the rest have <1%
 - Social presence (Twitter = more legitimate)
 - Dev wallet concentration
 - LP burned/locked status
@@ -826,7 +849,7 @@ Key factors to consider:
 - Whale activity - recent whale buys are positive signals, high concentration is risky
 - Timeframe trends (if provided) - distinguish bleeding out (-30%+ over 14d with declining volume) vs recovering (bounce from low with increasing volume) vs pumping vs consolidating
 
-The "summary" field is critical - connect the actual token metrics (liquidity, holders, market cap, age) to what they indicate. Be specific with numbers, not generic warnings.
+The "summary" field is critical - connect the actual token metrics (liquidity, holders, market cap, age) to what they indicate. Be specific with numbers, not generic warnings. If individual holder data is provided, mention the top holder's percentage explicitly.
 
 Return ONLY valid JSON, no markdown or explanation outside the JSON.`;
 
@@ -872,11 +895,12 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
     console.warn("Failed to fetch aggregates for scoring:", err);
   }
   
-  // Fetch whale/holder data
+  // Fetch whale/holder data + individual holder breakdown
   let whaleData: { top10Percent: number; holderCount: number; recentWhaleActivity: boolean } | undefined;
+  let individualHolders: { rank: number; percent: number; isLP?: boolean }[] | undefined;
   try {
     const holderCache = await getHoldersCached(snapshot.tokenMint);
-    if (holderCache && holderCache.holders.length >= 10) {
+    if (holderCache && holderCache.holders.length >= 1) {
       const top10Percent = holderCache.holders.slice(0, 10).reduce((sum, h) => sum + h.percent, 0);
       const recentWhaleActivity = holderCache.lastEventTriggerAt > 0 && 
         (Date.now() - holderCache.lastEventTriggerAt) < 24 * 60 * 60 * 1000;
@@ -886,6 +910,13 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
         holderCount: actualHolderCount,
         recentWhaleActivity,
       };
+      
+      // Extract top 5 individual holders for the AI prompt
+      individualHolders = holderCache.holders.slice(0, 5).map((h, i) => ({
+        rank: i + 1,
+        percent: h.percent,
+        isLP: h.isLP,
+      }));
     }
   } catch (err) {
     console.warn("Failed to fetch holder data for scoring:", err);
@@ -959,7 +990,7 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
     console.warn("Failed to fetch timeframe price context:", err);
   }
   
-  const prompt = await buildScoringPrompt(snapshot, historicalData, aggregateData, whaleData, timeframeContext);
+  const prompt = await buildScoringPrompt(snapshot, historicalData, aggregateData, whaleData, timeframeContext, individualHolders);
 
   const budgetCheck = await shouldAllowApiCall("openai");
   if (!budgetCheck.allowed) {
@@ -973,7 +1004,7 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
       messages: [
         {
           role: "system",
-          content: "You are a memecoin analysis expert. Analyze tokens for copy trading potential. Be objective and data-driven. Return only valid JSON."
+          content: "You are a memecoin risk analyst. Analyze tokens for copy trading risk and potential. Be data-driven and specific — reference exact numbers from the data. NEVER give generic assessments like 'low ratios put at risk for manipulation' without citing the actual holder percentages, liquidity values, and specific risk factors. If a holder has 89% of supply, say exactly that. Differentiate between extreme, high, moderate, and low risk based on the mandatory thresholds provided. Return only valid JSON."
         },
         { role: "user", content: prompt }
       ],

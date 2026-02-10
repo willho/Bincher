@@ -5062,34 +5062,71 @@ export async function registerRoutes(
   app.get("/api/snapshots/token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const tokenMint = req.params.tokenMint as string;
-      const { getSnapshotByToken } = await import("./ai");
+      const { getSnapshotByToken, createSnapshot, getSnapshot } = await import("./ai");
       const snapshot = await getSnapshotByToken(tokenMint);
       
       if (snapshot) {
         return res.json(snapshot);
       }
       
-      // Fallback: Try to get data from tokenDataPool
+      // Auto-create snapshot from tokenDataPool if data exists
       const { getTokenData } = await import("./data-pool");
       const poolData = await getTokenData(tokenMint);
       
-      if (poolData) {
-        return res.json({
-          tokenMint: poolData.tokenMint,
-          tokenSymbol: poolData.tokenSymbol,
-          tokenName: poolData.tokenName,
-          priceUsd: poolData.priceUsd,
-          marketCap: poolData.marketCap,
-          fdv: poolData.fdv,
-          liquidity: poolData.liquidity,
-          volume24h: poolData.volume24h,
-          priceChange24h: poolData.priceChange24h,
-          pairAddress: poolData.pairAddress || null,
-          holders: poolData.holderCount || null,
-          source: 'tokenDataPool',
-          lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
-          isFallback: true,
-        });
+      if (poolData && (poolData.tokenSymbol || poolData.priceUsd)) {
+        try {
+          const snapshotId = await createSnapshot({
+            tokenMint,
+            tokenSymbol: poolData.tokenSymbol || tokenMint.slice(0, 6),
+            tokenName: poolData.tokenName || "",
+            priceUsd: poolData.priceUsd ?? undefined,
+            marketCap: poolData.marketCap ?? undefined,
+            fdv: poolData.fdv ?? undefined,
+            liquidity: poolData.liquidity ?? undefined,
+            volume24h: poolData.volume24h ?? undefined,
+            priceChange24h: poolData.priceChange24h ?? undefined,
+            holders: poolData.holderCount ?? undefined,
+            topHolderPercent: poolData.topHolderPct ?? undefined,
+          });
+          const newSnapshot = await getSnapshot(snapshotId);
+          if (newSnapshot) {
+            return res.json(newSnapshot);
+          }
+          // Snapshot created but couldn't be retrieved — return pool data
+          return res.json({
+            tokenMint: poolData.tokenMint,
+            tokenSymbol: poolData.tokenSymbol,
+            tokenName: poolData.tokenName,
+            priceUsd: poolData.priceUsd,
+            marketCap: poolData.marketCap,
+            fdv: poolData.fdv,
+            liquidity: poolData.liquidity,
+            volume24h: poolData.volume24h,
+            priceChange24h: poolData.priceChange24h,
+            holders: poolData.holderCount || null,
+            source: 'tokenDataPool',
+            isFallback: true,
+          });
+        } catch (createErr) {
+          console.warn("[Snapshots] Failed to auto-create snapshot from pool:", createErr);
+          // Still return pool data as fallback
+          return res.json({
+            tokenMint: poolData.tokenMint,
+            tokenSymbol: poolData.tokenSymbol,
+            tokenName: poolData.tokenName,
+            priceUsd: poolData.priceUsd,
+            marketCap: poolData.marketCap,
+            fdv: poolData.fdv,
+            liquidity: poolData.liquidity,
+            volume24h: poolData.volume24h,
+            priceChange24h: poolData.priceChange24h,
+            pairAddress: poolData.pairAddress || null,
+            holders: poolData.holderCount || null,
+            source: 'tokenDataPool',
+            lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
+            isFallback: true,
+          });
+        }
       }
       
       const swapRecord = await db.select({
