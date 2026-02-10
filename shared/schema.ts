@@ -1701,6 +1701,8 @@ export interface HeliusWebhookPayload {
   type: string;
   source: string;
   slot: number;
+  feePayer?: string;
+  fee?: number;
   tokenTransfers?: {
     fromTokenAccount: string;
     toTokenAccount: string;

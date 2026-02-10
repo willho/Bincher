@@ -774,15 +774,15 @@ export async function registerRoutes(
           continue;
         }
 
-        // Extract wallet address that made the swap
-        const swapWalletAddress = getSwapWalletAddress(payload);
+        // Extract wallet address that made the swap (check all payload fields against registry)
+        const { routeWebhookEvent } = await import("./unified-webhook");
+        const isTracked = (addr: string) => routeWebhookEvent(addr) !== null;
+        const swapWalletAddress = getSwapWalletAddress(payload, isTracked);
         if (!swapWalletAddress) {
-          console.log("Could not extract wallet address from swap");
           continue;
         }
 
         // Unified webhook routing: classify this event by address type
-        const { routeWebhookEvent } = await import("./unified-webhook");
         const routing = routeWebhookEvent(swapWalletAddress);
         
         if (routing && routing.type === "whale_active") {

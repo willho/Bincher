@@ -353,16 +353,55 @@ export function getTokenSymbol(mint: string): string {
   return TOKEN_SYMBOLS[mint] || mint.slice(0, 6) + "...";
 }
 
-export function getSwapWalletAddress(payload: HeliusWebhookPayload): string | null {
+export function getSwapWalletAddress(payload: HeliusWebhookPayload, isTracked?: (addr: string) => boolean): string | null {
   const swapEvent = payload.events?.swap;
-  if (!swapEvent) return null;
-  
-  if (swapEvent.nativeInput?.account) {
-    return swapEvent.nativeInput.account;
+  if (swapEvent) {
+    if (swapEvent.nativeInput?.account) {
+      return swapEvent.nativeInput.account;
+    }
+    if (swapEvent.tokenInputs && swapEvent.tokenInputs.length > 0) {
+      return swapEvent.tokenInputs[0].userAccount;
+    }
   }
-  if (swapEvent.tokenInputs && swapEvent.tokenInputs.length > 0) {
-    return swapEvent.tokenInputs[0].userAccount;
+
+  if (!isTracked) return null;
+
+  const candidates = new Set<string>();
+
+  if (payload.feePayer) {
+    candidates.add(payload.feePayer);
   }
+
+  if (payload.tokenTransfers) {
+    for (const t of payload.tokenTransfers) {
+      if (t.fromUserAccount) candidates.add(t.fromUserAccount);
+      if (t.toUserAccount) candidates.add(t.toUserAccount);
+    }
+  }
+
+  if (payload.nativeTransfers) {
+    for (const t of payload.nativeTransfers) {
+      if (t.fromUserAccount) candidates.add(t.fromUserAccount);
+      if (t.toUserAccount) candidates.add(t.toUserAccount);
+    }
+  }
+
+  if (payload.accountData) {
+    for (const a of payload.accountData) {
+      if (a.account) candidates.add(a.account);
+      if (a.tokenBalanceChanges) {
+        for (const tbc of a.tokenBalanceChanges) {
+          if (tbc.userAccount) candidates.add(tbc.userAccount);
+        }
+      }
+    }
+  }
+
+  const candidateArr = Array.from(candidates);
+  for (let i = 0; i < candidateArr.length; i++) {
+    if (isTracked(candidateArr[i])) return candidateArr[i];
+  }
+
   return null;
 }
 
