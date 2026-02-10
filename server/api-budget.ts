@@ -96,6 +96,17 @@ export async function trackApiCall(
   }
 }
 
+const alertSuppress: Map<string, number> = new Map();
+const ALERT_SUPPRESS_MS = 5 * 60 * 1000;
+
+function shouldAlertBudget(key: string): boolean {
+  const last = alertSuppress.get(key);
+  const now = Date.now();
+  if (last && now - last < ALERT_SUPPRESS_MS) return false;
+  alertSuppress.set(key, now);
+  return true;
+}
+
 export function record429(service: ApiService): void {
   const tracker = getMinuteTracker(service);
   tracker.consecutiveErrors++;
@@ -104,6 +115,15 @@ export function record429(service: ApiService): void {
   tracker.backoffUntil = Date.now() + backoffMs;
   if (shouldLogStateChange(service, "backoff")) {
     console.log(`[ApiBudget] ${service} hit 429, backing off ${backoffMs / 1000}s (x${tracker.backoffMultiplier})`);
+  }
+  if (tracker.consecutiveErrors >= 3 && shouldAlertBudget(`${service}_429_repeated`)) {
+    console.warn(`[BudgetAlert] ${service} has ${tracker.consecutiveErrors} consecutive 429s — provider may be overwhelmed`);
+  }
+}
+
+export function recordFallback(service: ApiService, fromProvider: string, toProvider: string): void {
+  if (shouldAlertBudget(`fallback_${fromProvider}_${toProvider}`)) {
+    console.warn(`[BudgetAlert] Fallback: ${fromProvider} → ${toProvider} for ${service}`);
   }
 }
 

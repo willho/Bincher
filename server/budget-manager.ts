@@ -591,11 +591,34 @@ export async function getPoolSummary(): Promise<{
   };
 }
 
+const alertSuppress: Map<string, number> = new Map();
+const ALERT_SUPPRESS_MS = 5 * 60 * 1000;
+
+function shouldAlert(key: string): boolean {
+  const last = alertSuppress.get(key);
+  const now = Date.now();
+  if (last && now - last < ALERT_SUPPRESS_MS) return false;
+  alertSuppress.set(key, now);
+  return true;
+}
+
 export function recordRpcCall(provider: string, credits: number = 1): void {
   const usage = rpcProviderUsage.get(provider);
   if (usage) {
     usage.calls++;
     usage.creditsUsed += credits;
+  }
+
+  const limit = PROVIDER_LIMITS[provider];
+  if (usage && limit) {
+    const pct = (usage.creditsUsed / limit) * 100;
+    if (pct >= 100 && shouldAlert(`${provider}_100`)) {
+      console.warn(`[BudgetAlert] ${provider} EXHAUSTED (${pct.toFixed(0)}% of ${limit.toLocaleString()} credits)`);
+    } else if (pct >= 90 && shouldAlert(`${provider}_90`)) {
+      console.warn(`[BudgetAlert] ${provider} at ${pct.toFixed(0)}% of monthly credits (${usage.creditsUsed.toLocaleString()}/${limit.toLocaleString()})`);
+    } else if (pct >= 75 && shouldAlert(`${provider}_75`)) {
+      console.log(`[BudgetAlert] ${provider} at ${pct.toFixed(0)}% of monthly credits`);
+    }
   }
 }
 

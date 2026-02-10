@@ -57,7 +57,8 @@ import {
   triggerHolderRefresh,
   getHoldersCached,
   getAggregatesForAI,
-  checkEmergingWhale
+  checkEmergingWhale,
+  startHolderReconciliation
 } from "./price-aggregator";
 import {
   handleWebhookUpdate,
@@ -1025,10 +1026,9 @@ export async function registerRoutes(
         const tokenForWhaleCheck = isBuy ? swap.toToken : swap.fromToken;
         let whaleCheck = isWalletInTop100(tokenForWhaleCheck, swapWalletAddress);
         
-        // If cache is empty, try to populate it first then check again
         if (!whaleCheck.found) {
-          const holderCache = await getHoldersCached(tokenForWhaleCheck, true);
-          if (holderCache && holderCache.holders.length > 0) {
+          const holderData = await getHoldersCached(tokenForWhaleCheck, false);
+          if (holderData && holderData.holders.length > 0) {
             whaleCheck = isWalletInTop100(tokenForWhaleCheck, swapWalletAddress);
           }
         }
@@ -4432,6 +4432,24 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting API budget statuses:", error);
       res.status(500).json({ error: "Failed to get API budget statuses" });
+    }
+  });
+
+  app.get("/api/admin/rpc-usage", requireAdmin, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { getRpcUsageSummary } = await import("./rpc-usage-logger");
+      const { getRpcProviderUsage, getPoolExhaustionStatus } = await import("./budget-manager");
+      const { getPerMinuteStats } = await import("./api-budget");
+      const [rpcUsage, providerUsage, poolStatus, perMinute] = await Promise.all([
+        getRpcUsageSummary(),
+        Promise.resolve(getRpcProviderUsage()),
+        Promise.resolve(getPoolExhaustionStatus()),
+        Promise.resolve(getPerMinuteStats()),
+      ]);
+      res.json({ rpcUsage, providerUsage, poolStatus, perMinute });
+    } catch (error) {
+      console.error("Error getting RPC usage:", error);
+      res.status(500).json({ error: "Failed to get RPC usage" });
     }
   });
 
@@ -8049,6 +8067,11 @@ export async function registerRoutes(
 
   // Start hourly cleanup of system logs (keeps only 100 most recent)
   startSystemLogCleanup();
+
+  startHolderReconciliation();
+
+  const { startRpcUsageLogger } = await import("./rpc-usage-logger");
+  startRpcUsageLogger();
 
   return httpServer;
 }

@@ -1,6 +1,7 @@
 import { Connection, PublicKey, ParsedTransactionWithMeta, GetProgramAccountsFilter } from "@solana/web3.js";
 import { getNetworkMode } from "./network-mode";
 import { recordRpcCall, isProviderExhausted } from "./budget-manager";
+import { logRpcCall } from "./rpc-usage-logger";
 
 export type RpcProvider = "chainstack" | "quicknode" | "helius";
 export type OperationType = "raw_rpc" | "token_metadata";
@@ -179,10 +180,14 @@ export async function rpcCall<T>(
   try {
     const connection = await getConnection(primary);
     const result = await fn(connection);
-    recordSuccess(primary, Date.now() - start);
+    const latency = Date.now() - start;
+    recordSuccess(primary, latency);
+    logRpcCall({ provider: primary, method: operation, success: true, latencyMs: latency, fallbackUsed: false, fallbackProvider: null, errorMessage: null });
     return result;
   } catch (error) {
+    const latency = Date.now() - start;
     recordError(primary);
+    const errMsg = error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200);
     console.error(`[RpcProvider] ${primary} failed for ${operation}:`, error);
     
     if (fallbackOnError) {
@@ -196,20 +201,27 @@ export async function rpcCall<T>(
         }
         
         console.log(`[RpcProvider] Falling back to ${fallbackProvider} for ${operation}`);
+        try { const { recordFallback } = await import("./api-budget"); recordFallback("helius" as any, primary, fallbackProvider); } catch {}
         const fallbackStart = Date.now();
         
         try {
           const fallbackConnection = await getConnection(fallbackProvider);
           const result = await fn(fallbackConnection);
-          recordSuccess(fallbackProvider, Date.now() - fallbackStart);
+          const fbLatency = Date.now() - fallbackStart;
+          recordSuccess(fallbackProvider, fbLatency);
+          logRpcCall({ provider: primary, method: operation, success: false, latencyMs: latency, fallbackUsed: true, fallbackProvider, errorMessage: errMsg });
+          logRpcCall({ provider: fallbackProvider, method: operation, success: true, latencyMs: fbLatency, fallbackUsed: false, fallbackProvider: null, errorMessage: null });
           return result;
         } catch (fallbackError) {
           recordError(fallbackProvider);
+          const fbErrMsg = fallbackError instanceof Error ? fallbackError.message.slice(0, 200) : String(fallbackError).slice(0, 200);
+          logRpcCall({ provider: fallbackProvider, method: operation, success: false, latencyMs: Date.now() - fallbackStart, fallbackUsed: false, fallbackProvider: null, errorMessage: fbErrMsg });
           console.error(`[RpcProvider] ${fallbackProvider} also failed for ${operation}:`, fallbackError);
         }
       }
     }
     
+    logRpcCall({ provider: primary, method: operation, success: false, latencyMs: latency, fallbackUsed: false, fallbackProvider: null, errorMessage: errMsg });
     throw error;
   }
 }

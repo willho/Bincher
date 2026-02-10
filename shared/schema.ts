@@ -1773,6 +1773,60 @@ export const insertApiBudgetConfigSchema = createInsertSchema(apiBudgetConfig).o
 export type ApiBudgetConfig = typeof apiBudgetConfig.$inferSelect;
 export type InsertApiBudgetConfig = z.infer<typeof insertApiBudgetConfigSchema>;
 
+export const rpcUsageLog = pgTable("rpc_usage_log", {
+  id: serial("id").primaryKey(),
+  provider: text("provider").notNull(),
+  method: text("method").notNull(),
+  success: boolean("success").notNull(),
+  latencyMs: integer("latency_ms"),
+  fallbackUsed: boolean("fallback_used").notNull().default(false),
+  fallbackProvider: text("fallback_provider"),
+  errorMessage: text("error_message"),
+  timestamp: integer("timestamp").notNull(),
+  date: text("date").notNull(),
+  callCount: integer("call_count").notNull().default(1),
+});
+
+export const rpcUsageDailyBucket = pgTable("rpc_usage_daily_bucket", {
+  id: serial("id").primaryKey(),
+  provider: text("provider").notNull(),
+  method: text("method").notNull(),
+  date: text("date").notNull(),
+  totalCalls: integer("total_calls").notNull().default(0),
+  successCalls: integer("success_calls").notNull().default(0),
+  errorCalls: integer("error_calls").notNull().default(0),
+  fallbackCalls: integer("fallback_calls").notNull().default(0),
+  avgLatencyMs: integer("avg_latency_ms"),
+  maxLatencyMs: integer("max_latency_ms"),
+});
+
+export const rpcUsageWeeklyBucket = pgTable("rpc_usage_weekly_bucket", {
+  id: serial("id").primaryKey(),
+  provider: text("provider").notNull(),
+  weekStart: text("week_start").notNull(),
+  totalCalls: integer("total_calls").notNull().default(0),
+  successCalls: integer("success_calls").notNull().default(0),
+  errorCalls: integer("error_calls").notNull().default(0),
+  fallbackCalls: integer("fallback_calls").notNull().default(0),
+  avgLatencyMs: integer("avg_latency_ms"),
+});
+
+export const rpcUsageMonthlyBucket = pgTable("rpc_usage_monthly_bucket", {
+  id: serial("id").primaryKey(),
+  provider: text("provider").notNull(),
+  month: text("month").notNull(),
+  totalCalls: integer("total_calls").notNull().default(0),
+  successCalls: integer("success_calls").notNull().default(0),
+  errorCalls: integer("error_calls").notNull().default(0),
+  fallbackCalls: integer("fallback_calls").notNull().default(0),
+  avgLatencyMs: integer("avg_latency_ms"),
+});
+
+export type RpcUsageLog = typeof rpcUsageLog.$inferSelect;
+export type RpcUsageDailyBucket = typeof rpcUsageDailyBucket.$inferSelect;
+export type RpcUsageWeeklyBucket = typeof rpcUsageWeeklyBucket.$inferSelect;
+export type RpcUsageMonthlyBucket = typeof rpcUsageMonthlyBucket.$inferSelect;
+
 // User-supplied API keys - users can add their own keys for budget/wallet limits
 export const userApiKeys = pgTable("user_api_keys", {
   id: serial("id").primaryKey(),

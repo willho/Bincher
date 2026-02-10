@@ -37,10 +37,15 @@ interface HolderCache {
   totalCount: number;
   lastFetchedAt: number;
   lastEventTriggerAt: number;
+  dirty: boolean;
 }
 
 const HOLDER_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+const HOLDER_RECONCILE_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const HOLDER_RECONCILE_BATCH_SIZE = 5;
+const HOLDER_RECONCILE_STAGGER_MS = 30_000; // 30s between batches
 const holderCache: Map<string, HolderCache> = new Map();
+let reconcileHandle: NodeJS.Timeout | null = null;
 
 // Aggregation intervals
 const FIFTEEN_MIN_MS = 15 * 60 * 1000;
@@ -143,6 +148,7 @@ export async function getHoldersCached(tokenMint: string, forceRefresh = false):
       totalCount,
       lastFetchedAt: now,
       lastEventTriggerAt: cached?.lastEventTriggerAt || 0,
+      dirty: false,
     };
 
     holderCache.set(tokenMint, newCache);
@@ -157,10 +163,41 @@ export function triggerHolderRefresh(tokenMint: string): void {
   const cached = holderCache.get(tokenMint);
   if (cached) {
     cached.lastEventTriggerAt = Date.now();
+    cached.dirty = true;
     holderCache.set(tokenMint, cached);
+  } else {
+    holderCache.set(tokenMint, {
+      holders: [],
+      totalCount: 0,
+      lastFetchedAt: 0,
+      lastEventTriggerAt: Date.now(),
+      dirty: true,
+    });
   }
-  // Fetch in background
-  getHoldersCached(tokenMint, true).catch(console.error);
+}
+
+export function startHolderReconciliation(): void {
+  if (reconcileHandle) return;
+  reconcileHandle = setInterval(async () => {
+    const dirtyTokens: string[] = [];
+    holderCache.forEach((cache, mint) => {
+      if (cache.dirty) dirtyTokens.push(mint);
+    });
+    if (dirtyTokens.length === 0) return;
+
+    console.log(`[HolderReconcile] Refreshing ${dirtyTokens.length} dirty tokens in batches of ${HOLDER_RECONCILE_BATCH_SIZE}`);
+    let refreshed = 0;
+    for (let i = 0; i < dirtyTokens.length; i += HOLDER_RECONCILE_BATCH_SIZE) {
+      const batch = dirtyTokens.slice(i, i + HOLDER_RECONCILE_BATCH_SIZE);
+      await Promise.allSettled(batch.map(mint => getHoldersCached(mint, true)));
+      refreshed += batch.length;
+      if (i + HOLDER_RECONCILE_BATCH_SIZE < dirtyTokens.length) {
+        await new Promise(r => setTimeout(r, HOLDER_RECONCILE_STAGGER_MS));
+      }
+    }
+    console.log(`[HolderReconcile] Done: ${refreshed} tokens refreshed`);
+  }, HOLDER_RECONCILE_INTERVAL_MS);
+  console.log(`[HolderReconcile] Started (every ${HOLDER_RECONCILE_INTERVAL_MS / 3600000}h, batch ${HOLDER_RECONCILE_BATCH_SIZE}, stagger ${HOLDER_RECONCILE_STAGGER_MS / 1000}s)`);
 }
 
 export function isWalletInTop100(tokenMint: string, walletAddress: string): { found: boolean; rank: number | null; percent: number | null } {
