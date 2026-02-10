@@ -77,6 +77,7 @@ interface Trade {
   isBuy: boolean;
   baseCurrency?: string;
   baseAmount?: number;
+  isStableBase?: boolean;
   solPriceAtTrade?: number;
   toTokenMetadata?: {
     name?: string;
@@ -142,9 +143,10 @@ interface WalletActivity {
     hitRate: number;
     totalSolSpent?: number;
     totalSolReceived?: number;
-    totalBaseSpent?: number;
-    totalBaseReceived?: number;
-    realizedPnl: number;
+    totalUsdSpent?: number;
+    totalUsdReceived?: number;
+    realizedPnl?: number;
+    realizedPnlUsd?: number;
     primaryBase?: string;
     mostTradedTokens: MostTradedToken[];
   };
@@ -483,9 +485,7 @@ export default function SignalWalletPage() {
       const buyTrades = trades.filter((t) => t.isBuy && t.toToken === holding.mint);
       const totalBought = buyTrades.reduce((sum, t) => sum + t.toAmount, 0);
       const totalSpent = buyTrades.reduce((sum, t) => {
-        const base = t.baseCurrency || "SOL";
-        const isStable = base === "USDC" || base === "USDT" || base === "USD1";
-        if (isStable) {
+        if (t.isStableBase) {
           return sum + (t.baseAmount ?? t.fromAmount);
         }
         return sum + (t.fromAmount * (t.solPriceAtTrade || 0));
@@ -515,11 +515,9 @@ export default function SignalWalletPage() {
       }
       
       const data = tokenPnL.get(tokenMint)!;
-      const base = trade.baseCurrency || "SOL";
-      const isStable = base === "USDC" || base === "USDT" || base === "USD1";
       
       let usdValue: number;
-      if (isStable) {
+      if (trade.isStableBase) {
         usdValue = trade.baseAmount ?? (trade.isBuy ? trade.fromAmount : trade.toAmount);
       } else {
         usdValue = (trade.isBuy ? trade.fromAmount : trade.toAmount) * (trade.solPriceAtTrade || 0);
@@ -764,12 +762,24 @@ export default function SignalWalletPage() {
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Realized</span>
-                <span className={`text-lg font-bold ${stats.realizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                  {stats.realizedPnl >= 0 ? "+" : ""}{stats.realizedPnl} {stats.primaryBase || "SOL"}
-                </span>
+                {(() => {
+                  const pnl = stats.realizedPnlUsd ?? stats.realizedPnl ?? 0;
+                  const isUsd = stats.realizedPnlUsd !== undefined;
+                  return (
+                    <span className={`text-lg font-bold ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                      {isUsd ? `${pnl >= 0 ? "+$" : "-$"}${Math.abs(pnl).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : `${pnl >= 0 ? "+" : ""}${pnl} SOL`}
+                    </span>
+                  );
+                })()}
               </div>
               <p className="text-xs text-muted-foreground">
-                {stats.totalBaseSpent ?? stats.totalSolSpent} spent → {stats.totalBaseReceived ?? stats.totalSolReceived} received
+                {(() => {
+                  const spent = stats.totalUsdSpent ?? stats.totalSolSpent ?? 0;
+                  const received = stats.totalUsdReceived ?? stats.totalSolReceived ?? 0;
+                  const isUsd = stats.totalUsdSpent !== undefined;
+                  if (isUsd) return `$${spent.toLocaleString()} spent → $${received.toLocaleString()} received`;
+                  return `${spent} spent → ${received} received`;
+                })()}
               </p>
             </div>
             <div className="border-t pt-2">
@@ -1287,20 +1297,17 @@ export default function SignalWalletPage() {
                         {(() => {
                           const base = trade.baseCurrency || "SOL";
                           const baseAmt = trade.baseAmount ?? (trade.isBuy ? trade.fromAmount : trade.toAmount);
-                          const isStable = base === "USDC" || base === "USDT" || base === "USD1";
                           return (
                             <div className="font-medium">
-                              {isStable ? `$${baseAmt.toFixed(2)}` : `${baseAmt.toFixed(4)} ${base}`}
+                              {trade.isStableBase ? `$${baseAmt.toFixed(2)}` : `${baseAmt.toFixed(4)} ${base}`}
                             </div>
                           );
                         })()}
                       </td>
                       <td className="py-3 text-right">
                         {(() => {
-                          const base = trade.baseCurrency || "SOL";
                           const baseAmt = trade.baseAmount ?? (trade.isBuy ? trade.fromAmount : trade.toAmount);
-                          const isStable = base === "USDC" || base === "USDT" || base === "USD1";
-                          if (isStable) {
+                          if (trade.isStableBase) {
                             return (
                               <div className="font-medium text-muted-foreground">
                                 ${baseAmt.toFixed(2)}
@@ -1327,14 +1334,11 @@ export default function SignalWalletPage() {
                       <td className="py-3 text-right">
                         {(() => {
                           // For BUY trades, calculate performance based on current price
-                          const tradeBase = trade.baseCurrency || "SOL";
-                          const isStableBase = tradeBase === "USDC" || tradeBase === "USDT" || tradeBase === "USD1";
-                          
                           if (trade.isBuy) {
                             const tokenHolding = sortedHoldings.find(h => h.mint === trade.toToken);
                             if (tokenHolding?.priceUsd) {
                               let entryCostUsd: number;
-                              if (isStableBase) {
+                              if (trade.isStableBase) {
                                 entryCostUsd = trade.baseAmount ?? trade.fromAmount;
                               } else if (trade.solPriceAtTrade) {
                                 entryCostUsd = trade.fromAmount * trade.solPriceAtTrade;
@@ -1363,10 +1367,8 @@ export default function SignalWalletPage() {
                               let totalCostUsd = 0;
                               
                               buyTrades.forEach(buyTrade => {
-                                const buyBase = buyTrade.baseCurrency || "SOL";
-                                const buyIsStable = buyBase === "USDC" || buyBase === "USDT" || buyBase === "USD1";
                                 totalTokensBought += buyTrade.toAmount;
-                                if (buyIsStable) {
+                                if (buyTrade.isStableBase) {
                                   totalCostUsd += buyTrade.baseAmount ?? buyTrade.fromAmount;
                                 } else {
                                   totalCostUsd += buyTrade.fromAmount * (buyTrade.solPriceAtTrade || 0);
@@ -1374,7 +1376,7 @@ export default function SignalWalletPage() {
                               });
                               
                               let sellValueUsd: number;
-                              if (isStableBase) {
+                              if (trade.isStableBase) {
                                 sellValueUsd = trade.baseAmount ?? trade.toAmount;
                               } else if (trade.solPriceAtTrade) {
                                 sellValueUsd = trade.toAmount * trade.solPriceAtTrade;
