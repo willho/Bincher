@@ -2938,35 +2938,35 @@ export async function registerRoutes(
         .where(eq(signalWalletProfiles.walletAddress, wallet.walletAddress))
         .limit(1);
       
-      // Calculate stats from swaps
-      const SOL_MINT = "So11111111111111111111111111111111111111112";
-      const buys = walletSwaps.filter(s => s.fromToken === SOL_MINT);
-      const sells = walletSwaps.filter(s => s.toToken === SOL_MINT);
+      // Calculate stats from swaps — use isBaseCurrency() to handle SOL, USDC, USDT etc.
+      const buys = walletSwaps.filter(s => isBaseCurrency(s.fromToken) && !isBaseCurrency(s.toToken));
+      const sells = walletSwaps.filter(s => isBaseCurrency(s.toToken) && !isBaseCurrency(s.fromToken));
       
-      // Token tracking for hit rate
-      const tokenBuys: Record<string, { amount: number; solSpent: number; timestamp: number }> = {};
-      const tokenSells: Record<string, { solReceived: number }> = {};
+      // Token tracking for hit rate (track base amounts spent/received regardless of SOL vs USDC)
+      const tokenBuys: Record<string, { amount: number; baseSpent: number; baseCurrency: string; timestamp: number }> = {};
+      const tokenSells: Record<string, { baseReceived: number; baseCurrency: string }> = {};
       
       for (const swap of buys) {
         const token = swap.toToken;
         if (!tokenBuys[token]) {
-          tokenBuys[token] = { amount: 0, solSpent: 0, timestamp: swap.timestamp };
+          tokenBuys[token] = { amount: 0, baseSpent: 0, baseCurrency: swap.fromTokenSymbol, timestamp: swap.timestamp };
         }
         tokenBuys[token].amount += swap.toAmount;
-        tokenBuys[token].solSpent += swap.fromAmount;
+        tokenBuys[token].baseSpent += swap.fromAmount;
       }
       
       for (const swap of sells) {
         const token = swap.fromToken;
         if (!tokenSells[token]) {
-          tokenSells[token] = { solReceived: 0 };
+          tokenSells[token] = { baseReceived: 0, baseCurrency: swap.toTokenSymbol };
         }
-        tokenSells[token].solReceived += swap.toAmount;
+        tokenSells[token].baseReceived += swap.toAmount;
       }
       
       // Calculate P&L for closed positions
-      let totalSolSpent = 0;
-      let totalSolReceived = 0;
+      // For mixed base currencies (some SOL, some USDC), convert to USD for comparison
+      let totalBaseSpent = 0;
+      let totalBaseReceived = 0;
       let profitableTrades = 0;
       let closedTrades = 0;
       
@@ -2974,25 +2974,33 @@ export async function registerRoutes(
         const buy = tokenBuys[token];
         const sell = tokenSells[token];
         
-        totalSolSpent += buy.solSpent;
+        totalBaseSpent += buy.baseSpent;
         
         if (sell) {
-          totalSolReceived += sell.solReceived;
+          totalBaseReceived += sell.baseReceived;
           closedTrades++;
-          if (sell.solReceived > buy.solSpent) {
+          if (sell.baseReceived > buy.baseSpent) {
             profitableTrades++;
           }
         }
       }
       
       const hitRate = closedTrades > 0 ? (profitableTrades / closedTrades) * 100 : 0;
-      const realizedPnl = totalSolReceived - totalSolSpent;
+      const realizedPnl = totalBaseReceived - totalBaseSpent;
+      
+      // Detect primary base currency for this wallet
+      const solBuys = walletSwaps.filter(s => s.fromToken === SOL_MINT || s.toToken === SOL_MINT).length;
+      const totalSwapsCount = walletSwaps.length;
+      const primaryBase = solBuys > totalSwapsCount / 2 ? "SOL" : "USDC";
       
       // Get most traded tokens
       const tokenCounts: Record<string, { symbol: string; count: number }> = {};
       for (const swap of walletSwaps) {
-        const token = swap.fromToken === SOL_MINT ? swap.toToken : swap.fromToken;
-        const symbol = swap.fromToken === SOL_MINT ? swap.toTokenSymbol : swap.fromTokenSymbol;
+        const fromIsBase = isBaseCurrency(swap.fromToken);
+        const toIsBase = isBaseCurrency(swap.toToken);
+        const token = fromIsBase ? swap.toToken : (toIsBase ? swap.fromToken : swap.fromToken);
+        const symbol = fromIsBase ? swap.toTokenSymbol : (toIsBase ? swap.fromTokenSymbol : swap.fromTokenSymbol);
+        if (isBaseCurrency(token)) continue;
         if (!tokenCounts[token]) {
           tokenCounts[token] = { symbol, count: 0 };
         }
@@ -3013,21 +3021,29 @@ export async function registerRoutes(
           userNotes: wallet.userNotes || null,
         },
         timeframe,
-        trades: walletSwaps.map(s => ({
-          id: s.id,
-          signature: s.signature,
-          timestamp: s.timestamp,
-          type: s.type,
-          fromToken: s.fromToken,
-          fromTokenSymbol: s.fromTokenSymbol,
-          fromAmount: s.fromAmount,
-          toToken: s.toToken,
-          toTokenSymbol: s.toTokenSymbol,
-          toAmount: s.toAmount,
-          isBuy: s.fromToken === SOL_MINT,
-          solPriceAtTrade: s.solPriceAtTrade,
-          toTokenMetadata: s.toTokenMetadata,
-        })),
+        primaryBase,
+        trades: walletSwaps.map(s => {
+          const fromIsBase = isBaseCurrency(s.fromToken);
+          const toIsBase = isBaseCurrency(s.toToken);
+          const isBuy = fromIsBase && !toIsBase;
+          return {
+            id: s.id,
+            signature: s.signature,
+            timestamp: s.timestamp,
+            type: s.type,
+            fromToken: s.fromToken,
+            fromTokenSymbol: s.fromTokenSymbol,
+            fromAmount: s.fromAmount,
+            toToken: s.toToken,
+            toTokenSymbol: s.toTokenSymbol,
+            toAmount: s.toAmount,
+            isBuy,
+            baseCurrency: isBuy ? s.fromTokenSymbol : (toIsBase ? s.toTokenSymbol : "SOL"),
+            baseAmount: isBuy ? s.fromAmount : (toIsBase ? s.toAmount : 0),
+            solPriceAtTrade: s.solPriceAtTrade,
+            toTokenMetadata: s.toTokenMetadata,
+          };
+        }),
         stats: {
           totalTrades: walletSwaps.length,
           buys: buys.length,
@@ -3035,9 +3051,10 @@ export async function registerRoutes(
           closedPositions: closedTrades,
           profitableTrades,
           hitRate: Math.round(hitRate * 10) / 10,
-          totalSolSpent: Math.round(totalSolSpent * 1000) / 1000,
-          totalSolReceived: Math.round(totalSolReceived * 1000) / 1000,
+          totalBaseSpent: Math.round(totalBaseSpent * 1000) / 1000,
+          totalBaseReceived: Math.round(totalBaseReceived * 1000) / 1000,
           realizedPnl: Math.round(realizedPnl * 1000) / 1000,
+          primaryBase,
           mostTradedTokens: mostTraded,
         },
         profile: profile ? {

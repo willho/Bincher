@@ -75,6 +75,8 @@ interface Trade {
   toTokenSymbol: string;
   toAmount: number;
   isBuy: boolean;
+  baseCurrency?: string;
+  baseAmount?: number;
   solPriceAtTrade?: number;
   toTokenMetadata?: {
     name?: string;
@@ -129,6 +131,7 @@ interface WalletActivity {
     userNotes: string | null;
   };
   timeframe: string;
+  primaryBase?: string;
   trades: Trade[];
   stats: {
     totalTrades: number;
@@ -137,9 +140,12 @@ interface WalletActivity {
     closedPositions: number;
     profitableTrades: number;
     hitRate: number;
-    totalSolSpent: number;
-    totalSolReceived: number;
+    totalSolSpent?: number;
+    totalSolReceived?: number;
+    totalBaseSpent?: number;
+    totalBaseReceived?: number;
     realizedPnl: number;
+    primaryBase?: string;
     mostTradedTokens: MostTradedToken[];
   };
   profile: {
@@ -476,7 +482,14 @@ export default function SignalWalletPage() {
       // Find buy trades for this token to calculate cost basis
       const buyTrades = trades.filter((t) => t.isBuy && t.toToken === holding.mint);
       const totalBought = buyTrades.reduce((sum, t) => sum + t.toAmount, 0);
-      const totalSpent = buyTrades.reduce((sum, t) => sum + (t.fromAmount * (t.solPriceAtTrade || 0)), 0);
+      const totalSpent = buyTrades.reduce((sum, t) => {
+        const base = t.baseCurrency || "SOL";
+        const isStable = base === "USDC" || base === "USDT" || base === "USD1";
+        if (isStable) {
+          return sum + (t.baseAmount ?? t.fromAmount);
+        }
+        return sum + (t.fromAmount * (t.solPriceAtTrade || 0));
+      }, 0);
       
       if (totalBought > 0 && holding.amount > 0) {
         const avgCostPerToken = totalSpent / totalBought;
@@ -502,9 +515,15 @@ export default function SignalWalletPage() {
       }
       
       const data = tokenPnL.get(tokenMint)!;
-      const usdValue = trade.isBuy 
-        ? trade.fromAmount * (trade.solPriceAtTrade || 0)
-        : trade.toAmount * (trade.solPriceAtTrade || 0);
+      const base = trade.baseCurrency || "SOL";
+      const isStable = base === "USDC" || base === "USDT" || base === "USD1";
+      
+      let usdValue: number;
+      if (isStable) {
+        usdValue = trade.baseAmount ?? (trade.isBuy ? trade.fromAmount : trade.toAmount);
+      } else {
+        usdValue = (trade.isBuy ? trade.fromAmount : trade.toAmount) * (trade.solPriceAtTrade || 0);
+      }
       
       if (trade.isBuy) {
         data.spent += usdValue;
@@ -746,11 +765,11 @@ export default function SignalWalletPage() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Realized</span>
                 <span className={`text-lg font-bold ${stats.realizedPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                  {stats.realizedPnl >= 0 ? "+" : ""}{stats.realizedPnl} SOL
+                  {stats.realizedPnl >= 0 ? "+" : ""}{stats.realizedPnl} {stats.primaryBase || "SOL"}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                {stats.totalSolSpent} spent → {stats.totalSolReceived} received
+                {stats.totalBaseSpent ?? stats.totalSolSpent} spent → {stats.totalBaseReceived ?? stats.totalSolReceived} received
               </p>
             </div>
             <div className="border-t pt-2">
@@ -1214,7 +1233,7 @@ export default function SignalWalletPage() {
                     <th className="pb-3 font-medium">Time</th>
                     <th className="pb-3 font-medium">Type</th>
                     <th className="pb-3 font-medium">Token</th>
-                    <th className="pb-3 font-medium text-right">SOL Value</th>
+                    <th className="pb-3 font-medium text-right">Value</th>
                     <th className="pb-3 font-medium text-right">USD Value</th>
                     <th className="pb-3 font-medium text-right">Performance</th>
                     <th className="pb-3 font-medium text-right">Tx</th>
@@ -1265,24 +1284,37 @@ export default function SignalWalletPage() {
                         </Link>
                       </td>
                       <td className="py-3 text-right">
-                        <div className="font-medium">
-                          {trade.isBuy 
-                            ? trade.fromAmount.toFixed(4)
-                            : trade.toAmount.toFixed(4)} SOL
-                        </div>
+                        {(() => {
+                          const base = trade.baseCurrency || "SOL";
+                          const baseAmt = trade.baseAmount ?? (trade.isBuy ? trade.fromAmount : trade.toAmount);
+                          const isStable = base === "USDC" || base === "USDT" || base === "USD1";
+                          return (
+                            <div className="font-medium">
+                              {isStable ? `$${baseAmt.toFixed(2)}` : `${baseAmt.toFixed(4)} ${base}`}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="py-3 text-right">
                         {(() => {
-                          const solAmount = trade.isBuy ? trade.fromAmount : trade.toAmount;
-                          if (trade.solPriceAtTrade) {
+                          const base = trade.baseCurrency || "SOL";
+                          const baseAmt = trade.baseAmount ?? (trade.isBuy ? trade.fromAmount : trade.toAmount);
+                          const isStable = base === "USDC" || base === "USDT" || base === "USD1";
+                          if (isStable) {
                             return (
                               <div className="font-medium text-muted-foreground">
-                                ${(solAmount * trade.solPriceAtTrade).toFixed(2)}
+                                ${baseAmt.toFixed(2)}
                               </div>
                             );
                           }
-                          // Fallback to current SOL price
-                          const usdValue = solToUsd(solAmount);
+                          if (trade.solPriceAtTrade) {
+                            return (
+                              <div className="font-medium text-muted-foreground">
+                                ${(baseAmt * trade.solPriceAtTrade).toFixed(2)}
+                              </div>
+                            );
+                          }
+                          const usdValue = solToUsd(baseAmt);
                           return usdValue > 0 ? (
                             <div className="font-medium text-muted-foreground" title="Using current SOL price">
                               ~{formatUsd(usdValue)}
@@ -1295,12 +1327,20 @@ export default function SignalWalletPage() {
                       <td className="py-3 text-right">
                         {(() => {
                           // For BUY trades, calculate performance based on current price
+                          const tradeBase = trade.baseCurrency || "SOL";
+                          const isStableBase = tradeBase === "USDC" || tradeBase === "USDT" || tradeBase === "USD1";
+                          
                           if (trade.isBuy) {
                             const tokenHolding = sortedHoldings.find(h => h.mint === trade.toToken);
-                            if (tokenHolding?.priceUsd && trade.solPriceAtTrade) {
-                              // Entry cost in USD
-                              const entryCostUsd = trade.fromAmount * trade.solPriceAtTrade;
-                              // Current value in USD
+                            if (tokenHolding?.priceUsd) {
+                              let entryCostUsd: number;
+                              if (isStableBase) {
+                                entryCostUsd = trade.baseAmount ?? trade.fromAmount;
+                              } else if (trade.solPriceAtTrade) {
+                                entryCostUsd = trade.fromAmount * trade.solPriceAtTrade;
+                              } else {
+                                return <div className="text-xs text-muted-foreground" data-testid={`text-perf-${trade.id}`}>-</div>;
+                              }
                               const currentValueUsd = trade.toAmount * tokenHolding.priceUsd;
                               if (entryCostUsd > 0) {
                                 const pnlPercent = ((currentValueUsd - entryCostUsd) / entryCostUsd) * 100;
@@ -1313,25 +1353,41 @@ export default function SignalWalletPage() {
                             }
                             return <div className="text-xs text-muted-foreground" data-testid={`text-perf-${trade.id}`}>-</div>;
                           } else {
-                            // SELL trade - calculate realized P&L
-                            // Find buy trades for the same token to get entry cost
                             const tokenMint = trade.fromToken;
                             const buyTrades = activity?.trades?.filter(t => 
                               t.isBuy && t.toToken === tokenMint && t.timestamp < trade.timestamp
                             ) || [];
                             
-                            if (buyTrades.length > 0 && trade.solPriceAtTrade) {
-                              // Calculate average entry cost per token
+                            if (buyTrades.length > 0) {
                               let totalTokensBought = 0;
                               let totalCostUsd = 0;
                               
                               buyTrades.forEach(buyTrade => {
+                                const buyBase = buyTrade.baseCurrency || "SOL";
+                                const buyIsStable = buyBase === "USDC" || buyBase === "USDT" || buyBase === "USD1";
                                 totalTokensBought += buyTrade.toAmount;
-                                totalCostUsd += buyTrade.fromAmount * (buyTrade.solPriceAtTrade || 0);
+                                if (buyIsStable) {
+                                  totalCostUsd += buyTrade.baseAmount ?? buyTrade.fromAmount;
+                                } else {
+                                  totalCostUsd += buyTrade.fromAmount * (buyTrade.solPriceAtTrade || 0);
+                                }
                               });
                               
+                              let sellValueUsd: number;
+                              if (isStableBase) {
+                                sellValueUsd = trade.baseAmount ?? trade.toAmount;
+                              } else if (trade.solPriceAtTrade) {
+                                sellValueUsd = trade.toAmount * trade.solPriceAtTrade;
+                              } else {
+                                return (
+                                  <Badge variant="outline" className="text-xs" data-testid={`text-perf-${trade.id}`}>
+                                    Sold
+                                  </Badge>
+                                );
+                              }
+                              
                               const avgEntryCostPerToken = totalTokensBought > 0 ? totalCostUsd / totalTokensBought : 0;
-                              const sellValuePerToken = (trade.toAmount * trade.solPriceAtTrade) / trade.fromAmount;
+                              const sellValuePerToken = trade.fromAmount > 0 ? sellValueUsd / trade.fromAmount : 0;
                               
                               if (avgEntryCostPerToken > 0) {
                                 const pnlPercent = ((sellValuePerToken - avgEntryCostPerToken) / avgEntryCostPerToken) * 100;
