@@ -89,3 +89,14 @@ export function getSolanaFaucetUrl(): string {
 export function isDevnet(): boolean {
   return cachedNetworkMode === "devnet";
 }
+
+export function getHeliusApiKey(): string {
+  const isProduction = process.env.REPLIT_DEPLOYMENT === "1";
+  if (isProduction && process.env.HELIUS_API_KEY_PROD) {
+    return process.env.HELIUS_API_KEY_PROD;
+  }
+  if (!isProduction && process.env.HELIUS_API_KEY_DEV) {
+    return process.env.HELIUS_API_KEY_DEV;
+  }
+  return process.env.HELIUS_API_KEY || "";
+}

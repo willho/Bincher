@@ -40,3 +40,11 @@ waitForPort = 5000
 
 [agent]
 integrations = ["javascript_openai_ai_integrations:2.0.0"]
+
+[userenv]
+
+[userenv.development]
+HELIUS_API_KEY_DEV = "7c10819e-0451-4eaf-846d-3a9d3b60df06"
+
+[userenv.production]
+HELIUS_API_KEY_PROD = "088e86b5-b807-41eb-923b-3d6aa1ec8e5a"

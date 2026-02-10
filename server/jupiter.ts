@@ -1,8 +1,8 @@
 import { Connection, PublicKey, Transaction, VersionedTransaction, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { getHotWalletKeypair, getHotWalletBalance, getTokenWalletBalance, getTradeConfig } from "./wallet";
 import { trackApiCall, shouldAllowApiCall } from "./api-budget";
+import { getConnection } from "./rpc-provider";
 
-const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 const JUPITER_API = "https://quote-api.jup.ag/v6";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 
@@ -76,7 +76,7 @@ interface SwapResult {
 // Estimate priority fee using Helius RPC
 export async function estimatePriorityFee(): Promise<number> {
   try {
-    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const connection = await getConnection();
     const recentFees = await connection.getRecentPrioritizationFees();
     
     if (recentFees.length === 0) {
@@ -338,7 +338,7 @@ export async function executeSwap(
 
     transaction.sign([keypair]);
 
-    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const connection = await getConnection();
     
     const signature = await connection.sendTransaction(transaction, {
       maxRetries: 3,

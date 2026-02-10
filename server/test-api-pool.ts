@@ -133,7 +133,8 @@ async function testSolanaFM() {
 async function testHelius() {
   console.log("\n=== Testing Helius (baseline) ===");
   
-  const apiKey = process.env.HELIUS_API_KEY;
+  const { getHeliusApiKey } = await import("./network-mode");
+  const apiKey = getHeliusApiKey();
   if (!apiKey) {
     console.log("  HELIUS_API_KEY not set - skipping");
     return;

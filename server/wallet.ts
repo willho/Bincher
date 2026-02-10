@@ -7,13 +7,13 @@ import * as crypto from "crypto";
 import { fetchTopHolders } from "./helius";
 import { createSnapshot, getSnapshotByToken } from "./ai";
 import { logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
+import { getConnection, rpcCall } from "./rpc-provider";
 
 if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
   console.error("CRITICAL: SESSION_SECRET must be set and at least 32 characters for secure key encryption");
 }
 
 const ENCRYPTION_KEY = process.env.SESSION_SECRET || "";
-const HELIUS_RPC = `https://mainnet.helius-rpc.com/?api-key=${process.env.HELIUS_API_KEY}`;
 
 function encrypt(text: string): string {
   if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
@@ -180,7 +180,7 @@ export async function getHotWalletBalance(userId: number): Promise<number> {
   if (!wallet) return 0;
   
   try {
-    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const connection = await getConnection();
     const pubkey = new PublicKey(wallet.publicKey);
     const balance = await connection.getBalance(pubkey);
     return balance / LAMPORTS_PER_SOL;
@@ -698,7 +698,7 @@ export async function withdrawSol(
       return { success: false, error: "Invalid destination address" };
     }
 
-    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const connection = await getConnection();
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
 
     const transaction = new Transaction().add(
@@ -809,7 +809,7 @@ export async function fundTokenWallet(
   amountSol: number
 ): Promise<{ success: boolean; signature?: string; error?: string }> {
   try {
-    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const connection = await getConnection();
     const toPubkey = new PublicKey(toAddress);
     const lamports = Math.floor(amountSol * LAMPORTS_PER_SOL);
 
@@ -835,7 +835,7 @@ export async function fundTokenWallet(
 // Note: This returns native SOL balance, NOT SPL token balance
 export async function getTokenWalletBalance(publicKey: string): Promise<number> {
   try {
-    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const connection = await getConnection();
     const pubkey = new PublicKey(publicKey);
     const balance = await connection.getBalance(pubkey); // Returns lamports (native SOL)
     return balance / LAMPORTS_PER_SOL;
@@ -898,7 +898,7 @@ export async function sendProfitsToMainWallet(
   gasReserveSol: number
 ): Promise<{ success: boolean; signature?: string; amountSent?: number; error?: string }> {
   try {
-    const connection = new Connection(HELIUS_RPC, "confirmed");
+    const connection = await getConnection();
     const balance = await connection.getBalance(tokenWalletKeypair.publicKey);
     const balanceSol = balance / LAMPORTS_PER_SOL;
     

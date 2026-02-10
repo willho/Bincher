@@ -50,7 +50,8 @@ async function getQuicknodeRpcUrl(): Promise<string | null> {
 }
 
 async function getHeliusRpcUrl(): Promise<string> {
-  const apiKey = process.env.HELIUS_API_KEY;
+  const { getHeliusApiKey } = await import("./network-mode");
+  const apiKey = getHeliusApiKey();
   const mode = await getNetworkMode();
   
   if (mode === "devnet") {
@@ -320,7 +321,8 @@ export interface TokenMetadata {
 }
 
 export async function getTokenMetadataViaHelius(mintAddress: string): Promise<TokenMetadata | null> {
-  const apiKey = process.env.HELIUS_API_KEY;
+  const { getHeliusApiKey } = await import("./network-mode");
+  const apiKey = getHeliusApiKey();
   if (!apiKey) {
     console.error("[RpcProvider] No Helius API key for token metadata");
     return null;

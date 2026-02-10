@@ -480,7 +480,8 @@ export async function registerRoutes(
       if (useAdminPool) {
         // Check if admin pool has a Helius key available
         const adminKey = await getNextAdminApiKey("helius");
-        if (!adminKey && !process.env.HELIUS_API_KEY) {
+        const { getHeliusApiKey } = await import("./network-mode");
+        if (!adminKey && !getHeliusApiKey()) {
           return res.status(400).json({ error: "Helius API key is required (no admin pool available)" });
         }
       }

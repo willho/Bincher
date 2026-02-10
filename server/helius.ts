@@ -1,12 +1,9 @@
 import type { HeliusWebhookPayload, InsertSwap, TokenMetadata } from "@shared/schema";
 import { trackApiCall, shouldAllowApiCall } from "./api-budget";
-import { getNetworkMode, getHeliusRpcUrl, getHeliusApiUrl } from "./network-mode";
+import { getNetworkMode, getHeliusRpcUrl, getHeliusApiUrl, getHeliusApiKey } from "./network-mode";
 
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
-
-// Get the current Helius RPC URL based on network mode
 export async function getHeliusRpcEndpoint(apiKey?: string): Promise<string> {
-  const key = apiKey || HELIUS_API_KEY || "";
+  const key = apiKey || getHeliusApiKey();
   const mode = await getNetworkMode();
   return getHeliusRpcUrl(key, mode);
 }
@@ -472,7 +469,8 @@ export function parseSwapFromWebhook(payload: HeliusWebhookPayload): InsertSwap 
 }
 
 export async function createWebhook(webhookUrl: string, walletAddresses: string[]): Promise<string | null> {
-  if (!HELIUS_API_KEY) {
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) {
     console.error("HELIUS_API_KEY not found");
     return null;
   }
@@ -486,7 +484,7 @@ export async function createWebhook(webhookUrl: string, walletAddresses: string[
 
   try {
     const apiBase = await getHeliusApiEndpoint();
-    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${HELIUS_API_KEY}`, {
+    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${heliusKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -513,11 +511,12 @@ export async function createWebhook(webhookUrl: string, walletAddresses: string[
 }
 
 export async function deleteWebhook(webhookId: string): Promise<boolean> {
-  if (!HELIUS_API_KEY) return false;
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) return false;
   
   try {
     const apiBase = await getHeliusApiEndpoint();
-    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
+    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${heliusKey}`, {
       method: "DELETE",
     });
     return response.ok;
@@ -528,11 +527,12 @@ export async function deleteWebhook(webhookId: string): Promise<boolean> {
 }
 
 export async function getWebhooks(): Promise<any[]> {
-  if (!HELIUS_API_KEY) return [];
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) return [];
   
   try {
     const apiBase = await getHeliusApiEndpoint();
-    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${HELIUS_API_KEY}`);
+    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${heliusKey}`);
     if (!response.ok) return [];
     return await response.json();
   } catch (error) {
@@ -542,10 +542,11 @@ export async function getWebhooks(): Promise<any[]> {
 }
 
 export async function getWebhooksOnNetwork(network: "mainnet" | "devnet"): Promise<any[]> {
-  if (!HELIUS_API_KEY) return [];
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) return [];
   try {
     const apiBase = network === "devnet" ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
-    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${HELIUS_API_KEY}`);
+    const response = await fetch(`${apiBase}/v0/webhooks?api-key=${heliusKey}`);
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       console.warn(`[WebhookList] ${network} returned ${response.status}: ${body.slice(0, 200)}`);
@@ -559,10 +560,11 @@ export async function getWebhooksOnNetwork(network: "mainnet" | "devnet"): Promi
 }
 
 export async function deleteWebhookOnNetwork(webhookId: string, network: "mainnet" | "devnet"): Promise<boolean> {
-  if (!HELIUS_API_KEY) return false;
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) return false;
   try {
     const apiBase = network === "devnet" ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
-    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
+    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${heliusKey}`, {
       method: "DELETE",
     });
     return response.ok;
@@ -573,7 +575,8 @@ export async function deleteWebhookOnNetwork(webhookId: string, network: "mainne
 }
 
 export async function cleanupStaleWebhooks(currentWebhookUrl: string, validWebhookId?: string): Promise<{ cleaned: number; reusable: string | null }> {
-  if (!HELIUS_API_KEY) return { cleaned: 0, reusable: null };
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) return { cleaned: 0, reusable: null };
 
   const mode = await getNetworkMode();
   const otherNetwork = mode === "mainnet" ? "devnet" : "mainnet";
@@ -659,7 +662,8 @@ export interface WalletTradingHistory {
 }
 
 export async function fetchWalletSwapHistory(walletAddress: string, limit: number = 100): Promise<HistoricalSwap[]> {
-  if (!HELIUS_API_KEY) {
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) {
     console.error("No Helius API key configured");
     return [];
   }
@@ -667,7 +671,7 @@ export async function fetchWalletSwapHistory(walletAddress: string, limit: numbe
   try {
     // Use Helius parsed transaction history API
     const apiBase = await getHeliusApiEndpoint();
-    const response = await fetch(`${apiBase}/v0/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&type=SWAP&limit=${limit}`);
+    const response = await fetch(`${apiBase}/v0/addresses/${walletAddress}/transactions?api-key=${heliusKey}&type=SWAP&limit=${limit}`);
     
     if (!response.ok) {
       console.error("Failed to fetch wallet history:", await response.text());
@@ -866,7 +870,8 @@ export async function analyzeWalletTradingHistory(walletAddress: string): Promis
 }
 
 export async function updateWebhookUrl(webhookId: string, newUrl: string, walletAddresses: string[]): Promise<boolean> {
-  if (!HELIUS_API_KEY) return false;
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) return false;
   
   if (walletAddresses.length === 0) {
     console.log("No wallet addresses to monitor");
@@ -877,7 +882,7 @@ export async function updateWebhookUrl(webhookId: string, newUrl: string, wallet
   
   try {
     const apiBase = await getHeliusApiEndpoint();
-    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${HELIUS_API_KEY}`, {
+    const response = await fetch(`${apiBase}/v0/webhooks/${webhookId}?api-key=${heliusKey}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -913,7 +918,8 @@ export async function backfillWalletSwaps(
   walletAddress: string,
   maxTransactions: number = 100
 ): Promise<{ swaps: InsertSwap[]; error?: string }> {
-  if (!HELIUS_API_KEY) {
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) {
     return { swaps: [], error: "Helius API key not configured" };
   }
   
@@ -924,7 +930,7 @@ export async function backfillWalletSwaps(
   
   try {
     const apiBase = await getHeliusApiEndpoint();
-    const url = `${apiBase}/v0/addresses/${walletAddress}/transactions?api-key=${HELIUS_API_KEY}&limit=${maxTransactions}`;
+    const url = `${apiBase}/v0/addresses/${walletAddress}/transactions?api-key=${heliusKey}&limit=${maxTransactions}`;
     
     const response = await fetch(url);
     if (!response.ok) {
@@ -1050,7 +1056,8 @@ export interface WalletTokenHolding {
 
 // Fetch all token holdings for a wallet address
 export async function fetchWalletTokenHoldings(walletAddress: string): Promise<WalletTokenHolding[]> {
-  if (!HELIUS_API_KEY) {
+  const heliusKey = getHeliusApiKey();
+  if (!heliusKey) {
     console.warn("No Helius API key - skipping wallet holdings fetch");
     return [];
   }
