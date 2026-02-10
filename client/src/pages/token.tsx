@@ -51,6 +51,7 @@ interface TopHolder {
 interface TopHoldersData {
   holders: TopHolder[];
   totalCount: number;
+  isEstimate?: boolean;
   lastFetchedAt: number | null;
   top10Concentration: number;
 }
@@ -345,7 +346,9 @@ export default function TokenPage() {
               <Skeleton className="h-8 w-16" />
             ) : (
               <p className="text-2xl font-bold" data-testid="text-holders">
-                {topHolders?.totalCount ? topHolders.totalCount.toLocaleString() : snapshot?.holders?.toLocaleString() || "N/A"}
+                {topHolders?.totalCount
+                  ? (topHolders.isEstimate ? `${topHolders.totalCount.toLocaleString()}+` : topHolders.totalCount.toLocaleString())
+                  : snapshot?.holders?.toLocaleString() || "N/A"}
               </p>
             )}
           </CardContent>

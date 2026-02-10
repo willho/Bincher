@@ -266,7 +266,12 @@ export interface TopHolderInfo {
   isLP?: boolean;
 }
 
-export async function fetchTopHolders(mintAddress: string, limit: number = 100): Promise<TopHolderInfo[]> {
+export interface TopHoldersResult {
+  holders: TopHolderInfo[];
+  totalHolderCount: number | null;
+}
+
+export async function fetchTopHolders(mintAddress: string, limit: number = 100): Promise<TopHoldersResult> {
   try {
     const { getTokenLargestAccounts: rpcGetLargestAccounts, getMultipleAccountsInfo, rpcCall } = await import("./rpc-provider");
     const { PublicKey } = await import("@solana/web3.js");
@@ -331,10 +336,10 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
       });
     }
 
-    return holders;
+    return { holders, totalHolderCount: holders.length > 0 ? holders.length : null };
   } catch (error) {
     console.error("Error fetching top holders:", error);
-    return [];
+    return { holders: [], totalHolderCount: null };
   }
 }
 

@@ -12,7 +12,7 @@ import {
   type PortfolioSnapshotTier
 } from "@shared/schema";
 import { eq, and, lt, desc, gt } from "drizzle-orm";
-import { fetchTopHolders, type TopHolderInfo } from "./helius";
+import { fetchTopHolders, type TopHolderInfo, type TopHoldersResult } from "./helius";
 import { BatchPriceResult } from "./jupiter";
 
 // Tick data structure for in-memory buffer
@@ -121,15 +121,13 @@ export async function getHoldersCached(tokenMint: string, forceRefresh = false):
     return cached;
   }
 
-  // Fetch fresh data
   try {
-    const holders = await fetchTopHolders(tokenMint, 100);
-    if (!holders || holders.length === 0) {
-      // Keep stale cache if fetch fails
+    const result = await fetchTopHolders(tokenMint, 100);
+    if (!result || !result.holders || result.holders.length === 0) {
       return cached || null;
     }
 
-    let totalCount = holders.length;
+    let totalCount = result.totalHolderCount || result.holders.length;
     try {
       const [snap] = await db.select({ holders: tokenSnapshots.holders })
         .from(tokenSnapshots)
@@ -141,7 +139,7 @@ export async function getHoldersCached(tokenMint: string, forceRefresh = false):
       }
     } catch {}
     const newCache: HolderCache = {
-      holders,
+      holders: result.holders,
       totalCount,
       lastFetchedAt: now,
       lastEventTriggerAt: cached?.lastEventTriggerAt || 0,

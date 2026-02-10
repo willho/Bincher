@@ -5209,9 +5209,11 @@ export async function registerRoutes(
         };
       });
 
+      const isEstimate = holderCache.totalCount <= holderCache.holders.length;
       res.json({
         holders,
         totalCount: holderCache.totalCount,
+        isEstimate,
         lastFetchedAt: holderCache.lastFetchedAt,
         top10Concentration,
       });

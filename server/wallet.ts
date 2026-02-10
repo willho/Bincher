@@ -639,7 +639,8 @@ export async function addPendingBuy(
   if (!existingSnapshot) {
     try {
       console.log(`Creating snapshot for ${tokenSymbol}...`);
-      const topHolders = await fetchTopHolders(tokenMint, 100);
+      const holderResult = await fetchTopHolders(tokenMint, 100);
+      const topHolders = holderResult.holders;
       const topHolderPercent = topHolders.length > 0 ? topHolders[0].percent : undefined;
       
       await createSnapshot({
@@ -648,7 +649,7 @@ export async function addPendingBuy(
         tokenName,
         priceUsd: initialPrice,
         liquidity,
-        holders: undefined,
+        holders: holderResult.totalHolderCount || undefined,
         topHolderPercent,
         topHolders: topHolders.length > 0 ? topHolders : undefined,
         sourceWallets: sourceWalletData?.walletAddress ? [sourceWalletData.walletAddress] : undefined,
