@@ -4,6 +4,7 @@ import {
   portfolioSnapshots, 
   holdings,
   users,
+  tokenSnapshots,
   type PriceAggregate, 
   type InsertPriceAggregate, 
   type AggregateTier,
@@ -128,7 +129,17 @@ export async function getHoldersCached(tokenMint: string, forceRefresh = false):
       return cached || null;
     }
 
-    const totalCount = holders.reduce((sum, h) => sum + 1, 0);
+    let totalCount = holders.length;
+    try {
+      const [snap] = await db.select({ holders: tokenSnapshots.holders })
+        .from(tokenSnapshots)
+        .where(eq(tokenSnapshots.tokenMint, tokenMint))
+        .orderBy(desc(tokenSnapshots.capturedAt))
+        .limit(1);
+      if (snap?.holders && snap.holders > totalCount) {
+        totalCount = snap.holders;
+      }
+    } catch {}
     const newCache: HolderCache = {
       holders,
       totalCount,

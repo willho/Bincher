@@ -880,9 +880,10 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
       const top10Percent = holderCache.holders.slice(0, 10).reduce((sum, h) => sum + h.percent, 0);
       const recentWhaleActivity = holderCache.lastEventTriggerAt > 0 && 
         (Date.now() - holderCache.lastEventTriggerAt) < 24 * 60 * 60 * 1000;
+      const actualHolderCount = (snapshot as any).holders || holderCache.totalCount || holderCache.holders.length;
       whaleData = {
         top10Percent,
-        holderCount: holderCache.holders.length,
+        holderCount: actualHolderCount,
         recentWhaleActivity,
       };
     }

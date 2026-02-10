@@ -703,34 +703,23 @@ export async function registerRoutes(
   // Start monitoring
   app.post("/api/monitoring/start", async (req, res) => {
     try {
-      const status = await storage.getMonitoringStatus();
-      
-      // Get all monitored wallet addresses from all users
       const allWallets = await storage.getAllMonitoredWallets();
-      const walletAddresses = allWallets.map(w => w.walletAddress);
+      const walletAddresses = [...new Set(allWallets.filter(w => w.enabled).map(w => w.walletAddress))];
       
       if (walletAddresses.length === 0) {
         return res.status(400).json({ error: "No wallets to monitor. Add a wallet first." });
       }
 
-      if (status.isActive && status.webhookId) {
-        // Update existing webhook with current wallet list
-        const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
-        await updateWebhookUrl(status.webhookId, webhookUrl, walletAddresses);
-        return res.json({ success: true, status });
+      const { addSignalWallet, syncWebhookAddresses, getUnifiedWebhookId } = await import("./unified-webhook");
+      for (const addr of walletAddresses) {
+        addSignalWallet(addr);
       }
+      await syncWebhookAddresses();
 
-      const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
-      console.log("Creating webhook with URL:", webhookUrl, "for", walletAddresses.length, "wallet(s)");
-      const webhookId = await createWebhook(webhookUrl, walletAddresses);
-
-      if (!webhookId) {
-        return res.status(500).json({ error: "Failed to create webhook" });
-      }
-
+      const webhookId = getUnifiedWebhookId();
       const updatedStatus = await storage.updateMonitoringStatus({
         isActive: true,
-        webhookId,
+        webhookId: webhookId || undefined,
       });
 
       broadcastStatus(updatedStatus);
@@ -744,11 +733,12 @@ export async function registerRoutes(
   // Stop monitoring
   app.post("/api/monitoring/stop", async (req, res) => {
     try {
-      const status = await storage.getMonitoringStatus();
-      
-      if (status.webhookId) {
-        await deleteWebhook(status.webhookId);
+      const { removeSignalWallet, getTrackedAddressesByType, syncWebhookAddresses } = await import("./unified-webhook");
+      const signalWallets = getTrackedAddressesByType("signal_wallet");
+      for (const addr of signalWallets) {
+        removeSignalWallet(addr);
       }
+      await syncWebhookAddresses();
 
       const updatedStatus = await storage.updateMonitoringStatus({
         isActive: false,
@@ -4837,49 +4827,24 @@ export async function registerRoutes(
     };
 
     try {
-      // 1. Update or recreate Helius webhook
-      const status = await storage.getMonitoringStatus();
+      const { addSignalWallet, syncWebhookAddresses, getUnifiedWebhookId, getRegistryStats } = await import("./unified-webhook");
       const wallets = await storage.getAllWalletsAdmin();
       const walletAddresses = wallets.filter((w: { enabled: boolean; walletAddress: string }) => w.enabled).map((w: { walletAddress: string }) => w.walletAddress);
-      const webhookUrl = `${getWebhookUrl()}?secret=${WEBHOOK_SECRET}`;
       
-      if (walletAddresses.length === 0) {
-        // No wallets to monitor
-        if (status?.webhookId) {
-          await deleteWebhook(status.webhookId);
-          await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
-          results.helius = { success: true, message: "Deleted webhook - no active wallets" };
-        } else {
-          results.helius = { success: true, message: "No active wallets to monitor" };
-        }
-      } else if (status?.webhookId) {
-        // Try to update existing webhook
-        const updated = await updateWebhookUrl(status.webhookId, webhookUrl, walletAddresses);
-        if (updated) {
-          results.helius = { success: true, message: `Updated to ${webhookUrl.split("?")[0]}` };
-        } else {
-          // Update failed, try to recreate
-          console.log("Webhook update failed, recreating...");
-          await deleteWebhook(status.webhookId).catch(() => {});
-          const newId = await createWebhook(webhookUrl, walletAddresses);
-          if (newId) {
-            await storage.updateMonitoringStatus({ isActive: true, webhookId: newId });
-            results.helius = { success: true, message: `Recreated webhook at ${webhookUrl.split("?")[0]}` };
-          } else {
-            results.helius = { success: false, message: "Failed to recreate webhook" };
-          }
-        }
-      } else if (status?.isActive || walletAddresses.length > 0) {
-        // No webhookId but monitoring should be active or we have wallets - create new
-        const newId = await createWebhook(webhookUrl, walletAddresses);
-        if (newId) {
-          await storage.updateMonitoringStatus({ isActive: true, webhookId: newId });
-          results.helius = { success: true, message: `Created new webhook at ${webhookUrl.split("?")[0]}` };
-        } else {
-          results.helius = { success: false, message: "Failed to create webhook" };
-        }
+      for (const addr of walletAddresses) {
+        addSignalWallet(addr);
+      }
+      await syncWebhookAddresses();
+      
+      const stats = getRegistryStats();
+      const webhookId = getUnifiedWebhookId();
+      if (webhookId) {
+        await storage.updateMonitoringStatus({ isActive: walletAddresses.length > 0, webhookId });
+        results.helius = { success: true, message: `Unified webhook synced: ${stats.total} addresses (${stats.signalWallets} signal, ${stats.whaleWallets} whale_active, ${stats.whaleWatchWallets} whale_watch)` };
+      } else if (walletAddresses.length === 0 && stats.total === 0) {
+        results.helius = { success: true, message: "No addresses to monitor" };
       } else {
-        results.helius = { success: true, message: "No active monitoring - no update needed" };
+        results.helius = { success: false, message: "Failed to sync unified webhook" };
       }
     } catch (error: any) {
       results.helius = { success: false, message: error.message || "Helius sync failed" };
@@ -8274,51 +8239,26 @@ async function attemptWebhookCreation(fullUrl: string, uniqueAddresses: string[]
 function startMonitoringRetryLoop() {
   if (monitoringRetryTimer) return;
   const RETRY_INTERVAL = 5 * 60 * 1000;
-  console.log("[Monitoring] Starting background retry (every 5min) until webhook is created");
+  console.log("[Monitoring] Starting background retry (every 5min) until unified webhook is created");
   monitoringRetryTimer = setInterval(async () => {
     try {
-      const status = await storage.getMonitoringStatus();
-      if (status.isActive && status.webhookId) {
-        console.log("[Monitoring] Webhook now active, stopping background retry");
+      const { getUnifiedWebhookId, syncWebhookAddresses } = await import("./unified-webhook");
+      if (getUnifiedWebhookId()) {
+        console.log("[Monitoring] Unified webhook now active, stopping background retry");
         if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
+        stopPollingFallback();
         return;
       }
-      const allWallets = await storage.getAllMonitoredWallets();
-      const uniqueAddresses = [...new Set(allWallets.filter(w => w.enabled).map(w => w.walletAddress))];
-      if (uniqueAddresses.length === 0) {
-        console.log("[Monitoring] No enabled wallets, stopping background retry");
-        if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
-        return;
-      }
-      const currentUrl = getWebhookUrl();
-      const webhookSecret = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
-      const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
-
-      console.log(`[Monitoring] Background retry: cleanup stale webhooks first...`);
-      const { cleaned, reusable } = await cleanupStaleWebhooks(currentUrl);
-
-      if (reusable) {
-        console.log(`[Monitoring] Background retry: reusing webhook ${reusable}, updating wallets...`);
-        const updated = await updateWebhookUrl(reusable, fullUrl, uniqueAddresses);
-        if (updated) {
-          await storage.updateMonitoringStatus({ isActive: true, webhookId: reusable });
-          console.log("[Monitoring] Background retry succeeded via reuse, webhook active:", reusable);
-          if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
-          stopPollingFallback();
-          return;
-        }
-      }
-
-      console.log(`[Monitoring] Background retry: creating webhook for ${uniqueAddresses.length} wallet(s) -> ${currentUrl}`);
-      const webhookId = await createWebhook(fullUrl, uniqueAddresses);
-      if (webhookId) {
+      console.log("[Monitoring] Background retry: syncing unified webhook...");
+      await syncWebhookAddresses();
+      if (getUnifiedWebhookId()) {
+        const webhookId = getUnifiedWebhookId()!;
         await storage.updateMonitoringStatus({ isActive: true, webhookId });
-        console.log("[Monitoring] Background retry succeeded, webhook active:", webhookId);
+        console.log("[Monitoring] Background retry succeeded, unified webhook active:", webhookId);
         if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
         stopPollingFallback();
       } else {
-        console.warn("[Monitoring] Background retry failed, will try again in 5min");
-        startPollingFallback();
+        console.warn("[Monitoring] Background retry: unified webhook sync failed, will retry in 5min");
       }
     } catch (error) {
       console.error("[Monitoring] Background retry error:", error);
@@ -8335,59 +8275,25 @@ async function restoreMonitoring() {
     const walletAddresses = allWallets.filter(w => w.enabled).map(w => w.walletAddress);
     const uniqueAddresses = [...new Set(walletAddresses)];
 
-    if (uniqueAddresses.length === 0) {
-      if (status.isActive && status.webhookId) {
-        console.log("[Monitoring] No enabled wallets, deactivating");
-        await deleteWebhook(status.webhookId);
-        await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
-      }
-      console.log("[Monitoring] Cleaning up any orphaned webhooks...");
-      await cleanupStaleWebhooks(getWebhookUrl());
-      return;
-    }
-
-    const currentUrl = getWebhookUrl();
-    const webhookSecret = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
-    const fullUrl = `${currentUrl}?secret=${webhookSecret}`;
-    console.log(`[Monitoring] Webhook URL: ${currentUrl}, wallets: ${uniqueAddresses.length}`);
-
     console.log("[Monitoring] Step 1: Cleaning up stale/orphaned webhooks...");
-    const { cleaned, reusable } = await cleanupStaleWebhooks(currentUrl, status.webhookId || undefined);
+    const { cleaned } = await cleanupStaleWebhooks(getWebhookUrl());
     if (cleaned > 0) {
       console.log(`[Monitoring] Cleaned ${cleaned} stale webhook(s)`);
     }
 
-    if (status.isActive && status.webhookId) {
-      console.log("[Monitoring] Step 2: Was active, updating existing webhook...");
-      const updated = await updateWebhookUrl(status.webhookId, fullUrl, uniqueAddresses);
-      if (updated) {
-        console.log("[Monitoring] Webhook updated successfully");
-        return;
-      }
-      console.log("[Monitoring] Update failed (webhook may be invalid), will try reuse or recreate...");
-    }
+    const { initializeUnifiedWebhook, getUnifiedWebhookId, getRegistryStats } = await import("./unified-webhook");
+    const existingUnifiedId = getUnifiedWebhookId();
+    await initializeUnifiedWebhook(uniqueAddresses, existingUnifiedId || undefined);
+    
+    const webhookId = getUnifiedWebhookId();
+    const stats = getRegistryStats();
+    console.log(`[Monitoring] Unified webhook active: ${webhookId}, ${stats.total} addresses (signal=${stats.signalWallets}, whale_active=${stats.whaleWallets}, whale_watch=${stats.whaleWatchWallets}, paper=${stats.paperTokens})`);
 
-    if (reusable && reusable !== status.webhookId) {
-      console.log(`[Monitoring] Step 2b: Trying to reuse webhook ${reusable}...`);
-      const updated = await updateWebhookUrl(reusable, fullUrl, uniqueAddresses);
-      if (updated) {
-        await storage.updateMonitoringStatus({ isActive: true, webhookId: reusable });
-        console.log("[Monitoring] Reused existing webhook:", reusable);
-        return;
-      }
-      console.log("[Monitoring] Reuse failed, will create new...");
-    }
-
-    console.log(`[Monitoring] Step 3: Creating new webhook for ${uniqueAddresses.length} wallet(s)...`);
-    const newWebhookId = await attemptWebhookCreation(fullUrl, uniqueAddresses);
-    if (newWebhookId) {
-      await storage.updateMonitoringStatus({ isActive: true, webhookId: newWebhookId });
-      console.log("[Monitoring] Webhook created and active:", newWebhookId);
-    } else {
-      console.error("[Monitoring] All webhook creation attempts failed");
-      await storage.updateMonitoringStatus({ isActive: false, webhookId: undefined });
-      startMonitoringRetryLoop();
-      startPollingFallback();
+    if (uniqueAddresses.length > 0 && webhookId) {
+      await storage.updateMonitoringStatus({ isActive: true, webhookId });
+    } else if (uniqueAddresses.length === 0) {
+      console.log("[Monitoring] No enabled signal wallets, monitoring inactive");
+      await storage.updateMonitoringStatus({ isActive: false, webhookId: webhookId || undefined });
     }
   } catch (error) {
     console.error("[Monitoring] Error restoring monitoring:", error);
