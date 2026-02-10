@@ -8,7 +8,7 @@ import { emit } from "./discovery-event-bus";
 
 const GECKO_BASE_URL = "https://api.geckoterminal.com/api/v2";
 const HIGH_PRIORITY_INTERVAL_MS = 6000;
-const LOW_PRIORITY_INTERVAL_MS = 6000;
+const LOW_PRIORITY_INTERVAL_MS = 3000;
 const MAX_CALLS_PER_MINUTE = 25;
 const LOW_PRIORITY_QUEUE_MAX = 500;
 
