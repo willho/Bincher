@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { paperPositions, holdings } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
-import { createWebhook, updateWebhookUrl, deleteWebhook, getWebhookUrl } from "./helius";
+import { createWebhook, updateWebhookUrl, deleteWebhook, getWebhookUrl, getWebhooks } from "./helius";
 
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "helius-swap-monitor-secret";
 const MAX_TIER1_TOKENS = 100;
@@ -213,9 +213,45 @@ export async function syncWebhookAddresses(): Promise<void> {
       webhookDirty = false;
       const counts = getAddressCounts();
       console.log(`[UnifiedWebhook] Updated webhook with ${allAddresses.length} addresses: ${counts}`);
+      return;
     } else {
-      console.warn("[UnifiedWebhook] Failed to update webhook, will retry on next sync");
-      unifiedWebhookId = null;
+      console.warn("[UnifiedWebhook] Failed to update webhook, keeping ID for retry (rate limited?)");
+      return;
+    }
+  }
+
+  if (!unifiedWebhookId) {
+    try {
+      const { getWebhooksOnNetwork } = await import("./helius");
+      const mainnetWebhooks = await getWebhooksOnNetwork("mainnet");
+      const devnetWebhooks = await getWebhooksOnNetwork("devnet");
+      const allExisting = [...mainnetWebhooks, ...devnetWebhooks];
+      console.log(`[UnifiedWebhook] Found ${mainnetWebhooks.length} mainnet + ${devnetWebhooks.length} devnet webhooks`);
+      
+      if (allExisting.length > 0) {
+        const reusable = allExisting[0];
+        console.log(`[UnifiedWebhook] Reusing webhook ${reusable.webhookID} (url: ${(reusable.webhookURL || "").slice(0, 60)}...)`);
+        const updated = await updateWebhookUrl(reusable.webhookID, webhookUrl, allAddresses);
+        if (updated) {
+          unifiedWebhookId = reusable.webhookID;
+          webhookDirty = false;
+          const counts = getAddressCounts();
+          console.log(`[UnifiedWebhook] Reused webhook ${reusable.webhookID} with ${allAddresses.length} addresses: ${counts}`);
+
+          for (let i = 1; i < allExisting.length; i++) {
+            await deleteWebhook(allExisting[i].webhookID);
+            console.log(`[UnifiedWebhook] Cleaned up extra webhook ${allExisting[i].webhookID}`);
+          }
+        } else {
+          console.warn(`[UnifiedWebhook] Failed to update existing webhook ${reusable.webhookID}, deleting and recreating...`);
+          await deleteWebhook(reusable.webhookID);
+          for (let i = 1; i < allExisting.length; i++) {
+            await deleteWebhook(allExisting[i].webhookID);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[UnifiedWebhook] Error listing existing webhooks:", err);
     }
   }
 
@@ -227,7 +263,7 @@ export async function syncWebhookAddresses(): Promise<void> {
       const counts = getAddressCounts();
       console.log(`[UnifiedWebhook] Created webhook ${newId} with ${allAddresses.length} addresses: ${counts}`);
     } else {
-      console.error("[UnifiedWebhook] Failed to create webhook");
+      console.error("[UnifiedWebhook] Failed to create webhook (max usage reached? Check if another deployment is using the same API key)");
     }
   }
 }
@@ -246,6 +282,7 @@ export async function initializeUnifiedWebhook(
 ): Promise<void> {
   if (existingWebhookId) {
     unifiedWebhookId = existingWebhookId;
+    console.log(`[UnifiedWebhook] Restoring saved webhook ID: ${existingWebhookId}`);
   }
 
   for (const wallet of signalWallets) {
@@ -290,6 +327,25 @@ export async function initializeUnifiedWebhook(
   await syncWebhookAddresses();
 
   console.log(`[UnifiedWebhook] Initialized: ${signalWallets.length} signal wallets, ${realTokenMints.length} real tokens, ${addedPaperTokens} paper tokens`);
+
+  if (webhookDirty) {
+    console.log("[UnifiedWebhook] Webhook sync pending (rate limited?), scheduling retries (30s, 60s, 120s)...");
+    const retryDelays = [30_000, 60_000, 120_000];
+    for (const delay of retryDelays) {
+      setTimeout(async () => {
+        if (!webhookDirty) return;
+        console.log(`[UnifiedWebhook] Retry sync after ${delay / 1000}s...`);
+        await syncWebhookAddresses();
+        if (!webhookDirty) {
+          console.log(`[UnifiedWebhook] Retry succeeded! Webhook synced: ${unifiedWebhookId}`);
+          const { storage } = await import("./storage");
+          if (unifiedWebhookId) {
+            await storage.updateMonitoringStatus({ isActive: true, webhookId: unifiedWebhookId });
+          }
+        }
+      }, delay);
+    }
+  }
 }
 
 export function getUnifiedWebhookId(): string | null {

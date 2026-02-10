@@ -8297,14 +8297,8 @@ async function restoreMonitoring() {
     const walletAddresses = allWallets.filter(w => w.enabled).map(w => w.walletAddress);
     const uniqueAddresses = [...new Set(walletAddresses)];
 
-    console.log("[Monitoring] Step 1: Cleaning up stale/orphaned webhooks...");
-    const { cleaned } = await cleanupStaleWebhooks(getWebhookUrl());
-    if (cleaned > 0) {
-      console.log(`[Monitoring] Cleaned ${cleaned} stale webhook(s)`);
-    }
-
     const { initializeUnifiedWebhook, getUnifiedWebhookId, getRegistryStats } = await import("./unified-webhook");
-    const existingUnifiedId = getUnifiedWebhookId();
+    const existingUnifiedId = getUnifiedWebhookId() || status.webhookId;
     await initializeUnifiedWebhook(uniqueAddresses, existingUnifiedId || undefined);
     
     const webhookId = getUnifiedWebhookId();

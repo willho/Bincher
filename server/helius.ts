@@ -546,7 +546,11 @@ export async function getWebhooksOnNetwork(network: "mainnet" | "devnet"): Promi
   try {
     const apiBase = network === "devnet" ? "https://api-devnet.helius.xyz" : "https://api.helius.xyz";
     const response = await fetch(`${apiBase}/v0/webhooks?api-key=${HELIUS_API_KEY}`);
-    if (!response.ok) return [];
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      console.warn(`[WebhookList] ${network} returned ${response.status}: ${body.slice(0, 200)}`);
+      return [];
+    }
     return await response.json();
   } catch (error) {
     console.error(`Error fetching webhooks on ${network}:`, error);
