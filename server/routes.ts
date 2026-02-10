@@ -5507,11 +5507,17 @@ export async function registerRoutes(
               
               if (recentSwaps.length > 0) {
                 const tradeLines = recentSwaps.map(s => {
-                  const isBuy = s.toToken !== SOL_MINT;
-                  const symbol = isBuy ? s.toTokenSymbol : s.fromTokenSymbol;
-                  const solAmt = isBuy ? s.fromAmount : s.toAmount;
+                  const fromIsBase = isBaseCurrency(s.fromToken || '');
+                  const toIsBase = isBaseCurrency(s.toToken || '');
+                  const isBuy = fromIsBase && !toIsBase;
+                  const isSell = !fromIsBase && toIsBase;
+                  const action = isBuy ? 'BUY' : isSell ? 'SELL' : (s.fromToken === s.toToken ? 'UNKNOWN' : 'SWAP');
+                  const symbol = isBuy ? s.toTokenSymbol : isSell ? s.fromTokenSymbol : (s.toTokenSymbol || s.fromTokenSymbol);
+                  const baseAmt = isBuy ? s.fromAmount : isSell ? s.toAmount : s.fromAmount;
+                  const baseSymbol = isBuy ? (isBaseCurrencySymbol(s.fromTokenSymbol || '') ? s.fromTokenSymbol : 'SOL') 
+                    : isSell ? (isBaseCurrencySymbol(s.toTokenSymbol || '') ? s.toTokenSymbol : 'SOL') : 'SOL';
                   const date = new Date((s.timestamp || 0) * 1000).toLocaleDateString();
-                  return `  ${isBuy ? 'BUY' : 'SELL'} ${symbol || '???'} for ${solAmt ? parseFloat(solAmt).toFixed(3) : '?'} SOL (${date})`;
+                  return `  ${action} ${symbol || '???'} for ${baseAmt ? parseFloat(baseAmt).toFixed(3) : '?'} ${baseSymbol} (${date})`;
                 });
                 contextParts.push(`Recent trades:\n${tradeLines.join('\n')}`);
               } else {

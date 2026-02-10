@@ -1000,21 +1000,26 @@ function parseSwapFromHeliusTransaction(tx: any, walletAddress: string): InsertS
     // Check token transfers
     for (const transfer of tokenTransfers) {
       if (transfer.fromUserAccount === walletAddress) {
-        // Token going out
         fromToken = transfer.mint;
         fromAmount = transfer.tokenAmount;
-        fromSymbol = transfer.tokenStandard === "Fungible" ? (transfer.symbol || "???") : "???";
+        const knownSymbol = getTokenSymbol(transfer.mint);
+        fromSymbol = knownSymbol && !knownSymbol.includes("...") ? knownSymbol
+          : transfer.tokenStandard === "Fungible" ? (transfer.symbol || "???") : "???";
       }
       if (transfer.toUserAccount === walletAddress) {
-        // Token coming in
         toToken = transfer.mint;
         toAmount = transfer.tokenAmount;
-        toSymbol = transfer.tokenStandard === "Fungible" ? (transfer.symbol || "???") : "???";
+        const knownSymbol = getTokenSymbol(transfer.mint);
+        toSymbol = knownSymbol && !knownSymbol.includes("...") ? knownSymbol
+          : transfer.tokenStandard === "Fungible" ? (transfer.symbol || "???") : "???";
       }
     }
     
-    // Need both from and to to be a valid swap
+    // Reject invalid swaps: need both sides, positive amounts, and different tokens
     if (!fromToken || !toToken || fromAmount <= 0 || toAmount <= 0) {
+      return null;
+    }
+    if (fromToken === toToken) {
       return null;
     }
     
