@@ -88,6 +88,15 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - Pass LP data through routes.ts enrichment + buildPoolFallback to frontend
 - Show LP burned/locked status on token page UI
 
+### Discovery Wallets Tab - Ranked Whale Wallets for Copy Trading
+- **Prerequisite**: Unification of scoring and trading style databases across `familiarWhales`, `signalWalletProfiles`, and `walletStrategies` — currently each table tracks wallet performance independently with different column sets and no shared style classification
+- Surface 3,000+ whale wallets from `familiarWhales` ranked by composite copy-trade score (success_rate, reliability_score, early_entry_count, tier_score, exit multipliers)
+- Classify strategy type on-the-fly from whale metrics: sniper (short hold + high multiplier), swing (longer hold), degen (high volume + low win rate), quality (high win rate + moderate hold) — `familiarWhales` has no `tradingStyle` column in DB, `signalWalletProfiles.tradingStyle` exists but is unpopulated
+- Add filter chips for monitoring tier (active/watch/all) and computed style (sniper/swing/degen/quality/all)
+- Clicking a wallet row navigates to signal wallets page (like token tab navigates to token page)
+- Show key metrics per row: win rate, total trades, hold time, style badge, composite score
+- Data available: 50 active, 200 watch, 2,959 archive whale wallets
+
 ## External Dependencies
 
 - **Helius**: Real-time Solana blockchain data, swap transaction webhooks, and dynamic priority fee estimation.
