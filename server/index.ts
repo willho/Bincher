@@ -80,6 +80,9 @@ app.use((req, res, next) => {
     const { startBatchedDexScreenerRefresh } = await import("./data-pool");
     startBatchedDexScreenerRefresh();
     
+    const { startIconScheduler } = await import("./icon-resolver");
+    startIconScheduler();
+    
     const { startCompressionScheduler } = await import("./storage-bucketing");
     startCompressionScheduler();
     

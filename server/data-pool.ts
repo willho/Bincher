@@ -80,6 +80,7 @@ export async function upsertTokenData(
     twitterMentions: number;
     telegramMentions: number;
     holderCount: number;
+    imageUrl: string;
   }>,
   source: string = 'backend',
   fetchedBy?: number
@@ -130,6 +131,10 @@ export async function upsertTokenData(
     if (data.holderCount !== undefined) {
       updateData.holderCount = data.holderCount;
       updateData.holderCountUpdatedAt = now;
+    }
+    if (data.imageUrl) {
+      updateData.imageUrl = data.imageUrl;
+      updateData.imageUrlFetchedAt = now;
     }
 
     const hadSocials = existing.hasTwitter || existing.hasTelegram || existing.hasWebsite;
@@ -241,6 +246,8 @@ export async function upsertTokenData(
     whaleContextUpdatedAt: null,
     holderCount: data.holderCount ?? null,
     holderCountUpdatedAt: data.holderCount ? now : null,
+    imageUrl: data.imageUrl ?? null,
+    imageUrlFetchedAt: data.imageUrl ? now : null,
   };
 
   memoryCache.setToken(tokenMint, newEntry, true);
@@ -840,6 +847,7 @@ async function fetchFromDexScreener(tokenMint: string): Promise<{
   priceChange24h?: number;
   pairAddress?: string;
   dexId?: string;
+  imageUrl?: string;
 } | null> {
   const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
   if (!response.ok) {
@@ -863,6 +871,7 @@ async function fetchFromDexScreener(tokenMint: string): Promise<{
     priceChange24h: pair.priceChange?.h24,
     pairAddress: pair.pairAddress,
     dexId: pair.dexId,
+    imageUrl: pair.info?.imageUrl || undefined,
   };
 }
 
@@ -1323,6 +1332,7 @@ export interface TokenPriceData {
   twitterUrl?: string;
   telegramUrl?: string;
   websiteUrl?: string;
+  imageUrl?: string;
 }
 
 export async function batchFetchFromDexScreener(tokenMints: string[]): Promise<Map<string, TokenPriceData>> {
@@ -1402,6 +1412,7 @@ export async function batchFetchFromDexScreener(tokenMints: string[]): Promise<M
         twitterUrl: twitterSocial?.url || undefined,
         telegramUrl: telegramSocial?.url || undefined,
         websiteUrl: websiteEntry?.url || undefined,
+        imageUrl: bestPair.info?.imageUrl || undefined,
       });
       
       batchRefreshState.tokensRefreshedToday++;
@@ -1458,6 +1469,7 @@ export async function refreshTokenBatch(): Promise<{ tokensRefreshed: number; ca
       twitterUrl: data.twitterUrl,
       telegramUrl: data.telegramUrl,
       websiteUrl: data.websiteUrl,
+      imageUrl: data.imageUrl,
     }, 'dexscreener_batch');
   }
   

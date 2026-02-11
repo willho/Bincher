@@ -5092,6 +5092,48 @@ export async function registerRoutes(
     }
   });
 
+  function buildPoolFallback(poolData: any) {
+    return {
+      tokenMint: poolData.tokenMint,
+      tokenSymbol: poolData.tokenSymbol,
+      tokenName: poolData.tokenName,
+      priceUsd: poolData.priceUsd,
+      marketCap: poolData.marketCap,
+      fdv: poolData.fdv,
+      liquidity: poolData.liquidity,
+      volume24h: poolData.volume24h,
+      priceChange24h: poolData.priceChange24h,
+      priceChange1h: poolData.priceChange1h || null,
+      priceChange6h: poolData.priceChange6h || null,
+      priceChange7d: poolData.priceChange7d || null,
+      pairCreatedAt: poolData.pairCreatedAt || null,
+      pairAddress: poolData.pairAddress || null,
+      holders: poolData.holderCount || null,
+      hasTwitter: poolData.hasTwitter || false,
+      hasTelegram: poolData.hasTelegram || false,
+      hasWebsite: poolData.hasWebsite || false,
+      twitterUrl: poolData.twitterUrl || null,
+      telegramUrl: poolData.telegramUrl || null,
+      websiteUrl: poolData.websiteUrl || null,
+      imageUrl: poolData.imageUrl || null,
+      isPumpfun: poolData.isPumpfun || false,
+      pumpfunGraduated: poolData.pumpfunGraduated || false,
+      pumpfunBondingCurveProgress: poolData.pumpfunBondingCurveProgress || null,
+      boostRank: poolData.boostRank || null,
+      trendingRank: poolData.trendingRank || null,
+      trendingSource: poolData.trendingSource || null,
+      discoverySource: poolData.discoverySource || null,
+      whaleHolderCount: poolData.whaleHolderCount || 0,
+      whaleAvgReputation: poolData.whaleAvgReputation || null,
+      whaleNetSentiment: poolData.whaleNetSentiment || null,
+      rugcheckData: poolData.rugcheckData || null,
+      deployerAddress: poolData.deployerAddress || null,
+      source: 'tokenDataPool',
+      lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
+      isFallback: true,
+    };
+  }
+
   app.get("/api/snapshots/token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const tokenMint = req.params.tokenMint as string;
@@ -5109,6 +5151,32 @@ export async function registerRoutes(
           if (poolData.hasTwitter) enriched.hasTwitter = true;
           if (poolData.hasTelegram) enriched.hasTelegram = true;
           if (poolData.hasWebsite) enriched.hasWebsite = true;
+          enriched.imageUrl = poolData.imageUrl || null;
+          if (!enriched.liquidity && poolData.liquidity) enriched.liquidity = poolData.liquidity;
+          if (!enriched.volume24h && poolData.volume24h) enriched.volume24h = poolData.volume24h;
+          if (!enriched.pairCreatedAt && poolData.pairCreatedAt) enriched.pairCreatedAt = poolData.pairCreatedAt;
+          enriched.priceChange1h = poolData.priceChange1h || null;
+          enriched.priceChange6h = poolData.priceChange6h || null;
+          enriched.priceChange7d = poolData.priceChange7d || null;
+          if (!enriched.holders && poolData.holderCount) enriched.holders = poolData.holderCount;
+          enriched.isPumpfun = poolData.isPumpfun || false;
+          enriched.pumpfunGraduated = poolData.pumpfunGraduated || false;
+          enriched.pumpfunBondingCurveProgress = poolData.pumpfunBondingCurveProgress || null;
+          enriched.boostRank = poolData.boostRank || null;
+          enriched.trendingRank = poolData.trendingRank || null;
+          enriched.trendingSource = poolData.trendingSource || null;
+          enriched.discoverySource = poolData.discoverySource || null;
+          enriched.whaleHolderCount = poolData.whaleHolderCount || 0;
+          enriched.whaleAvgReputation = poolData.whaleAvgReputation || null;
+          enriched.whaleNetSentiment = poolData.whaleNetSentiment || null;
+          enriched.rugcheckData = poolData.rugcheckData || null;
+          enriched.deployerAddress = poolData.deployerAddress || null;
+          try {
+            const { queueIconLookup } = await import("./icon-resolver");
+            if (!poolData.imageUrl) {
+              queueIconLookup(tokenMint, 'ui').catch(() => {});
+            }
+          } catch {}
         }
         return res.json(enriched);
       }
@@ -5140,50 +5208,10 @@ export async function registerRoutes(
             return res.json(newSnapshot);
           }
           // Snapshot created but couldn't be retrieved — return pool data
-          return res.json({
-            tokenMint: poolData.tokenMint,
-            tokenSymbol: poolData.tokenSymbol,
-            tokenName: poolData.tokenName,
-            priceUsd: poolData.priceUsd,
-            marketCap: poolData.marketCap,
-            fdv: poolData.fdv,
-            liquidity: poolData.liquidity,
-            volume24h: poolData.volume24h,
-            priceChange24h: poolData.priceChange24h,
-            holders: poolData.holderCount || null,
-            hasTwitter: poolData.hasTwitter || false,
-            hasTelegram: poolData.hasTelegram || false,
-            hasWebsite: poolData.hasWebsite || false,
-            twitterUrl: poolData.twitterUrl || null,
-            telegramUrl: poolData.telegramUrl || null,
-            websiteUrl: poolData.websiteUrl || null,
-            source: 'tokenDataPool',
-            isFallback: true,
-          });
+          return res.json(buildPoolFallback(poolData));
         } catch (createErr) {
           console.warn("[Snapshots] Failed to auto-create snapshot from pool:", createErr);
-          return res.json({
-            tokenMint: poolData.tokenMint,
-            tokenSymbol: poolData.tokenSymbol,
-            tokenName: poolData.tokenName,
-            priceUsd: poolData.priceUsd,
-            marketCap: poolData.marketCap,
-            fdv: poolData.fdv,
-            liquidity: poolData.liquidity,
-            volume24h: poolData.volume24h,
-            priceChange24h: poolData.priceChange24h,
-            pairAddress: poolData.pairAddress || null,
-            holders: poolData.holderCount || null,
-            hasTwitter: poolData.hasTwitter || false,
-            hasTelegram: poolData.hasTelegram || false,
-            hasWebsite: poolData.hasWebsite || false,
-            twitterUrl: poolData.twitterUrl || null,
-            telegramUrl: poolData.telegramUrl || null,
-            websiteUrl: poolData.websiteUrl || null,
-            source: 'tokenDataPool',
-            lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
-            isFallback: true,
-          });
+          return res.json(buildPoolFallback(poolData));
         }
       }
       

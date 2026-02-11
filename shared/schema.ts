@@ -2272,6 +2272,10 @@ export const tokenDataPool = pgTable("token_data_pool", {
   
   holderCount: integer("holder_count"),
   holderCountUpdatedAt: integer("holder_count_updated_at"),
+  
+  // Token image
+  imageUrl: text("image_url"),
+  imageUrlFetchedAt: integer("image_url_fetched_at"),
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });

@@ -2,7 +2,7 @@ import { db } from "./db";
 import { apiUsage, apiBudgetConfig } from "@shared/schema";
 import { eq, and, gte, sql } from "drizzle-orm";
 
-export type ApiService = "helius" | "dexscreener" | "openai" | "geckoterminal";
+export type ApiService = "helius" | "dexscreener" | "openai" | "geckoterminal" | "jupiter";
 
 interface ServiceRateLimits {
   perMinute: number;
@@ -15,6 +15,7 @@ const RATE_LIMITS: Record<ApiService, ServiceRateLimits> = {
   dexscreener: { perMinute: 300, dailyCap: 0, monthlyCap: 0 },
   helius: { perMinute: 600, dailyCap: 0, monthlyCap: 1_000_000 },
   openai: { perMinute: 60, dailyCap: 250, monthlyCap: 5000 },
+  jupiter: { perMinute: 10, dailyCap: 50, monthlyCap: 0 },
 };
 
 interface PerMinuteTracker {
