@@ -136,6 +136,27 @@ async function scoreBatchWithAI(tokens: TokenRow[]): Promise<AIScoreResult[]> {
     await Promise.all(indicatorPromises);
   } catch {}
 
+  const vectorMatchMap = new Map<string, string>();
+  try {
+    const { scoreTokenAgainstCluster } = await import("./indicator-vectors");
+    const { strategyClusters: scTable } = await import("@shared/schema");
+    const clusters = await db.select({ clusterId: scTable.clusterId }).from(scTable).limit(10);
+    for (const t of tokens.slice(0, 10)) {
+      let bestMatch = 0;
+      let bestCluster = "";
+      for (const c of clusters) {
+        const result = await scoreTokenAgainstCluster(t.tokenMint, c.clusterId);
+        if (result && result.match > bestMatch) {
+          bestMatch = result.match;
+          bestCluster = c.clusterId.replace("cluster_", "").slice(0, 12);
+        }
+      }
+      if (bestMatch > 0) {
+        vectorMatchMap.set(t.tokenMint, `VM${Math.round(bestMatch)}(${bestCluster})`);
+      }
+    }
+  } catch {}
+
   const rows = tokens.map((t) => {
     const socials: string[] = [];
     if (t.hasTwitter) socials.push("TW");
@@ -153,13 +174,17 @@ async function scoreBatchWithAI(tokens: TokenRow[]): Promise<AIScoreResult[]> {
       : "0w";
 
     const indStr = indicatorMap.get(t.tokenMint) || "N/A";
+    const vmStr = vectorMatchMap.get(t.tokenMint) || "";
+    const indFull = vmStr ? `${indStr} ${vmStr}` : indStr;
 
-    return `${t.tokenSymbol || "?"} | ${t.tokenMint} | ${formatNumber(t.priceUsd)} | ${formatNumber(t.marketCap)} | ${formatNumber(t.liquidity)} | ${formatNumber(t.volume24h)} | ${formatPct(t.priceChange1h)} | ${formatPct(t.priceChange6h)} | ${formatPct(t.priceChange24h)} | ${socialStr} | ${ageHrs} | ${whaleStr} | ${indStr}`;
+    return `${t.tokenSymbol || "?"} | ${t.tokenMint} | ${formatNumber(t.priceUsd)} | ${formatNumber(t.marketCap)} | ${formatNumber(t.liquidity)} | ${formatNumber(t.volume24h)} | ${formatPct(t.priceChange1h)} | ${formatPct(t.priceChange6h)} | ${formatPct(t.priceChange24h)} | ${socialStr} | ${ageHrs} | ${whaleStr} | ${indFull}`;
   });
 
   const prompt = `You are a Solana token quality analyst. Score each token 0-100 based on fundamentals quality (NOT hype). Consider: liquidity depth, volume-to-liquidity ratio, price trend health, social presence, token age, crash risk, whale holder context, and technical indicator signals (RSI, MACD, EMA crosses).
 
 WHALE column format: Xw(+/-Y) where X = number of known whales holding, Y = net sentiment (positive = reputable whales dominate, negative = sketchy whales dominate). Good whales holding a token is a positive signal. Sketchy whales (negative sentiment) is a red flag but not disqualifying — one bad whale shouldn't ruin an otherwise solid token.
+
+INDICATORS column may include VMxx(cluster) = vector match score showing how well current indicators align with historically winning entry patterns for that strategy cluster. Higher VM = better indicator alignment with past winners.
 
 For each token, respond with ONLY a JSON array of objects:
 [{"mint": "...", "score": 0-100, "verdict": "one-line assessment max 60 chars", "confidence": "low|medium|high"}]

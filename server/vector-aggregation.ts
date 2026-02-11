@@ -440,6 +440,16 @@ export async function run8HourAggregation(): Promise<{
     console.error("[VectorAggregation] Discovery processing failed:", err);
   }
   
+  let indicatorUpdates = 0;
+  let indicatorSnapshots = 0;
+  try {
+    const { processIndicatorVectorUpdates, snapshotActivePositions } = await import("./indicator-vectors");
+    indicatorUpdates = await processIndicatorVectorUpdates(bucketId);
+    indicatorSnapshots = await snapshotActivePositions();
+  } catch (err) {
+    console.error("[VectorAggregation] Indicator vector processing failed:", err);
+  }
+
   let heatFactorUpdates = 0;
   try {
     const { processHeatFactorUpdates } = await import("./heat-score");
@@ -498,7 +508,7 @@ export async function run8HourAggregation(): Promise<{
     console.error("[VectorAggregation] Insight decay failed:", err);
   }
   
-  console.log(`[VectorAggregation] Processed: routes=${routeUpdates}, strategies=${strategyUpdates}, behavior=${behaviorUpdates}, discovery=${discoveryUpdates}, heat=${heatFactorUpdates}`);
+  console.log(`[VectorAggregation] Processed: routes=${routeUpdates}, strategies=${strategyUpdates}, behavior=${behaviorUpdates}, indicators=${indicatorUpdates}/${indicatorSnapshots}snap, discovery=${discoveryUpdates}, heat=${heatFactorUpdates}`);
   
   return {
     routeUpdates,

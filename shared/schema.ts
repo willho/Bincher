@@ -3812,3 +3812,54 @@ export const socialCalls = pgTable("social_calls", {
 export const insertSocialCallSchema = createInsertSchema(socialCalls).omit({ id: true });
 export type SocialCall = typeof socialCalls.$inferSelect;
 export type InsertSocialCall = z.infer<typeof insertSocialCallSchema>;
+
+export const indicatorSnapshots = pgTable("indicator_snapshots", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+  positionId: integer("position_id"),
+  snapshotType: text("snapshot_type").notNull(),
+  timeframe: text("timeframe").default("1h"),
+  rsi: real("rsi"),
+  macdHistogram: real("macd_histogram"),
+  emaCrossSignal: text("ema_cross_signal"),
+  bollingerPosition: text("bollinger_position"),
+  bollingerBandwidth: real("bollinger_bandwidth"),
+  obvTrend: text("obv_trend"),
+  stochasticK: real("stochastic_k"),
+  compositeScore: real("composite_score"),
+  compositeBias: text("composite_bias"),
+  priceAtSnapshot: real("price_at_snapshot"),
+  bucketId: text("bucket_id").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export const insertIndicatorSnapshotSchema = createInsertSchema(indicatorSnapshots).omit({ id: true });
+export type IndicatorSnapshot = typeof indicatorSnapshots.$inferSelect;
+export type InsertIndicatorSnapshot = z.infer<typeof insertIndicatorSnapshotSchema>;
+
+export const indicatorVectors = pgTable("indicator_vectors", {
+  id: serial("id").primaryKey(),
+  clusterId: text("cluster_id").notNull(),
+  vectorType: text("vector_type").notNull(),
+  optimalRsiLow: real("optimal_rsi_low").default(25),
+  optimalRsiHigh: real("optimal_rsi_high").default(45),
+  optimalMacdHistogramMin: real("optimal_macd_histogram_min").default(-0.001),
+  preferredEmaCross: text("preferred_ema_cross").default("bullish"),
+  preferredBollingerPosition: text("preferred_bollinger_position").default("below"),
+  optimalBandwidthMin: real("optimal_bandwidth_min").default(0.02),
+  optimalBandwidthMax: real("optimal_bandwidth_max").default(0.15),
+  preferredObvTrend: text("preferred_obv_trend").default("accumulating"),
+  optimalStochKLow: real("optimal_stoch_k_low").default(15),
+  optimalStochKHigh: real("optimal_stoch_k_high").default(40),
+  optimalCompositeMin: real("optimal_composite_min").default(55),
+  winCount: integer("win_count").default(0),
+  lossCount: integer("loss_count").default(0),
+  sampleCount: integer("sample_count").default(0),
+  confidence: real("confidence").default(0.5),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
+export const insertIndicatorVectorSchema = createInsertSchema(indicatorVectors).omit({ id: true });
+export type IndicatorVector = typeof indicatorVectors.$inferSelect;
+export type InsertIndicatorVector = z.infer<typeof insertIndicatorVectorSchema>;

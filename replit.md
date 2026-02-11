@@ -71,6 +71,7 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - **Unified Webhook Manager**: Single Helius webhook with priority routing handles signal wallets (P1), real positions (P2), paper positions (P3), whale activity (P4). Server-side address registry supports 100k+ addresses with priority-based classification. Managed by `unified-webhook.ts`.
 - **Discovery Source Tracking**: Tags tokens and positions with discovery source (whale, signal_wallet, event_bus, trending, boosted). Aggregates paper trade outcomes per source to measure which discovery channels produce the best results.
 - **Cluster-Whale Enrichment**: Cluster detection enriched with whale reputation data from familiar_whales, providing whale overlap percentage and average reputation scores per cluster.
+- **Indicator Vectors for Pattern Learning**: Snapshots technical indicators (RSI, MACD, EMA, Bollinger, OBV, Stochastic, composite score) at trade entry/exit points and periodically for open positions. Correlates indicator patterns with trade outcomes per strategy cluster via adaptive dampening and nudge vectors. Produces learned optimal indicator ranges per cluster (e.g., optimal RSI entry range, preferred EMA cross direction). Integrated into AI batch scoring (vector match score), AI chat context, and strategy cluster analysis. Processed during 8-hour aggregation cycles. Managed by `indicator-vectors.ts`.
 
 ## External Dependencies
 

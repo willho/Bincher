@@ -45,7 +45,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs, tokenDataPool, walletStrategies, discoveryEvents, systemInsights } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs, tokenDataPool, walletStrategies, discoveryEvents, systemInsights, strategyClusters } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like, inArray, count, asc } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -6750,6 +6750,41 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting discovery stats:", error);
       res.status(500).json({ error: "Failed to get discovery stats" });
+    }
+  });
+
+  app.get("/api/indicator-vectors/stats", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getIndicatorVectorStats } = await import("./indicator-vectors");
+      const stats = await getIndicatorVectorStats();
+      res.json(stats);
+    } catch (error) {
+      console.error("Error getting indicator vector stats:", error);
+      res.status(500).json({ error: "Failed to get indicator vector stats" });
+    }
+  });
+
+  app.get("/api/indicator-vectors/score/:tokenMint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { scoreTokenAgainstCluster } = await import("./indicator-vectors");
+      const { tokenMint } = req.params;
+      const clusterId = req.query.clusterId as string;
+
+      if (!clusterId) {
+        const clusters = await db.select({ clusterId: strategyClusters.clusterId }).from(strategyClusters).limit(10);
+        const results: Record<string, any> = {};
+        for (const c of clusters) {
+          const score = await scoreTokenAgainstCluster(tokenMint, c.clusterId);
+          if (score) results[c.clusterId] = score;
+        }
+        res.json({ tokenMint, clusterScores: results });
+      } else {
+        const score = await scoreTokenAgainstCluster(tokenMint, clusterId);
+        res.json({ tokenMint, clusterId, score });
+      }
+    } catch (error) {
+      console.error("Error scoring token against cluster:", error);
+      res.status(500).json({ error: "Failed to score token" });
     }
   });
 

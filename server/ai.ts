@@ -4646,7 +4646,6 @@ export async function chatWithAI(
     // Insight bus not critical, continue without it
   }
   
-  // Add technical indicators if discussing a specific token
   if (tokenMint) {
     try {
       const { getIndicators, formatIndicatorsForAI } = await import("./technical-indicators");
@@ -4654,9 +4653,23 @@ export async function chatWithAI(
       if (indicators) {
         systemPrompt += `\n\nTECHNICAL ANALYSIS:\n${formatIndicatorsForAI(indicators)}\nReference these indicators when analyzing this token's momentum, entry/exit timing, and trend direction.`;
       }
-    } catch (err) {
-      // Non-critical
-    }
+    } catch (err) {}
+
+    try {
+      const { scoreTokenAgainstCluster } = await import("./indicator-vectors");
+      const scTable = (await import("@shared/schema")).strategyClusters;
+      const clusters = await db.select({ clusterId: scTable.clusterId, pattern: scTable.pattern }).from(scTable).limit(5);
+      const matches: string[] = [];
+      for (const c of clusters) {
+        const result = await scoreTokenAgainstCluster(tokenMint, c.clusterId);
+        if (result && result.match > 10) {
+          matches.push(`${c.pattern}: ${result.match.toFixed(0)}% match (${result.details})`);
+        }
+      }
+      if (matches.length > 0) {
+        systemPrompt += `\n\nINDICATOR PATTERN MATCH (learned from past trades):\n${matches.join("\n")}\nMention pattern matches when they're strong (>50%) as supporting evidence for entry/exit recommendations.`;
+      }
+    } catch (err) {}
   }
   
   // Check for pending trade and pending settings

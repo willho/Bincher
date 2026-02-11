@@ -78,6 +78,13 @@ export async function openPaperPosition(params: {
   
   console.log(`[PaperTrading] Opened position ${position.id}: ${params.entrySol} SOL ($${entryUsd.toFixed(2)}) -> ${entryTokens.toFixed(4)} ${params.tokenSymbol || params.tokenMint.slice(0, 8)}`);
   
+  try {
+    const { recordEntrySnapshot } = await import("./indicator-vectors");
+    await recordEntrySnapshot(params.tokenMint, position.id);
+  } catch (err) {
+    console.error("[PaperTrading] Indicator entry snapshot failed:", err);
+  }
+  
   return position;
 }
 
@@ -130,6 +137,15 @@ async function closePositionInternal(
       await recordPaperTradeOutcome(updated);
     } catch (err) {
       console.error("[PaperTrading] Failed to record paper trade outcome:", err);
+    }
+    
+    try {
+      const { recordExitSnapshot } = await import("./indicator-vectors");
+      const { assignWalletToCluster } = await import("./strategy-clusters");
+      const clusterId = updated.signalWallet ? await assignWalletToCluster(updated.signalWallet) : null;
+      await recordExitSnapshot(updated.tokenMint, positionId, realizedPnlPercent, clusterId || undefined);
+    } catch (err) {
+      console.error("[PaperTrading] Indicator exit snapshot failed:", err);
     }
   }
   
