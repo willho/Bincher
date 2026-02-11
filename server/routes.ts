@@ -45,8 +45,8 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs, tokenDataPool, walletStrategies, discoveryEvents, systemInsights, strategyClusters } from "@shared/schema";
-import { eq, and, or, isNotNull, desc, gte, sql, like, inArray, count, asc } from "drizzle-orm";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs, tokenDataPool, walletStrategies, discoveryEvents, systemInsights, strategyClusters, familiarWhales } from "@shared/schema";
+import { eq, and, or, isNotNull, desc, gte, sql, like, ilike, inArray, count, asc } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
 import { startSystemLogCleanup, logError, logInfo, logWarn, logSuccess, querySystemLogs, logWebhook, logErrorToTable, logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
@@ -7724,13 +7724,14 @@ export async function registerRoutes(
       const oneHourAgo = now - 3600;
 
       const [activeTokens] = await db.select({ count: count() }).from(tokenDataPool)
-        .where(and(eq(tokenDataPool.isActive, true), gte(tokenDataPool.updatedAt, oneDayAgo)));
+        .where(eq(tokenDataPool.isActive, true));
 
       const [strategyWallets] = await db.select({ count: count() }).from(walletStrategies)
         .where(eq(walletStrategies.userId, userId));
       const [monitoredCount] = await db.select({ count: count() }).from(monitoredWallets)
         .where(and(eq(monitoredWallets.userId, userId), eq(monitoredWallets.enabled, true)));
-      const trackedWalletCount = Math.max(Number(strategyWallets?.count ?? 0), Number(monitoredCount?.count ?? 0));
+      const [whaleCount] = await db.select({ count: count() }).from(familiarWhales);
+      const trackedWalletCount = Math.max(Number(strategyWallets?.count ?? 0), Number(monitoredCount?.count ?? 0)) + Number(whaleCount?.count ?? 0);
 
       const [eventsToday] = await db.select({ count: count() }).from(discoveryEvents)
         .where(gte(discoveryEvents.firedAt, oneDayAgo));
@@ -7768,6 +7769,77 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error getting discovery page stats:", error);
       res.status(500).json({ error: "Failed to get page stats" });
+    }
+  });
+
+  app.get("/api/discovery/search", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const q = ((req.query.q as string) || "").trim();
+      if (!q || q.length < 2) return res.json([]);
+
+      const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+      const isAddress = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(q);
+
+      let results: any[] = [];
+
+      const selectFields = {
+        tokenMint: tokenDataPool.tokenMint,
+        tokenSymbol: tokenDataPool.tokenSymbol,
+        tokenName: tokenDataPool.tokenName,
+        priceUsd: tokenDataPool.priceUsd,
+        marketCap: tokenDataPool.marketCap,
+        liquidity: tokenDataPool.liquidity,
+        volume24h: tokenDataPool.volume24h,
+        priceChange24h: tokenDataPool.priceChange24h,
+        boostRank: tokenDataPool.boostRank,
+        trendingRank: tokenDataPool.trendingRank,
+        isPumpfun: tokenDataPool.isPumpfun,
+        isActive: tokenDataPool.isActive,
+      };
+
+      if (isAddress) {
+        const exact = await db.select(selectFields).from(tokenDataPool)
+          .where(eq(tokenDataPool.tokenMint, q)).limit(1);
+
+        if (exact.length > 0) {
+          results = exact;
+        } else {
+          try {
+            const { fetchTokenWithFallback } = await import("./data-pool");
+            const fetched = await fetchTokenWithFallback(q, 600);
+            if (fetched && (fetched.tokenSymbol || fetched.tokenName)) {
+              results = [{
+                tokenMint: q,
+                tokenSymbol: fetched.tokenSymbol,
+                tokenName: fetched.tokenName,
+                priceUsd: fetched.priceUsd,
+                marketCap: fetched.marketCap,
+                liquidity: fetched.liquidity,
+                volume24h: fetched.volume24h,
+                priceChange24h: fetched.priceChange24h,
+                boostRank: null,
+                trendingRank: null,
+                isPumpfun: null,
+                isActive: true,
+                discovered: true,
+              }];
+            }
+          } catch {}
+        }
+      } else {
+        const pattern = `%${q}%`;
+        results = await db.select(selectFields).from(tokenDataPool).where(
+          or(
+            ilike(tokenDataPool.tokenSymbol, pattern),
+            ilike(tokenDataPool.tokenName, pattern)
+          )
+        ).orderBy(desc(tokenDataPool.volume24h)).limit(limit);
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Error searching discovery:", error);
+      res.status(500).json({ error: "Search failed" });
     }
   });
 

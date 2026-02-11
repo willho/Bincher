@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
   TrendingUp,
   Twitter,
   Wallet,
+  X,
   Zap,
 } from "lucide-react";
 
@@ -148,9 +149,169 @@ function formatMint(mint: string): string {
   return mint.slice(0, 4) + "..." + mint.slice(-4);
 }
 
+interface SearchResult {
+  tokenMint: string;
+  tokenSymbol: string | null;
+  tokenName: string | null;
+  priceUsd: number | null;
+  marketCap: number | null;
+  liquidity: number | null;
+  volume24h: number | null;
+  priceChange24h: number | null;
+  boostRank: number | null;
+  trendingRank: number | null;
+  isPumpfun: boolean | null;
+  isActive: boolean | null;
+  discovered?: boolean;
+}
+
+function DiscoverySearchBar() {
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [, navigate] = useLocation();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const { data: results, isLoading } = useQuery<SearchResult[]>({
+    queryKey: ["/api/discovery/search", debouncedQuery],
+    queryFn: async () => {
+      if (!debouncedQuery || debouncedQuery.length < 2) return [];
+      const res = await fetch(`/api/discovery/search?q=${encodeURIComponent(debouncedQuery)}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Search failed");
+      return res.json();
+    },
+    enabled: debouncedQuery.length >= 2,
+  });
+
+  const handleSelect = useCallback((mint: string) => {
+    setOpen(false);
+    setQuery("");
+    setDebouncedQuery("");
+    fetch(`/api/token/${mint}/touch`, { method: "PUT", credentials: "include" }).catch(() => {});
+    navigate(`/trading/${mint}`);
+  }, [navigate]);
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && results && results.length > 0) {
+      handleSelect(results[0].tokenMint);
+    }
+    if (e.key === "Escape") {
+      setOpen(false);
+      inputRef.current?.blur();
+    }
+  }, [results, handleSelect]);
+
+  return (
+    <div ref={containerRef} className="relative w-full max-w-xl">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => { if (query.length >= 2) setOpen(true); }}
+          onKeyDown={handleKeyDown}
+          placeholder="Search by token name, symbol, or paste address..."
+          className="w-full h-9 pl-9 pr-8 rounded-md border border-border bg-background text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          data-testid="input-discovery-search"
+        />
+        {query && (
+          <button
+            onClick={() => { setQuery(""); setDebouncedQuery(""); setOpen(false); }}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+            style={{ visibility: "visible" }}
+            data-testid="button-clear-search"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      {open && debouncedQuery.length >= 2 && (
+        <Card className="absolute z-50 w-full mt-1 max-h-80 overflow-auto">
+          <CardContent className="p-0">
+            {isLoading ? (
+              <div className="flex items-center justify-center gap-2 p-4">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Searching...</span>
+              </div>
+            ) : results && results.length > 0 ? (
+              <div className="divide-y">
+                {results.map((r) => (
+                  <div
+                    key={r.tokenMint}
+                    className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover-elevate"
+                    onClick={() => handleSelect(r.tokenMint)}
+                    data-testid={`search-result-${r.tokenMint}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">
+                          {r.tokenSymbol || "Unknown"}
+                        </span>
+                        {r.tokenName && r.tokenName !== r.tokenSymbol && (
+                          <span className="text-xs text-muted-foreground truncate">{r.tokenName}</span>
+                        )}
+                        {(r as any).discovered && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                            New
+                          </Badge>
+                        )}
+                        {r.trendingRank && (
+                          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                            <Flame className="h-3 w-3 mr-0.5 text-orange-500" />#{r.trendingRank}
+                          </Badge>
+                        )}
+                        {r.isPumpfun && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">PF</Badge>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-muted-foreground font-mono">{formatMint(r.tokenMint)}</span>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-sm font-mono">{formatPrice(r.priceUsd)}</div>
+                      {r.priceChange24h != null && (
+                        <span className={`text-xs font-mono ${r.priceChange24h >= 0 ? "text-green-500" : "text-red-500"}`}>
+                          {r.priceChange24h >= 0 ? "+" : ""}{r.priceChange24h.toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                No tokens found for "{debouncedQuery}"
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
 function StatsCards({ stats, isLoading }: { stats?: PageStats; isLoading: boolean }) {
   const statItems = [
-    { label: "Active Tokens", value: stats?.activeTokens ?? 0, icon: Target, color: "text-blue-500" },
+    { label: "Tokens Tracked", value: stats?.activeTokens ?? 0, icon: Target, color: "text-blue-500" },
     { label: "Tracked Wallets", value: stats?.trackedWallets ?? 0, icon: Wallet, color: "text-purple-500" },
     { label: "Events Today", value: stats?.eventsToday ?? 0, icon: Zap, color: "text-yellow-500" },
     { label: "Active Insights", value: stats?.activeInsights ?? 0, icon: Lightbulb, color: "text-green-500" },
@@ -541,6 +702,8 @@ export default function DiscoveryPage() {
           </div>
         )}
       </div>
+
+      <DiscoverySearchBar />
 
       <StatsCards stats={stats} isLoading={statsLoading} />
 
