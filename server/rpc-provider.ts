@@ -1,6 +1,6 @@
 import { Connection, PublicKey, ParsedTransactionWithMeta, GetProgramAccountsFilter } from "@solana/web3.js";
 import { getNetworkMode } from "./network-mode";
-import { recordRpcCall, isProviderExhausted } from "./budget-manager";
+import { recordRpcCall, isProviderExhausted, isDailyLimitReached } from "./budget-manager";
 import { logRpcCall } from "./rpc-usage-logger";
 
 export type RpcProvider = "chainstack" | "quicknode" | "helius";
@@ -72,6 +72,10 @@ async function shouldUseProvider(provider: RpcProvider): Promise<boolean> {
   if (provider === "quicknode" && !(await getQuicknodeRpcUrl())) {
     return false;
   }
+
+  if (isDailyLimitReached(provider)) {
+    return false;
+  }
   
   if (stats.lastErrorAt) {
     const timeSinceError = Date.now() - stats.lastErrorAt;
@@ -95,12 +99,10 @@ async function getPreferredProvider(operation?: string): Promise<RpcProvider> {
     if (await shouldUseProvider("helius")) {
       return "helius";
     }
+    if (isDailyLimitReached("helius")) {
+      throw new Error(`[RpcProvider] Helius daily limit reached (${operation}) — blocking call`);
+    }
     console.warn("[RpcProvider] Helius unavailable for token metadata, will fail gracefully");
-    return "helius";
-  }
-  
-  if (isProviderExhausted("chainstack")) {
-    console.log("[RpcProvider] Chainstack at 95%+ exhaustion, falling back to Helius for raw RPC");
     return "helius";
   }
   
@@ -111,7 +113,12 @@ async function getPreferredProvider(operation?: string): Promise<RpcProvider> {
   if (await shouldUseProvider("quicknode")) {
     return "quicknode";
   }
-  return "helius";
+
+  if (await shouldUseProvider("helius")) {
+    return "helius";
+  }
+
+  throw new Error(`[RpcProvider] All providers at daily limit — blocking RPC call (${operation || "unknown"})`);
 }
 
 async function getFallbackOrder(operation?: string): Promise<RpcProvider[]> {

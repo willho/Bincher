@@ -57,8 +57,7 @@ import {
   triggerHolderRefresh,
   getHoldersCached,
   getAggregatesForAI,
-  checkEmergingWhale,
-  startHolderReconciliation
+  checkEmergingWhale
 } from "./price-aggregator";
 import {
   handleWebhookUpdate,
@@ -981,6 +980,18 @@ export async function registerRoutes(
               tokenName: swap.toTokenMetadata?.name || undefined,
               priceUsd: pricePerTokenUsd,
             }, 'swap');
+
+            recordTick(swapTokenMint, {
+              tokenMint: swapTokenMint,
+              price: pricePerTokenUsd,
+              liquidity: cachedData?.liquidity ?? null,
+              priceChange24h: cachedData?.priceChange24h ?? null,
+              volume24h: cachedData?.volume24h ?? null,
+              buys24h: null,
+              sells24h: null,
+              marketCap: cachedData?.marketCap ?? null,
+              fdv: cachedData?.fdv ?? null,
+            });
             
             console.log(`[Swap Price] ${swapTokenSymbol}: $${pricePerTokenUsd.toFixed(10)} (${pricePerTokenSol.toFixed(10)} SOL)`);
           }
@@ -8327,7 +8338,8 @@ export async function registerRoutes(
   // Start hourly cleanup of system logs (keeps only 100 most recent)
   startSystemLogCleanup();
 
-  startHolderReconciliation();
+  const { initBudgetFromDb } = await import("./budget-manager");
+  await initBudgetFromDb();
 
   const { startRpcUsageLogger } = await import("./rpc-usage-logger");
   startRpcUsageLogger();

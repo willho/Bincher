@@ -5,6 +5,7 @@ import {
   userBudgetUsage,
   apiQueue,
   surplusPool,
+  rpcUsageLog,
   UserApiKey,
   UserBudgetUsage,
   ApiQueueItem,
@@ -19,15 +20,100 @@ const DEFAULT_USER_BUDGET = HELIUS_FREE_TIER_CREDITS;
 
 const POOL_EXHAUSTION_THRESHOLD = 0.95;
 
+const HELIUS_DAILY_HARD_LIMIT = 30_000;
+const CHAINSTACK_DAILY_HARD_LIMIT = 90_000;
+
 const PROVIDER_LIMITS: Record<string, number> = {
   chainstack: CHAINSTACK_FREE_TIER_CREDITS,
   helius: HELIUS_FREE_TIER_CREDITS,
 };
 
-const rpcProviderUsage: Map<string, { calls: number; creditsUsed: number; lastResetAt: number }> = new Map([
-  ["chainstack", { calls: 0, creditsUsed: 0, lastResetAt: Date.now() }],
-  ["helius", { calls: 0, creditsUsed: 0, lastResetAt: Date.now() }],
+const DAILY_LIMITS: Record<string, number> = {
+  chainstack: CHAINSTACK_DAILY_HARD_LIMIT,
+  helius: HELIUS_DAILY_HARD_LIMIT,
+};
+
+const rpcProviderUsage: Map<string, { calls: number; creditsUsed: number; lastResetAt: number; dailyCalls: number; dailyResetDate: string }> = new Map([
+  ["chainstack", { calls: 0, creditsUsed: 0, lastResetAt: Date.now(), dailyCalls: 0, dailyResetDate: getTodayDateString() }],
+  ["helius", { calls: 0, creditsUsed: 0, lastResetAt: Date.now(), dailyCalls: 0, dailyResetDate: getTodayDateString() }],
 ]);
+
+function getTodayDateString(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+let budgetInitialized = false;
+
+export async function initBudgetFromDb(): Promise<void> {
+  if (budgetInitialized) return;
+  try {
+    const today = getTodayDateString();
+    const rows = await db.select({
+      provider: rpcUsageLog.provider,
+      totalCalls: sql<number>`COALESCE(sum(${rpcUsageLog.callCount}), 0)`.as("total_calls"),
+    })
+      .from(rpcUsageLog)
+      .where(eq(rpcUsageLog.date, today))
+      .groupBy(rpcUsageLog.provider);
+
+    for (const row of rows) {
+      const usage = rpcProviderUsage.get(row.provider);
+      if (usage) {
+        usage.dailyCalls = Number(row.totalCalls) || 0;
+        usage.creditsUsed = usage.dailyCalls;
+        usage.dailyResetDate = today;
+        console.log(`[Budget] Restored ${row.provider} usage from DB: ${usage.dailyCalls} calls today`);
+      }
+    }
+
+    const monthRows = await db.select({
+      provider: rpcUsageLog.provider,
+      totalCalls: sql<number>`COALESCE(sum(${rpcUsageLog.callCount}), 0)`.as("total_calls"),
+    })
+      .from(rpcUsageLog)
+      .groupBy(rpcUsageLog.provider);
+
+    for (const row of monthRows) {
+      const usage = rpcProviderUsage.get(row.provider);
+      if (usage) {
+        usage.creditsUsed = Number(row.totalCalls) || 0;
+        console.log(`[Budget] Restored ${row.provider} total credits: ${usage.creditsUsed}`);
+      }
+    }
+
+    budgetInitialized = true;
+    console.log(`[Budget] Initialized from DB - Helius: ${rpcProviderUsage.get("helius")?.dailyCalls || 0} today, Chainstack: ${rpcProviderUsage.get("chainstack")?.dailyCalls || 0} today`);
+  } catch (error) {
+    console.error("[Budget] Failed to restore usage from DB:", error);
+    budgetInitialized = true;
+  }
+}
+
+export function isDailyLimitReached(provider: string): boolean {
+  const usage = rpcProviderUsage.get(provider);
+  if (!usage) return false;
+  const limit = DAILY_LIMITS[provider];
+  if (!limit) return false;
+
+  const today = getTodayDateString();
+  if (usage.dailyResetDate !== today) {
+    usage.dailyCalls = 0;
+    usage.dailyResetDate = today;
+  }
+
+  return usage.dailyCalls >= limit;
+}
+
+export function getDailyUsagePct(provider: string): number {
+  const usage = rpcProviderUsage.get(provider);
+  if (!usage) return 0;
+  const limit = DAILY_LIMITS[provider];
+  if (!limit) return 0;
+  const today = getTodayDateString();
+  if (usage.dailyResetDate !== today) return 0;
+  return Math.min(100, (usage.dailyCalls / limit) * 100);
+}
 
 export const REQUEST_PRIORITY: Record<string, number> = {
   COPY_TRADE: 100,
@@ -604,20 +690,37 @@ function shouldAlert(key: string): boolean {
 
 export function recordRpcCall(provider: string, credits: number = 1): void {
   const usage = rpcProviderUsage.get(provider);
-  if (usage) {
-    usage.calls++;
-    usage.creditsUsed += credits;
+  if (!usage) return;
+
+  const today = getTodayDateString();
+  if (usage.dailyResetDate !== today) {
+    usage.dailyCalls = 0;
+    usage.dailyResetDate = today;
+  }
+
+  usage.calls++;
+  usage.creditsUsed += credits;
+  usage.dailyCalls += credits;
+
+  const dailyLimit = DAILY_LIMITS[provider];
+  if (dailyLimit) {
+    const dailyPct = (usage.dailyCalls / dailyLimit) * 100;
+    if (dailyPct >= 100 && shouldAlert(`${provider}_daily_100`)) {
+      console.warn(`[BudgetAlert] ${provider} DAILY LIMIT HIT (${usage.dailyCalls.toLocaleString()}/${dailyLimit.toLocaleString()}) — blocking further calls`);
+    } else if (dailyPct >= 80 && shouldAlert(`${provider}_daily_80`)) {
+      console.warn(`[BudgetAlert] ${provider} daily usage at ${dailyPct.toFixed(0)}% (${usage.dailyCalls.toLocaleString()}/${dailyLimit.toLocaleString()})`);
+    } else if (dailyPct >= 50 && shouldAlert(`${provider}_daily_50`)) {
+      console.log(`[BudgetAlert] ${provider} daily usage at ${dailyPct.toFixed(0)}%`);
+    }
   }
 
   const limit = PROVIDER_LIMITS[provider];
-  if (usage && limit) {
+  if (limit) {
     const pct = (usage.creditsUsed / limit) * 100;
     if (pct >= 100 && shouldAlert(`${provider}_100`)) {
-      console.warn(`[BudgetAlert] ${provider} EXHAUSTED (${pct.toFixed(0)}% of ${limit.toLocaleString()} credits)`);
+      console.warn(`[BudgetAlert] ${provider} MONTHLY EXHAUSTED (${pct.toFixed(0)}% of ${limit.toLocaleString()} credits)`);
     } else if (pct >= 90 && shouldAlert(`${provider}_90`)) {
-      console.warn(`[BudgetAlert] ${provider} at ${pct.toFixed(0)}% of monthly credits (${usage.creditsUsed.toLocaleString()}/${limit.toLocaleString()})`);
-    } else if (pct >= 75 && shouldAlert(`${provider}_75`)) {
-      console.log(`[BudgetAlert] ${provider} at ${pct.toFixed(0)}% of monthly credits`);
+      console.warn(`[BudgetAlert] ${provider} at ${pct.toFixed(0)}% of monthly credits`);
     }
   }
 }
