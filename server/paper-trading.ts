@@ -31,6 +31,7 @@ export async function openPaperPosition(params: {
   takeProfitMultiplier?: number;
   stopLossPercent?: number; // as fraction 0.0-1.0 (0.2 = 20%)
   trailingStop?: boolean;
+  trailingStopPercent?: number;
   entryTxSignature?: string;
 }): Promise<PaperPosition> {
   const now = Math.floor(Date.now() / 1000);
@@ -68,6 +69,7 @@ export async function openPaperPosition(params: {
     takeProfitMultiplier: params.takeProfitMultiplier,
     stopLossPercent: normalizedStopLoss,
     trailingStop: params.trailingStop,
+    trailingStopPercent: params.trailingStopPercent ? (params.trailingStopPercent > 1 ? params.trailingStopPercent / 100 : params.trailingStopPercent) : undefined,
     highestPrice: tokenPriceUsd,
     lowestPrice: tokenPriceUsd,
     status: "open",

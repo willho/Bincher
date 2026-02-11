@@ -3966,14 +3966,6 @@ export async function registerRoutes(
         isTopUp = true;
       }
       
-      // Check autonomous mode stop conditions before executing buy
-      const { canExecuteTrade } = await import("./autonomous-mode");
-      const tradeCheck = await canExecuteTrade(req.userId!);
-      if (!tradeCheck.allowed) {
-        console.log(`[Autonomous] Manual buy blocked: ${tradeCheck.reason}`);
-        return res.status(400).json({ error: `Trade blocked by autonomous mode: ${tradeCheck.reason}` });
-      }
-      
       // Check hot wallet balance
       const balance = await getHotWalletBalance(req.userId!);
       if (balance < solAmount + 0.005) {
@@ -6799,6 +6791,7 @@ export async function registerRoutes(
     takeProfitMultiplier: z.number().optional(),
     stopLossPercent: z.number().optional(),
     trailingStop: z.boolean().optional(),
+    trailingStopPercent: z.number().optional(),
   });
 
   app.post("/api/paper/positions", requireAuth, async (req: Request, res: Response) => {

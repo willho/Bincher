@@ -50,6 +50,9 @@ interface PaperPosition {
   signalWallet?: string;
   takeProfitMultiplier?: number;
   stopLossPercent?: number;
+  trailingStop?: boolean;
+  trailingStopPercent?: number;
+  highestPrice?: number;
   status: string;
   exitSol?: number;
   exitPrice?: number;
@@ -147,6 +150,7 @@ export default function HoldingsPage() {
   const [solAmount, setSolAmount] = useState<string>("0.1");
   const [takeProfit, setTakeProfit] = useState<string>("100");
   const [stopLoss, setStopLoss] = useState<string>("30");
+  const [trailingStopEnabled, setTrailingStopEnabled] = useState<boolean>(false);
   const [selectedWallet, setSelectedWallet] = useState<string>("");
   const [lookupDebounce, setLookupDebounce] = useState<string>("");
 
@@ -248,7 +252,7 @@ export default function HoldingsPage() {
   });
 
   const openPositionMutation = useMutation({
-    mutationFn: async (params: { tokenMint: string; entrySol: number; signalWallet?: string; takeProfitMultiplier?: number; stopLossPercent?: number }) => {
+    mutationFn: async (params: { tokenMint: string; entrySol: number; signalWallet?: string; takeProfitMultiplier?: number; stopLossPercent?: number; trailingStop?: boolean }) => {
       return apiRequest("POST", "/api/paper/positions", params);
     },
     onSuccess: () => {
@@ -257,6 +261,7 @@ export default function HoldingsPage() {
       setSolAmount("0.1");
       setTakeProfit("100");
       setStopLoss("30");
+      setTrailingStopEnabled(false);
       setSelectedWallet("");
       setPaperSubTab("positions");
       refetchPaper();
@@ -769,7 +774,13 @@ export default function HoldingsPage() {
                               {pos.stopLossPercent && (
                                 <div className="flex items-center gap-1">
                                   <TrendingDown className="h-3 w-3 text-red-500" />
-                                  <span>SL: -{(pos.stopLossPercent * 100).toFixed(0)}%</span>
+                                  <span>{pos.trailingStop ? "TSL" : "SL"}: -{(pos.stopLossPercent * 100).toFixed(0)}%</span>
+                                </div>
+                              )}
+                              {pos.trailingStop && pos.highestPrice && (
+                                <div className="flex items-center gap-1">
+                                  <Activity className="h-3 w-3 text-yellow-500" />
+                                  <span>High: ${pos.highestPrice < 0.01 ? pos.highestPrice.toFixed(8) : pos.highestPrice.toFixed(4)}</span>
                                 </div>
                               )}
                               {pos.currentPrice && (
@@ -941,6 +952,21 @@ export default function HoldingsPage() {
                     </div>
                   </div>
 
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-2 cursor-pointer" data-testid="toggle-trailing-stop">
+                      <input
+                        type="checkbox"
+                        checked={trailingStopEnabled}
+                        onChange={(e) => setTrailingStopEnabled(e.target.checked)}
+                        className="h-4 w-4 rounded border-border"
+                      />
+                      <span className="text-sm font-medium">Trailing Stop Loss</span>
+                    </label>
+                    {trailingStopEnabled && (
+                      <p className="text-xs text-muted-foreground">Uses stop loss % as trailing distance from highest price reached</p>
+                    )}
+                  </div>
+
                   <div className="space-y-2">
                     <Label>Copy from Signal Wallet (optional)</Label>
                     <Select value={selectedWallet} onValueChange={setSelectedWallet}>
@@ -975,6 +1001,7 @@ export default function HoldingsPage() {
                           entrySol: parseFloat(solAmount) || 0.1,
                           takeProfitMultiplier,
                           stopLossPercent: stopLossDecimal,
+                          trailingStop: trailingStopEnabled || undefined,
                           signalWallet: selectedWallet && selectedWallet !== "none" ? selectedWallet : undefined,
                         });
                       }}
@@ -995,6 +1022,7 @@ export default function HoldingsPage() {
                         setSolAmount("0.1");
                         setTakeProfit("100");
                         setStopLoss("30");
+                        setTrailingStopEnabled(false);
                         setSelectedWallet("");
                       }}
                       data-testid="button-reset"
