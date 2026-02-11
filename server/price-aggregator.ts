@@ -154,8 +154,8 @@ export async function getHoldersCached(tokenMint: string, forceRefresh = false):
     holderCache.set(tokenMint, newCache);
     
     try {
-      const { updateTokenData } = await import("./data-pool");
-      await updateTokenData(tokenMint, { holderCount: totalCount });
+      const { upsertTokenData } = await import("./data-pool");
+      await upsertTokenData(tokenMint, { holderCount: totalCount });
     } catch {}
     
     return newCache;
