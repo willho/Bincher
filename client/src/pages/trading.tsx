@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { CopyTrading } from "@/components/copy-trading";
@@ -47,6 +47,15 @@ export default function TradingPage() {
   const [manualAmount, setManualAmount] = useState("");
   const [showNewPosition, setShowNewPosition] = useState(false);
   const { toast } = useToast();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    if (token) {
+      setManualTokenMint(token);
+      setShowNewPosition(true);
+    }
+  }, []);
 
   const { data: holdings, isLoading: holdingsLoading } = useQuery<Holding[]>({
     queryKey: ["/api/copy-trade/holdings"],

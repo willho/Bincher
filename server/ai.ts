@@ -2356,9 +2356,13 @@ async function executeScoreRefresh(tokenIdentifier: string): Promise<{ success: 
           sells24h: (poolData as any).sells24h || 0,
           buyVolume24h: (poolData as any).buyVolume24h || 0,
           sellVolume24h: (poolData as any).sellVolume24h || 0,
-          holders: (poolData as any).holders || 0,
-          topHolderPercent: (poolData as any).topHolderPercent || 0,
+          holders: poolData.holderCount || 0,
+          topHolderPercent: poolData.topHolderPct || 0,
           sourceWallets: [],
+          hasTwitter: poolData.hasTwitter || false,
+          hasTelegram: poolData.hasTelegram || false,
+          hasWebsite: poolData.hasWebsite || false,
+          twitterHandle: poolData.twitterUrl || undefined,
         });
         const freshSnapshot = await getSnapshot(snapshotId);
         if (freshSnapshot) {

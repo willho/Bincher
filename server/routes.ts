@@ -5099,10 +5099,20 @@ export async function registerRoutes(
       const snapshot = await getSnapshotByToken(tokenMint);
       
       if (snapshot) {
-        return res.json(snapshot);
+        const { getTokenData } = await import("./data-pool");
+        const poolData = await getTokenData(tokenMint);
+        const enriched = { ...snapshot } as any;
+        if (poolData) {
+          enriched.twitterUrl = poolData.twitterUrl || null;
+          enriched.telegramUrl = poolData.telegramUrl || null;
+          enriched.websiteUrl = poolData.websiteUrl || null;
+          if (poolData.hasTwitter) enriched.hasTwitter = true;
+          if (poolData.hasTelegram) enriched.hasTelegram = true;
+          if (poolData.hasWebsite) enriched.hasWebsite = true;
+        }
+        return res.json(enriched);
       }
       
-      // Auto-create snapshot from tokenDataPool if data exists
       const { getTokenData } = await import("./data-pool");
       const poolData = await getTokenData(tokenMint);
       
@@ -5120,6 +5130,10 @@ export async function registerRoutes(
             priceChange24h: poolData.priceChange24h ?? undefined,
             holders: poolData.holderCount ?? undefined,
             topHolderPercent: poolData.topHolderPct ?? undefined,
+            hasTwitter: poolData.hasTwitter || false,
+            hasTelegram: poolData.hasTelegram || false,
+            hasWebsite: poolData.hasWebsite || false,
+            twitterHandle: poolData.twitterUrl || undefined,
           });
           const newSnapshot = await getSnapshot(snapshotId);
           if (newSnapshot) {
@@ -5137,12 +5151,17 @@ export async function registerRoutes(
             volume24h: poolData.volume24h,
             priceChange24h: poolData.priceChange24h,
             holders: poolData.holderCount || null,
+            hasTwitter: poolData.hasTwitter || false,
+            hasTelegram: poolData.hasTelegram || false,
+            hasWebsite: poolData.hasWebsite || false,
+            twitterUrl: poolData.twitterUrl || null,
+            telegramUrl: poolData.telegramUrl || null,
+            websiteUrl: poolData.websiteUrl || null,
             source: 'tokenDataPool',
             isFallback: true,
           });
         } catch (createErr) {
           console.warn("[Snapshots] Failed to auto-create snapshot from pool:", createErr);
-          // Still return pool data as fallback
           return res.json({
             tokenMint: poolData.tokenMint,
             tokenSymbol: poolData.tokenSymbol,
@@ -5155,6 +5174,12 @@ export async function registerRoutes(
             priceChange24h: poolData.priceChange24h,
             pairAddress: poolData.pairAddress || null,
             holders: poolData.holderCount || null,
+            hasTwitter: poolData.hasTwitter || false,
+            hasTelegram: poolData.hasTelegram || false,
+            hasWebsite: poolData.hasWebsite || false,
+            twitterUrl: poolData.twitterUrl || null,
+            telegramUrl: poolData.telegramUrl || null,
+            websiteUrl: poolData.websiteUrl || null,
             source: 'tokenDataPool',
             lastUpdated: poolData.priceUpdatedAt ? poolData.priceUpdatedAt * 1000 : null,
             isFallback: true,

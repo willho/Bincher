@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink, Loader2, RefreshCw, FlaskConical } from "lucide-react";
+import { ArrowLeft, TrendingUp, DollarSign, Users, Activity, Shell, Flame, Droplets, BarChart3, Wallet, Clock, Target, Shield, Zap, CircleDot, CirclePause, CircleOff, ExternalLink, Loader2, RefreshCw, FlaskConical, Globe, MessageCircle, ArrowRightLeft } from "lucide-react";
+import { SiX, SiTelegram } from "react-icons/si";
 import { Link, useLocation } from "wouter";
 import { useState, useRef, useEffect } from "react";
 import { Switch } from "@/components/ui/switch";
@@ -402,6 +403,72 @@ export default function TokenPage() {
         </Card>
       </div>
 
+      {((snapshot as any)?.hasTwitter || (snapshot as any)?.hasTelegram || (snapshot as any)?.hasWebsite || (snapshot as any)?.twitterUrl || (snapshot as any)?.telegramUrl || (snapshot as any)?.websiteUrl) && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Globe className="h-4 w-4" />
+              Social Links
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2 flex-wrap">
+              {((snapshot as any)?.twitterUrl || (snapshot as any)?.hasTwitter) && (
+                (snapshot as any)?.twitterUrl ? (
+                  <a href={(snapshot as any).twitterUrl} target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline" size="sm" data-testid="link-twitter">
+                      <SiX className="h-3.5 w-3.5 mr-2" />
+                      Twitter
+                    </Button>
+                  </a>
+                ) : (
+                  <Badge variant="secondary" data-testid="badge-twitter">
+                    <SiX className="h-3 w-3 mr-1" />
+                    Twitter
+                  </Badge>
+                )
+              )}
+              {((snapshot as any)?.telegramUrl || (snapshot as any)?.hasTelegram) && (
+                (snapshot as any)?.telegramUrl ? (
+                  <a href={(snapshot as any).telegramUrl} target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline" size="sm" data-testid="link-telegram">
+                      <SiTelegram className="h-3.5 w-3.5 mr-2" />
+                      Telegram
+                    </Button>
+                  </a>
+                ) : (
+                  <Badge variant="secondary" data-testid="badge-telegram">
+                    <SiTelegram className="h-3 w-3 mr-1" />
+                    Telegram
+                  </Badge>
+                )
+              )}
+              {((snapshot as any)?.websiteUrl || (snapshot as any)?.hasWebsite) && (
+                (snapshot as any)?.websiteUrl ? (
+                  <a href={(snapshot as any).websiteUrl} target="_blank" rel="noopener noreferrer">
+                    <Button variant="outline" size="sm" data-testid="link-website">
+                      <Globe className="h-3.5 w-3.5 mr-2" />
+                      Website
+                    </Button>
+                  </a>
+                ) : (
+                  <Badge variant="secondary" data-testid="badge-website">
+                    <Globe className="h-3 w-3 mr-1" />
+                    Website
+                  </Badge>
+                )
+              )}
+              <a href={`https://dexscreener.com/solana/${tokenMint}`} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm" data-testid="link-dexscreener">
+                  <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                  DexScreener
+                </Button>
+              </a>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
@@ -413,14 +480,26 @@ export default function TokenPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex gap-3 flex-wrap">
-              <Button data-testid="button-swap">
-                <Zap className="h-4 w-4 mr-2" />
-                Swap
-              </Button>
-              <Button variant="outline" data-testid="button-send">
-                <Wallet className="h-4 w-4 mr-2" />
-                Send
-              </Button>
+              <Link href={`/trading?token=${tokenMint}`}>
+                <Button data-testid="button-swap">
+                  <Zap className="h-4 w-4 mr-2" />
+                  Buy via Hot Wallet
+                </Button>
+              </Link>
+              <a href={`https://jup.ag/swap/SOL-${tokenMint}`} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" data-testid="button-jupiter-buy">
+                  <ExternalLink className="h-4 w-4 mr-2" />
+                  Jupiter
+                </Button>
+              </a>
+              {positions && positions.length > 0 && (
+                <a href={`https://jup.ag/swap/${tokenMint}-SOL`} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" data-testid="button-jupiter-sell">
+                    <ArrowRightLeft className="h-4 w-4 mr-2" />
+                    Sell on Jupiter
+                  </Button>
+                </a>
+              )}
             </div>
             <div className="pt-3 border-t">
               <p className="text-xs text-muted-foreground mb-2">Paper Trading (risk-free simulation)</p>
