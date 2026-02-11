@@ -74,6 +74,20 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - **Indicator Vectors for Pattern Learning**: Snapshots technical indicators (RSI, MACD, EMA, Bollinger, OBV, Stochastic, composite score) at trade entry/exit points and periodically for open positions. Correlates indicator patterns with trade outcomes per strategy cluster via adaptive dampening and nudge vectors. Produces learned optimal indicator ranges per cluster (e.g., optimal RSI entry range, preferred EMA cross direction). Integrated into AI batch scoring (vector match score), AI chat context, and strategy cluster analysis. Processed during 8-hour aggregation cycles. Managed by `indicator-vectors.ts`.
 - **Enriched Snapshot Learning**: Exit snapshots include full trade journey data (price high/low, max drawdown, max unrealized gain, hold duration, volume stats, indicators at high/low points) computed from existing OHLCV candles — zero API calls. Entry/exit snapshots enriched with market context (liquidity, mcap, token age, holder count), whale context (count, reputation, sentiment), signal wallet confidence, discovery source, timing (hour/day), and derived metrics (SOL correlation, price velocity, relative volume, lifecycle stage, cluster crowding). Vector learning tracks optimal ranges for all context dimensions (ideal liquidity, preferred discovery source, best time-of-day, avg win/loss drawdown patterns). Managed by `snapshot-enrichment.ts`.
 
+## Paused Tasks / Backlog
+
+### Attention Score + Pincher Score Consolidation
+- **Naming**: "Attention Score" = fast non-LLM numeric scoring (determines which tokens get system resources). "Pincher Score" = AI/LLM analysis (triggered by Pincher analysis button). Attention triggers Pincher when threshold crossed.
+- Rename `computeHeatScore` in pincher-scoring.ts → `computeAttentionScore`, rename `heatScore` schema column → `attentionScore`
+- Merge `heat-score.ts` activity signals (recent buys, user attention, recency) into attention score as sub-components, migrate all consumers
+- Add LP safety/rugcheck/pumpfun/discovery source quality factors to attention score
+- Pincher Score should weigh more heavily for discovery decisions
+- Extract LP burn/lock data from existing RugCheck API response (currently not parsed), store in tokenDataPool
+- Enrich AI Pincher Score prompt with: LP burn/lock, rugcheck score/risks, pumpfun status, trending/boost rank, discovery source
+- Add LP/rugcheck to snapshot-enrichment.ts market context for vector learning
+- Pass LP data through routes.ts enrichment + buildPoolFallback to frontend
+- Show LP burned/locked status on token page UI
+
 ## External Dependencies
 
 - **Helius**: Real-time Solana blockchain data, swap transaction webhooks, and dynamic priority fee estimation.
