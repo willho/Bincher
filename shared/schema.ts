@@ -223,6 +223,7 @@ export const monitoringState = pgTable("monitoring_state", {
   webhookId: text("webhook_id"),
   lastUpdated: integer("last_updated").notNull(),
   totalSwapsDetected: integer("total_swaps_detected").default(0),
+  webhookEnv: text("webhook_env").default("production"),
 });
 
 // Copy Trading Tables

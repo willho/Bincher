@@ -21,6 +21,8 @@ let unifiedWebhookId: string | null = null;
 let webhookDirty = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 5000;
+let consecutiveUpdateFailures = 0;
+const MAX_UPDATE_FAILURES = 3;
 
 export function getAddressType(address: string): AddressType | null {
   return addressRegistry.get(address)?.type || null;
@@ -211,12 +213,27 @@ export async function syncWebhookAddresses(): Promise<void> {
     const updated = await updateWebhookUrl(unifiedWebhookId, webhookUrl, allAddresses);
     if (updated) {
       webhookDirty = false;
+      consecutiveUpdateFailures = 0;
       const counts = getAddressCounts();
       console.log(`[UnifiedWebhook] Updated webhook with ${allAddresses.length} addresses: ${counts}`);
       return;
     } else {
-      console.warn("[UnifiedWebhook] Failed to update webhook, keeping ID for retry (rate limited?)");
-      return;
+      consecutiveUpdateFailures++;
+      if (consecutiveUpdateFailures >= MAX_UPDATE_FAILURES) {
+        console.warn(`[UnifiedWebhook] Webhook ${unifiedWebhookId} failed ${consecutiveUpdateFailures} times, clearing stale ID and creating fresh webhook`);
+        try {
+          await deleteWebhook(unifiedWebhookId);
+        } catch (e) {
+          console.warn("[UnifiedWebhook] Could not delete stale webhook (may already be gone):", e);
+        }
+        unifiedWebhookId = null;
+        consecutiveUpdateFailures = 0;
+        const { storage } = await import("./storage");
+        await storage.updateMonitoringStatus({ webhookId: undefined, isActive: false });
+      } else {
+        console.warn(`[UnifiedWebhook] Failed to update webhook (attempt ${consecutiveUpdateFailures}/${MAX_UPDATE_FAILURES}), will retry`);
+        return;
+      }
     }
   }
 
@@ -329,7 +346,7 @@ export async function initializeUnifiedWebhook(
   console.log(`[UnifiedWebhook] Initialized: ${signalWallets.length} signal wallets, ${realTokenMints.length} real tokens, ${addedPaperTokens} paper tokens`);
 
   if (webhookDirty) {
-    console.log("[UnifiedWebhook] Webhook sync pending (rate limited?), scheduling retries (30s, 60s, 120s)...");
+    console.log("[UnifiedWebhook] Webhook sync pending, scheduling retries (30s, 60s, 120s)...");
     const retryDelays = [30_000, 60_000, 120_000];
     for (const delay of retryDelays) {
       setTimeout(async () => {

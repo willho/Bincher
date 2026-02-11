@@ -174,7 +174,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getMonitoringStatus(): Promise<MonitoringStatus> {
-    const rows = await db.select().from(monitoringState).limit(1);
+    const currentEnv = process.env.NODE_ENV || "production";
+    const rows = await db.select().from(monitoringState)
+      .where(eq(monitoringState.webhookEnv, currentEnv))
+      .limit(1);
     if (rows.length === 0) {
       return {
         walletAddress: "",
@@ -194,11 +197,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateMonitoringStatus(updates: Partial<MonitoringStatus>): Promise<MonitoringStatus> {
-    const rows = await db.select().from(monitoringState).limit(1);
+    const currentEnv = process.env.NODE_ENV || "production";
+    const rows = await db.select().from(monitoringState)
+      .where(eq(monitoringState.webhookEnv, currentEnv))
+      .limit(1);
     if (rows.length === 0) {
-      await this.initialize();
+      await db.insert(monitoringState).values({
+        walletAddress: updates.walletAddress || "",
+        isActive: updates.isActive ?? false,
+        webhookId: updates.webhookId ?? null,
+        lastUpdated: Math.floor(Date.now() / 1000),
+        totalSwapsDetected: updates.totalSwapsDetected ?? 0,
+        webhookEnv: currentEnv,
+      });
+      return this.getMonitoringStatus();
     }
-    const currentRow = rows[0] || (await db.select().from(monitoringState).limit(1))[0];
+    const currentRow = rows[0];
     
     const current = await this.getMonitoringStatus();
     const updated = { ...current, ...updates, lastUpdated: Date.now() };
