@@ -3831,6 +3831,42 @@ export const indicatorSnapshots = pgTable("indicator_snapshots", {
   priceAtSnapshot: real("price_at_snapshot"),
   bucketId: text("bucket_id").notNull(),
   createdAt: integer("created_at").notNull(),
+
+  priceHigh: real("price_high"),
+  priceLow: real("price_low"),
+  highTimestamp: integer("high_timestamp"),
+  lowTimestamp: integer("low_timestamp"),
+  maxDrawdownPercent: real("max_drawdown_percent"),
+  maxUnrealizedGainPercent: real("max_unrealized_gain_percent"),
+  holdDurationMinutes: integer("hold_duration_minutes"),
+  avgVolume: real("avg_volume"),
+  totalVolume: real("total_volume"),
+
+  liquidityAtSnapshot: real("liquidity_at_snapshot"),
+  marketCapAtSnapshot: real("market_cap_at_snapshot"),
+  tokenAgeHours: real("token_age_hours"),
+  holderCount: integer("holder_count_at_snapshot"),
+
+  whaleCount: integer("whale_count"),
+  whaleAvgReputation: real("whale_avg_reputation"),
+  whaleNetSentiment: real("whale_net_sentiment"),
+
+  discoverySource: text("discovery_source"),
+  signalWalletWinRate: real("signal_wallet_win_rate"),
+  signalWalletStyle: text("signal_wallet_style"),
+
+  hourOfDay: integer("hour_of_day"),
+  dayOfWeek: integer("day_of_week"),
+
+  solCorrelation: real("sol_correlation"),
+  priceVelocity: real("price_velocity"),
+  relativeVolume: real("relative_volume"),
+  lifecycleStage: text("lifecycle_stage"),
+  clusterCrowding: integer("cluster_crowding"),
+  dexListingCount: integer("dex_listing_count"),
+
+  indicatorsAtHigh: jsonb("indicators_at_high"),
+  indicatorsAtLow: jsonb("indicators_at_low"),
 });
 
 export const insertIndicatorSnapshotSchema = createInsertSchema(indicatorSnapshots).omit({ id: true });
@@ -3858,6 +3894,29 @@ export const indicatorVectors = pgTable("indicator_vectors", {
   confidence: real("confidence").default(0.5),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
+
+  optimalLiquidityLow: real("optimal_liquidity_low"),
+  optimalLiquidityHigh: real("optimal_liquidity_high"),
+  optimalMcapLow: real("optimal_mcap_low"),
+  optimalMcapHigh: real("optimal_mcap_high"),
+  optimalTokenAgeLow: real("optimal_token_age_low"),
+  optimalTokenAgeHigh: real("optimal_token_age_high"),
+  optimalWhaleSentimentLow: real("optimal_whale_sentiment_low"),
+  optimalWhaleSentimentHigh: real("optimal_whale_sentiment_high"),
+  optimalWhaleCountLow: integer("optimal_whale_count_low"),
+  optimalWhaleCountHigh: integer("optimal_whale_count_high"),
+  preferredDiscoverySource: text("preferred_discovery_source"),
+  preferredHourOfDay: integer("preferred_hour_of_day"),
+  preferredLifecycleStage: text("preferred_lifecycle_stage"),
+  optimalPriceVelocityLow: real("optimal_price_velocity_low"),
+  optimalPriceVelocityHigh: real("optimal_price_velocity_high"),
+  optimalRelativeVolumeLow: real("optimal_relative_volume_low"),
+  optimalRelativeVolumeHigh: real("optimal_relative_volume_high"),
+  avgWinDrawdown: real("avg_win_drawdown"),
+  avgLossDrawdown: real("avg_loss_drawdown"),
+  avgWinMaxGain: real("avg_win_max_gain"),
+  avgWinHoldMinutes: real("avg_win_hold_minutes"),
+  avgLossHoldMinutes: real("avg_loss_hold_minutes"),
 });
 
 export const insertIndicatorVectorSchema = createInsertSchema(indicatorVectors).omit({ id: true });

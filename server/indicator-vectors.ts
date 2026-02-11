@@ -2,6 +2,7 @@ import { db } from "./db";
 import { indicatorSnapshots, indicatorVectors, vectorUpdates, paperPositions, strategyClusters } from "@shared/schema";
 import { eq, and, sql, inArray, desc } from "drizzle-orm";
 import { getIndicators, type IndicatorResult } from "./technical-indicators";
+import { enrichSnapshot } from "./snapshot-enrichment";
 
 function getCurrentBucketId(): string {
   const now = new Date();
@@ -38,7 +39,8 @@ export async function recordIndicatorSnapshot(
   tokenMint: string,
   snapshotType: "entry" | "exit" | "periodic" | "checkpoint",
   positionId?: number,
-  timeframe: string = "1h"
+  timeframe: string = "1h",
+  enrichmentOverrides?: Record<string, any>
 ): Promise<number | null> {
   try {
     const indicators = await getIndicators(tokenMint, timeframe);
@@ -48,7 +50,7 @@ export async function recordIndicatorSnapshot(
     const now = Math.floor(Date.now() / 1000);
     const bucketId = getCurrentBucketId();
 
-    const [row] = await db.insert(indicatorSnapshots).values({
+    const values: Record<string, any> = {
       tokenMint,
       positionId: positionId ?? null,
       snapshotType,
@@ -57,7 +59,13 @@ export async function recordIndicatorSnapshot(
       priceAtSnapshot: indicators.bollinger?.middle ?? indicators.ema?.ema12 ?? null,
       bucketId,
       createdAt: now,
-    }).returning({ id: indicatorSnapshots.id });
+    };
+
+    if (enrichmentOverrides) {
+      Object.assign(values, enrichmentOverrides);
+    }
+
+    const [row] = await db.insert(indicatorSnapshots).values(values as any).returning({ id: indicatorSnapshots.id });
 
     return row?.id ?? null;
   } catch (err) {
@@ -66,17 +74,47 @@ export async function recordIndicatorSnapshot(
   }
 }
 
-export async function recordEntrySnapshot(tokenMint: string, positionId: number): Promise<void> {
-  await recordIndicatorSnapshot(tokenMint, "entry", positionId);
+export async function recordEntrySnapshot(
+  tokenMint: string,
+  positionId: number,
+  signalWallet?: string | null,
+  discoverySource?: string | null
+): Promise<void> {
+  try {
+    const enrichment = await enrichSnapshot(
+      tokenMint, "entry", positionId,
+      signalWallet, null, discoverySource
+    );
+    await recordIndicatorSnapshot(tokenMint, "entry", positionId, "1h", enrichment);
+  } catch (err) {
+    console.error("[IndicatorVectors] Enriched entry snapshot failed:", err);
+    await recordIndicatorSnapshot(tokenMint, "entry", positionId);
+  }
 }
 
 export async function recordExitSnapshot(
   tokenMint: string,
   positionId: number,
   pnlPercent: number,
-  clusterId?: string
+  clusterId?: string,
+  signalWallet?: string | null,
+  discoverySource?: string | null,
+  entryTimestamp?: number,
+  entryPrice?: number
 ): Promise<void> {
-  await recordIndicatorSnapshot(tokenMint, "exit", positionId);
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    const enrichment = await enrichSnapshot(
+      tokenMint, "exit", positionId,
+      signalWallet, clusterId, discoverySource,
+      entryTimestamp, now, entryPrice
+    );
+    await recordIndicatorSnapshot(tokenMint, "exit", positionId, "1h", enrichment);
+  } catch (err) {
+    console.error("[IndicatorVectors] Enriched exit snapshot failed:", err);
+    await recordIndicatorSnapshot(tokenMint, "exit", positionId);
+  }
 
   if (!clusterId) return;
 
@@ -99,9 +137,11 @@ export async function recordExitSnapshot(
 
   if (!entrySnap[0]) return;
 
-  const now = Math.floor(Date.now() / 1000);
   const bucketId = getCurrentBucketId();
   const isWin = pnlPercent >= 0;
+
+  const es = entrySnap[0];
+  const xs = exitSnap[0];
 
   await db.insert(vectorUpdates).values({
     vectorType: "indicator",
@@ -112,24 +152,50 @@ export async function recordExitSnapshot(
       tokenMint,
       pnlPercent,
       entry: {
-        rsi: entrySnap[0].rsi,
-        macdHistogram: entrySnap[0].macdHistogram,
-        emaCrossSignal: entrySnap[0].emaCrossSignal,
-        bollingerPosition: entrySnap[0].bollingerPosition,
-        bollingerBandwidth: entrySnap[0].bollingerBandwidth,
-        obvTrend: entrySnap[0].obvTrend,
-        stochasticK: entrySnap[0].stochasticK,
-        compositeScore: entrySnap[0].compositeScore,
+        rsi: es.rsi,
+        macdHistogram: es.macdHistogram,
+        emaCrossSignal: es.emaCrossSignal,
+        bollingerPosition: es.bollingerPosition,
+        bollingerBandwidth: es.bollingerBandwidth,
+        obvTrend: es.obvTrend,
+        stochasticK: es.stochasticK,
+        compositeScore: es.compositeScore,
       },
-      exit: exitSnap[0] ? {
-        rsi: exitSnap[0].rsi,
-        macdHistogram: exitSnap[0].macdHistogram,
-        emaCrossSignal: exitSnap[0].emaCrossSignal,
-        bollingerPosition: exitSnap[0].bollingerPosition,
-        bollingerBandwidth: exitSnap[0].bollingerBandwidth,
-        obvTrend: exitSnap[0].obvTrend,
-        stochasticK: exitSnap[0].stochasticK,
-        compositeScore: exitSnap[0].compositeScore,
+      exit: xs ? {
+        rsi: xs.rsi,
+        macdHistogram: xs.macdHistogram,
+        emaCrossSignal: xs.emaCrossSignal,
+        bollingerPosition: xs.bollingerPosition,
+        bollingerBandwidth: xs.bollingerBandwidth,
+        obvTrend: xs.obvTrend,
+        stochasticK: xs.stochasticK,
+        compositeScore: xs.compositeScore,
+      } : null,
+      context: {
+        liquidityAtEntry: es.liquidityAtSnapshot,
+        marketCapAtEntry: es.marketCapAtSnapshot,
+        tokenAgeHours: es.tokenAgeHours,
+        whaleCount: es.whaleCount,
+        whaleAvgReputation: es.whaleAvgReputation,
+        whaleNetSentiment: es.whaleNetSentiment,
+        discoverySource: es.discoverySource,
+        signalWalletWinRate: es.signalWalletWinRate,
+        hourOfDay: es.hourOfDay,
+        dayOfWeek: es.dayOfWeek,
+        priceVelocity: es.priceVelocity,
+        relativeVolume: es.relativeVolume,
+        lifecycleStage: es.lifecycleStage,
+        solCorrelation: es.solCorrelation,
+        clusterCrowding: es.clusterCrowding,
+      },
+      journey: xs ? {
+        priceHigh: xs.priceHigh,
+        priceLow: xs.priceLow,
+        maxDrawdownPercent: xs.maxDrawdownPercent,
+        maxUnrealizedGainPercent: xs.maxUnrealizedGainPercent,
+        holdDurationMinutes: xs.holdDurationMinutes,
+        avgVolume: xs.avgVolume,
+        totalVolume: xs.totalVolume,
       } : null,
     },
     weight: Math.abs(pnlPercent) > 50 ? 2.0 : 1.0,
@@ -223,6 +289,12 @@ function nudgePreference(
   return bestOption;
 }
 
+function nudgeAverage(current: number | null, observed: number, count: number, dampening: number): number {
+  if (current === null) return observed;
+  const rate = 0.15 * dampening;
+  return current + (observed - current) * rate;
+}
+
 export async function processIndicatorVectorUpdates(bucketId: string): Promise<number> {
   const updates = await db.select()
     .from(vectorUpdates)
@@ -284,6 +356,27 @@ export async function processIndicatorVectorUpdates(bucketId: string): Promise<n
     let compositeMin = vec.optimalCompositeMin ?? 55;
     let macdMin = vec.optimalMacdHistogramMin ?? -0.001;
 
+    let liqLow = vec.optimalLiquidityLow ?? 10000;
+    let liqHigh = vec.optimalLiquidityHigh ?? 5000000;
+    let mcapLow = vec.optimalMcapLow ?? 50000;
+    let mcapHigh = vec.optimalMcapHigh ?? 50000000;
+    let ageLow = vec.optimalTokenAgeLow ?? 1;
+    let ageHigh = vec.optimalTokenAgeHigh ?? 720;
+    let whaleSentLow = vec.optimalWhaleSentimentLow ?? -50;
+    let whaleSentHigh = vec.optimalWhaleSentimentHigh ?? 100;
+    let whaleCountLow = vec.optimalWhaleCountLow ?? 0;
+    let whaleCountHigh = vec.optimalWhaleCountHigh ?? 20;
+    let velLow = vec.optimalPriceVelocityLow ?? -0.05;
+    let velHigh = vec.optimalPriceVelocityHigh ?? 0.05;
+    let relVolLow = vec.optimalRelativeVolumeLow ?? 0.5;
+    let relVolHigh = vec.optimalRelativeVolumeHigh ?? 5.0;
+
+    let avgWinDD = vec.avgWinDrawdown ?? null;
+    let avgLossDD = vec.avgLossDrawdown ?? null;
+    let avgWinGain = vec.avgWinMaxGain ?? null;
+    let avgWinHold = vec.avgWinHoldMinutes ?? null;
+    let avgLossHold = vec.avgLossHoldMinutes ?? null;
+
     let winCount = vec.winCount || 0;
     let lossCount = vec.lossCount || 0;
 
@@ -293,16 +386,26 @@ export async function processIndicatorVectorUpdates(bucketId: string): Promise<n
     bollingerCounts.set(vec.preferredBollingerPosition || "below", winCount);
     const obvCounts = new Map<string, number>();
     obvCounts.set(vec.preferredObvTrend || "accumulating", winCount);
+    const discoveryCounts = new Map<string, number>();
+    if (vec.preferredDiscoverySource) discoveryCounts.set(vec.preferredDiscoverySource, winCount);
+    const lifecycleCounts = new Map<string, number>();
+    if (vec.preferredLifecycleStage) lifecycleCounts.set(vec.preferredLifecycleStage, winCount);
 
     let preferredEma = vec.preferredEmaCross || "bullish";
     let preferredBollinger = vec.preferredBollingerPosition || "below";
     let preferredObv = vec.preferredObvTrend || "accumulating";
+    let preferredDiscovery = vec.preferredDiscoverySource || "";
+    let preferredLifecycle = vec.preferredLifecycleStage || "";
+
+    const hourBuckets = new Map<number, { wins: number; total: number }>();
 
     for (const update of clusterUpdates) {
       const signalData = update.signalData as Record<string, any> | null;
       if (!signalData?.entry) continue;
 
       const entry = signalData.entry;
+      const context = signalData.context || {};
+      const journey = signalData.journey || {};
       const isWin = update.signalType === "indicator_win";
 
       if (isWin) winCount++;
@@ -349,6 +452,97 @@ export async function processIndicatorVectorUpdates(bucketId: string): Promise<n
       if (entry.obvTrend) {
         preferredObv = nudgePreference(preferredObv, entry.obvTrend, isWin, obvCounts);
       }
+
+      if (context.liquidityAtEntry != null) {
+        const r = nudgeRange(liqLow, liqHigh, context.liquidityAtEntry, isWin, dampening, 0.1);
+        liqLow = r.low;
+        liqHigh = r.high;
+      }
+
+      if (context.marketCapAtEntry != null) {
+        const r = nudgeRange(mcapLow, mcapHigh, context.marketCapAtEntry, isWin, dampening, 0.1);
+        mcapLow = r.low;
+        mcapHigh = r.high;
+      }
+
+      if (context.tokenAgeHours != null) {
+        const r = nudgeRange(ageLow, ageHigh, context.tokenAgeHours, isWin, dampening, 0.1);
+        ageLow = r.low;
+        ageHigh = r.high;
+      }
+
+      if (context.whaleNetSentiment != null) {
+        const r = nudgeRange(whaleSentLow, whaleSentHigh, context.whaleNetSentiment, isWin, dampening, 0.1);
+        whaleSentLow = r.low;
+        whaleSentHigh = r.high;
+      }
+
+      if (context.whaleCount != null) {
+        const r = nudgeRange(whaleCountLow, whaleCountHigh, context.whaleCount, isWin, dampening, 0.1);
+        whaleCountLow = r.low;
+        whaleCountHigh = r.high;
+      }
+
+      if (context.priceVelocity != null) {
+        const r = nudgeRange(velLow, velHigh, context.priceVelocity, isWin, dampening, 0.1);
+        velLow = r.low;
+        velHigh = r.high;
+      }
+
+      if (context.relativeVolume != null) {
+        const r = nudgeRange(relVolLow, relVolHigh, context.relativeVolume, isWin, dampening, 0.1);
+        relVolLow = r.low;
+        relVolHigh = r.high;
+      }
+
+      if (context.discoverySource) {
+        preferredDiscovery = nudgePreference(preferredDiscovery, context.discoverySource, isWin, discoveryCounts);
+      }
+
+      if (context.lifecycleStage) {
+        preferredLifecycle = nudgePreference(preferredLifecycle, context.lifecycleStage, isWin, lifecycleCounts);
+      }
+
+      if (context.hourOfDay != null) {
+        const bucket = hourBuckets.get(context.hourOfDay) || { wins: 0, total: 0 };
+        bucket.total++;
+        if (isWin) bucket.wins++;
+        hourBuckets.set(context.hourOfDay, bucket);
+      }
+
+      if (journey.maxDrawdownPercent != null) {
+        if (isWin) {
+          avgWinDD = nudgeAverage(avgWinDD, journey.maxDrawdownPercent, winCount, dampening);
+        } else {
+          avgLossDD = nudgeAverage(avgLossDD, journey.maxDrawdownPercent, lossCount, dampening);
+        }
+      }
+
+      if (journey.maxUnrealizedGainPercent != null && isWin) {
+        avgWinGain = nudgeAverage(avgWinGain, journey.maxUnrealizedGainPercent, winCount, dampening);
+      }
+
+      if (journey.holdDurationMinutes != null) {
+        if (isWin) {
+          avgWinHold = nudgeAverage(avgWinHold, journey.holdDurationMinutes, winCount, dampening);
+        } else {
+          avgLossHold = nudgeAverage(avgLossHold, journey.holdDurationMinutes, lossCount, dampening);
+        }
+      }
+    }
+
+    let preferredHour: number | null = vec.preferredHourOfDay ?? null;
+    if (hourBuckets.size > 0) {
+      let bestRate = 0;
+      for (const [hour, data] of Array.from(hourBuckets.entries())) {
+        if (data.total >= 2) {
+          const rate = data.wins / data.total;
+          if (rate > bestRate) {
+            bestRate = rate;
+            preferredHour = hour;
+          }
+        }
+      }
     }
 
     const totalSamples = winCount + lossCount;
@@ -373,6 +567,28 @@ export async function processIndicatorVectorUpdates(bucketId: string): Promise<n
         sampleCount: totalSamples,
         confidence: Math.round(confidence * 1000) / 1000,
         updatedAt: now,
+        optimalLiquidityLow: Math.round(liqLow),
+        optimalLiquidityHigh: Math.round(liqHigh),
+        optimalMcapLow: Math.round(mcapLow),
+        optimalMcapHigh: Math.round(mcapHigh),
+        optimalTokenAgeLow: Math.round(ageLow * 10) / 10,
+        optimalTokenAgeHigh: Math.round(ageHigh * 10) / 10,
+        optimalWhaleSentimentLow: Math.round(whaleSentLow * 10) / 10,
+        optimalWhaleSentimentHigh: Math.round(whaleSentHigh * 10) / 10,
+        optimalWhaleCountLow: Math.round(Math.max(0, whaleCountLow)),
+        optimalWhaleCountHigh: Math.round(whaleCountHigh),
+        preferredDiscoverySource: preferredDiscovery || null,
+        preferredHourOfDay: preferredHour,
+        preferredLifecycleStage: preferredLifecycle || null,
+        optimalPriceVelocityLow: Math.round(velLow * 10000) / 10000,
+        optimalPriceVelocityHigh: Math.round(velHigh * 10000) / 10000,
+        optimalRelativeVolumeLow: Math.round(relVolLow * 100) / 100,
+        optimalRelativeVolumeHigh: Math.round(relVolHigh * 100) / 100,
+        avgWinDrawdown: avgWinDD != null ? Math.round(avgWinDD * 100) / 100 : null,
+        avgLossDrawdown: avgLossDD != null ? Math.round(avgLossDD * 100) / 100 : null,
+        avgWinMaxGain: avgWinGain != null ? Math.round(avgWinGain * 100) / 100 : null,
+        avgWinHoldMinutes: avgWinHold != null ? Math.round(avgWinHold) : null,
+        avgLossHoldMinutes: avgLossHold != null ? Math.round(avgLossHold) : null,
       })
       .where(eq(indicatorVectors.id, vec.id));
 
@@ -385,7 +601,7 @@ export async function processIndicatorVectorUpdates(bucketId: string): Promise<n
     .where(inArray(vectorUpdates.id, updateIds));
 
   if (processed > 0) {
-    console.log(`[IndicatorVectors] Processed ${processed} indicator updates across ${updatesByCluster.size} clusters`);
+    console.log(`[IndicatorVectors] Processed ${processed} enriched indicator updates across ${updatesByCluster.size} clusters`);
   }
 
   return processed;
@@ -497,7 +713,7 @@ export async function getIndicatorVectorStats(): Promise<{
   totalVectors: number;
   totalSamples: number;
   avgConfidence: number;
-  topPatterns: { clusterId: string; confidence: number; winRate: number; samples: number }[];
+  topPatterns: { clusterId: string; confidence: number; winRate: number; samples: number; learnedContext: Record<string, any> }[];
 }> {
   const vectors = await db.select().from(indicatorVectors);
 
@@ -517,6 +733,18 @@ export async function getIndicatorVectorStats(): Promise<{
         ? (v.winCount || 0) / (v.sampleCount || 0)
         : 0,
       samples: v.sampleCount || 0,
+      learnedContext: {
+        optimalLiquidity: v.optimalLiquidityLow != null ? `$${v.optimalLiquidityLow}-$${v.optimalLiquidityHigh}` : null,
+        optimalMcap: v.optimalMcapLow != null ? `$${v.optimalMcapLow}-$${v.optimalMcapHigh}` : null,
+        optimalTokenAge: v.optimalTokenAgeLow != null ? `${v.optimalTokenAgeLow}-${v.optimalTokenAgeHigh}h` : null,
+        whaleSentiment: v.optimalWhaleSentimentLow != null ? `${v.optimalWhaleSentimentLow} to ${v.optimalWhaleSentimentHigh}` : null,
+        preferredSource: v.preferredDiscoverySource,
+        preferredHour: v.preferredHourOfDay,
+        preferredLifecycle: v.preferredLifecycleStage,
+        avgWinDrawdown: v.avgWinDrawdown != null ? `${v.avgWinDrawdown}%` : null,
+        avgWinMaxGain: v.avgWinMaxGain != null ? `${v.avgWinMaxGain}%` : null,
+        avgWinHoldTime: v.avgWinHoldMinutes != null ? `${v.avgWinHoldMinutes}min` : null,
+      },
     }));
 
   return {

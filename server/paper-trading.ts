@@ -80,7 +80,7 @@ export async function openPaperPosition(params: {
   
   try {
     const { recordEntrySnapshot } = await import("./indicator-vectors");
-    await recordEntrySnapshot(params.tokenMint, position.id);
+    await recordEntrySnapshot(params.tokenMint, position.id, params.signalWallet);
   } catch (err) {
     console.error("[PaperTrading] Indicator entry snapshot failed:", err);
   }
@@ -143,7 +143,14 @@ async function closePositionInternal(
       const { recordExitSnapshot } = await import("./indicator-vectors");
       const { assignWalletToCluster } = await import("./strategy-clusters");
       const clusterId = updated.signalWallet ? await assignWalletToCluster(updated.signalWallet) : null;
-      await recordExitSnapshot(updated.tokenMint, positionId, realizedPnlPercent, clusterId || undefined);
+      await recordExitSnapshot(
+        updated.tokenMint, positionId, realizedPnlPercent,
+        clusterId || undefined,
+        updated.signalWallet,
+        updated.discoverySource,
+        updated.entryTimestamp,
+        updated.entryPrice
+      );
     } catch (err) {
       console.error("[PaperTrading] Indicator exit snapshot failed:", err);
     }
