@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { priceHistoryCache, priceSnapshots } from "@shared/schema";
+import { priceHistoryCache, priceSnapshots, priceAggregates } from "@shared/schema";
 import { eq, and, gte, desc, asc } from "drizzle-orm";
 
 interface OHLCV {
@@ -138,29 +138,53 @@ async function getCandles(tokenMint: string, timeframe: string, limit: number = 
     .orderBy(asc(priceHistoryCache.timestamp))
     .limit(limit);
 
-  if (rows.length === 0) {
-    const snapRows = await db.select()
-      .from(priceSnapshots)
-      .where(eq(priceSnapshots.tokenMint, tokenMint))
-      .orderBy(asc(priceSnapshots.snapshotDate))
-      .limit(limit);
-
-    return snapRows.map(r => ({
-      timestamp: r.createdAt ?? 0,
-      open: r.open ?? 0,
-      high: r.high ?? 0,
-      low: r.low ?? 0,
-      close: r.close ?? 0,
+  if (rows.length > 0) {
+    return rows.map(r => ({
+      timestamp: r.timestamp,
+      open: r.open,
+      high: r.high,
+      low: r.low,
+      close: r.close,
       volume: r.volume ?? 0,
     }));
   }
 
-  return rows.map(r => ({
-    timestamp: r.timestamp,
-    open: r.open,
-    high: r.high,
-    low: r.low,
-    close: r.close,
+  const tierMap: Record<string, string> = { "15m": "15min", "1h": "hourly", "4h": "hourly", "1d": "daily" };
+  const aggTier = tierMap[timeframe] || "hourly";
+  const aggRows = await db.select()
+    .from(priceAggregates)
+    .where(and(
+      eq(priceAggregates.tokenMint, tokenMint),
+      eq(priceAggregates.tier, aggTier)
+    ))
+    .orderBy(asc(priceAggregates.bucketStart))
+    .limit(limit);
+
+  if (aggRows.length > 0) {
+    return aggRows
+      .filter(r => r.priceOpen && r.priceClose)
+      .map(r => ({
+        timestamp: r.bucketStart,
+        open: r.priceOpen!,
+        high: r.priceHigh ?? r.priceOpen!,
+        low: r.priceLow ?? r.priceOpen!,
+        close: r.priceClose!,
+        volume: 0,
+      }));
+  }
+
+  const snapRows = await db.select()
+    .from(priceSnapshots)
+    .where(eq(priceSnapshots.tokenMint, tokenMint))
+    .orderBy(asc(priceSnapshots.snapshotDate))
+    .limit(limit);
+
+  return snapRows.map(r => ({
+    timestamp: r.createdAt ?? 0,
+    open: r.open ?? 0,
+    high: r.high ?? 0,
+    low: r.low ?? 0,
+    close: r.close ?? 0,
     volume: r.volume ?? 0,
   }));
 }

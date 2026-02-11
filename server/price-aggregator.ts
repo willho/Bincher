@@ -27,8 +27,8 @@ interface PriceTick {
   fdv: number | null;
 }
 
-// In-memory tick buffer - 15 min window per token
-const TICK_BUFFER_WINDOW_MS = 15 * 60 * 1000;
+// In-memory tick buffer - 30 min window to ensure completed 15-min buckets survive for aggregation
+const TICK_BUFFER_WINDOW_MS = 30 * 60 * 1000;
 const tickBuffer: Map<string, PriceTick[]> = new Map();
 
 // Top 100 holder cache per token
@@ -152,6 +152,12 @@ export async function getHoldersCached(tokenMint: string, forceRefresh = false):
     };
 
     holderCache.set(tokenMint, newCache);
+    
+    try {
+      const { updateTokenData } = await import("./data-pool");
+      await updateTokenData(tokenMint, { holderCount: totalCount });
+    } catch {}
+    
     return newCache;
   } catch (error) {
     console.error(`Failed to fetch holders for ${tokenMint}:`, error);

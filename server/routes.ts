@@ -5152,13 +5152,15 @@ export async function registerRoutes(
           if (poolData.hasTelegram) enriched.hasTelegram = true;
           if (poolData.hasWebsite) enriched.hasWebsite = true;
           enriched.imageUrl = poolData.imageUrl || null;
-          if (!enriched.liquidity && poolData.liquidity) enriched.liquidity = poolData.liquidity;
-          if (!enriched.volume24h && poolData.volume24h) enriched.volume24h = poolData.volume24h;
-          if (!enriched.pairCreatedAt && poolData.pairCreatedAt) enriched.pairCreatedAt = poolData.pairCreatedAt;
+          if (poolData.liquidity) enriched.liquidity = poolData.liquidity;
+          if (poolData.volume24h) enriched.volume24h = poolData.volume24h;
+          if (poolData.pairCreatedAt) enriched.pairCreatedAt = poolData.pairCreatedAt;
           enriched.priceChange1h = poolData.priceChange1h || null;
           enriched.priceChange6h = poolData.priceChange6h || null;
           enriched.priceChange7d = poolData.priceChange7d || null;
-          if (!enriched.holders && poolData.holderCount) enriched.holders = poolData.holderCount;
+          if (poolData.holderCount) enriched.holders = poolData.holderCount;
+          if (poolData.marketCap) enriched.marketCap = poolData.marketCap;
+          if (poolData.fdv) enriched.fdv = poolData.fdv;
           enriched.isPumpfun = poolData.isPumpfun || false;
           enriched.pumpfunGraduated = poolData.pumpfunGraduated || false;
           enriched.pumpfunBondingCurveProgress = poolData.pumpfunBondingCurveProgress || null;
@@ -5205,9 +5207,29 @@ export async function registerRoutes(
           });
           const newSnapshot = await getSnapshot(snapshotId);
           if (newSnapshot) {
-            return res.json(newSnapshot);
+            const enrichedNew = { ...newSnapshot } as any;
+            enrichedNew.pairCreatedAt = poolData.pairCreatedAt || null;
+            enrichedNew.priceChange1h = poolData.priceChange1h || null;
+            enrichedNew.priceChange6h = poolData.priceChange6h || null;
+            enrichedNew.priceChange7d = poolData.priceChange7d || null;
+            enrichedNew.imageUrl = poolData.imageUrl || null;
+            enrichedNew.twitterUrl = poolData.twitterUrl || null;
+            enrichedNew.telegramUrl = poolData.telegramUrl || null;
+            enrichedNew.websiteUrl = poolData.websiteUrl || null;
+            enrichedNew.isPumpfun = poolData.isPumpfun || false;
+            enrichedNew.pumpfunGraduated = poolData.pumpfunGraduated || false;
+            enrichedNew.pumpfunBondingCurveProgress = poolData.pumpfunBondingCurveProgress || null;
+            enrichedNew.boostRank = poolData.boostRank || null;
+            enrichedNew.trendingRank = poolData.trendingRank || null;
+            enrichedNew.trendingSource = poolData.trendingSource || null;
+            enrichedNew.discoverySource = poolData.discoverySource || null;
+            enrichedNew.whaleHolderCount = poolData.whaleHolderCount || 0;
+            enrichedNew.whaleAvgReputation = poolData.whaleAvgReputation || null;
+            enrichedNew.whaleNetSentiment = poolData.whaleNetSentiment || null;
+            enrichedNew.rugcheckData = poolData.rugcheckData || null;
+            enrichedNew.deployerAddress = poolData.deployerAddress || null;
+            return res.json(enrichedNew);
           }
-          // Snapshot created but couldn't be retrieved — return pool data
           return res.json(buildPoolFallback(poolData));
         } catch (createErr) {
           console.warn("[Snapshots] Failed to auto-create snapshot from pool:", createErr);
