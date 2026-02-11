@@ -669,7 +669,8 @@ async function buildScoringPrompt(
   aggregateData?: { tier: string; open: number; high: number; low: number; close: number; volume: number; buys: number; sells: number; marketCap: number }[],
   whaleData?: { top10Percent: number; holderCount: number; recentWhaleActivity: boolean },
   timeframeContext?: { period: string; priceChange: number; volumeTrend: string; highLow: string }[],
-  individualHolders?: { rank: number; percent: number; isLP?: boolean }[]
+  individualHolders?: { rank: number; percent: number; isLP?: boolean }[],
+  indicatorContext?: string
 ): Promise<string> {
   const data = {
     token: snapshot.tokenSymbol,
@@ -754,6 +755,10 @@ ${timeframeContext.map(t => `- ${t.period}: ${t.priceChange > 0 ? '+' : ''}${t.p
 
 Use this to determine if the token is bleeding out (steady decline), recovering (bounce from low), pumping (sharp rise), or consolidating (sideways).
 `;
+  }
+
+  if (indicatorContext) {
+    prompt += `\n${indicatorContext}\n\nUse these technical indicators to inform momentum and timing assessment. RSI oversold + MACD bullish crossover suggests potential entry. RSI overbought + bearish EMA cross suggests caution.\n`;
   }
 
   if (historicalData && historicalData.length > 0) {
@@ -846,6 +851,7 @@ Key factors to consider (after mandatory thresholds):
 - Dev wallet concentration
 - LP burned/locked status
 - Price patterns from OHLC data (if provided) - look for volatility, trends, support levels
+- Technical indicators (if provided) - RSI for overbought/oversold, MACD for momentum, EMA crosses for trend, Bollinger position for volatility
 - Whale activity - recent whale buys are positive signals, high concentration is risky
 - Timeframe trends (if provided) - distinguish bleeding out (-30%+ over 14d with declining volume) vs recovering (bounce from low with increasing volume) vs pumping vs consolidating
 
@@ -990,7 +996,18 @@ export async function scoreToken(snapshotId: number): Promise<ScoreResult | null
     console.warn("Failed to fetch timeframe price context:", err);
   }
   
-  const prompt = await buildScoringPrompt(snapshot, historicalData, aggregateData, whaleData, timeframeContext, individualHolders);
+  let indicatorContext: string | undefined;
+  try {
+    const { getIndicators, formatIndicatorsForAI } = await import("./technical-indicators");
+    const indicators = await getIndicators(snapshot.tokenMint, "1h");
+    if (indicators) {
+      indicatorContext = formatIndicatorsForAI(indicators);
+    }
+  } catch (err) {
+    // Non-critical
+  }
+
+  const prompt = await buildScoringPrompt(snapshot, historicalData, aggregateData, whaleData, timeframeContext, individualHolders, indicatorContext);
 
   const budgetCheck = await shouldAllowApiCall("openai");
   if (!budgetCheck.allowed) {
@@ -4627,6 +4644,19 @@ export async function chatWithAI(
     }
   } catch (err) {
     // Insight bus not critical, continue without it
+  }
+  
+  // Add technical indicators if discussing a specific token
+  if (tokenMint) {
+    try {
+      const { getIndicators, formatIndicatorsForAI } = await import("./technical-indicators");
+      const indicators = await getIndicators(tokenMint, "1h");
+      if (indicators) {
+        systemPrompt += `\n\nTECHNICAL ANALYSIS:\n${formatIndicatorsForAI(indicators)}\nReference these indicators when analyzing this token's momentum, entry/exit timing, and trend direction.`;
+      }
+    } catch (err) {
+      // Non-critical
+    }
   }
   
   // Check for pending trade and pending settings

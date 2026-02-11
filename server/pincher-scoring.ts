@@ -116,6 +116,26 @@ async function scoreBatchWithAI(tokens: TokenRow[]): Promise<AIScoreResult[]> {
 
   const nowSeconds = Math.floor(Date.now() / 1000);
 
+  const { getIndicators } = await import("./technical-indicators");
+  const indicatorMap = new Map<string, string>();
+
+  try {
+    const indicatorPromises = tokens.slice(0, 10).map(async (t) => {
+      try {
+        const ind = await getIndicators(t.tokenMint, "1h");
+        if (ind) {
+          const parts: string[] = [];
+          if (ind.rsi) parts.push(`RSI${Math.round(ind.rsi.value)}`);
+          if (ind.macd) parts.push(`MACD${ind.macd.trend === "bullish" ? "+" : "-"}`);
+          if (ind.ema) parts.push(`EMA${ind.ema.signal === "bullish" ? "+" : "-"}`);
+          parts.push(`C${ind.composite.score}`);
+          indicatorMap.set(t.tokenMint, parts.join(","));
+        }
+      } catch {}
+    });
+    await Promise.all(indicatorPromises);
+  } catch {}
+
   const rows = tokens.map((t) => {
     const socials: string[] = [];
     if (t.hasTwitter) socials.push("TW");
@@ -132,10 +152,12 @@ async function scoreBatchWithAI(tokens: TokenRow[]): Promise<AIScoreResult[]> {
       ? `${t.whaleHolderCount}w(${t.whaleNetSentiment != null ? (t.whaleNetSentiment >= 0 ? "+" : "") + t.whaleNetSentiment.toFixed(0) : "?"})`
       : "0w";
 
-    return `${t.tokenSymbol || "?"} | ${t.tokenMint} | ${formatNumber(t.priceUsd)} | ${formatNumber(t.marketCap)} | ${formatNumber(t.liquidity)} | ${formatNumber(t.volume24h)} | ${formatPct(t.priceChange1h)} | ${formatPct(t.priceChange6h)} | ${formatPct(t.priceChange24h)} | ${socialStr} | ${ageHrs} | ${whaleStr}`;
+    const indStr = indicatorMap.get(t.tokenMint) || "N/A";
+
+    return `${t.tokenSymbol || "?"} | ${t.tokenMint} | ${formatNumber(t.priceUsd)} | ${formatNumber(t.marketCap)} | ${formatNumber(t.liquidity)} | ${formatNumber(t.volume24h)} | ${formatPct(t.priceChange1h)} | ${formatPct(t.priceChange6h)} | ${formatPct(t.priceChange24h)} | ${socialStr} | ${ageHrs} | ${whaleStr} | ${indStr}`;
   });
 
-  const prompt = `You are a Solana token quality analyst. Score each token 0-100 based on fundamentals quality (NOT hype). Consider: liquidity depth, volume-to-liquidity ratio, price trend health, social presence, token age, crash risk, and whale holder context.
+  const prompt = `You are a Solana token quality analyst. Score each token 0-100 based on fundamentals quality (NOT hype). Consider: liquidity depth, volume-to-liquidity ratio, price trend health, social presence, token age, crash risk, whale holder context, and technical indicator signals (RSI, MACD, EMA crosses).
 
 WHALE column format: Xw(+/-Y) where X = number of known whales holding, Y = net sentiment (positive = reputable whales dominate, negative = sketchy whales dominate). Good whales holding a token is a positive signal. Sketchy whales (negative sentiment) is a red flag but not disqualifying — one bad whale shouldn't ruin an otherwise solid token.
 
@@ -143,7 +165,7 @@ For each token, respond with ONLY a JSON array of objects:
 [{"mint": "...", "score": 0-100, "verdict": "one-line assessment max 60 chars", "confidence": "low|medium|high"}]
 
 Tokens to analyze:
-SYMBOL | MINT | PRICE | MCAP | LIQ | VOL24H | PC1H | PC6H | PC24H | SOCIALS | AGE_HRS | WHALES
+SYMBOL | MINT | PRICE | MCAP | LIQ | VOL24H | PC1H | PC6H | PC24H | SOCIALS | AGE_HRS | WHALES | INDICATORS
 ${rows.join("\n")}`;
 
   try {

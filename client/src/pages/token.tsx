@@ -56,6 +56,21 @@ interface TopHoldersData {
   top10Concentration: number;
 }
 
+interface IndicatorData {
+  available: boolean;
+  message?: string;
+  tokenMint?: string;
+  timeframe?: string;
+  computedAt?: number;
+  ema?: { ema12: number; ema26: number; signal: "bullish" | "bearish" } | null;
+  rsi?: { value: number; signal: "oversold" | "neutral" | "overbought" } | null;
+  macd?: { macd: number; signal: number; histogram: number; trend: "bullish" | "bearish" } | null;
+  bollinger?: { upper: number; middle: number; lower: number; bandwidth: number; position: "above" | "within" | "below" } | null;
+  obv?: { value: number; trend: "accumulating" | "distributing" | "neutral" } | null;
+  stochastic?: { k: number; d: number; signal: "oversold" | "neutral" | "overbought" } | null;
+  composite?: { score: number; bias: "strong_buy" | "buy" | "neutral" | "sell" | "strong_sell" };
+}
+
 export default function TokenPage() {
   const [, params] = useRoute("/trading/:token");
   const tokenMint = params?.token;
@@ -107,6 +122,12 @@ export default function TokenPage() {
   const { data: topHolders, isLoading: isLoadingHolders } = useQuery<TopHoldersData>({
     queryKey: [`/api/token/${tokenMint}/top-holders`],
     enabled: !!tokenMint,
+  });
+
+  const { data: indicators, isLoading: isLoadingIndicators } = useQuery<IndicatorData>({
+    queryKey: ['/api/discovery/token-indicators', tokenMint],
+    enabled: !!tokenMint,
+    refetchInterval: 300000,
   });
 
   const [editingPosition, setEditingPosition] = useState<number | null>(null);
@@ -288,6 +309,7 @@ export default function TokenPage() {
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/trades`] });
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/signal-sources`] });
             queryClient.invalidateQueries({ queryKey: [`/api/token/${tokenMint}/top-holders`] });
+            queryClient.invalidateQueries({ queryKey: ['/api/discovery/token-indicators', tokenMint] });
             toast({ description: "Token data refreshed!" });
           }}
           data-testid="button-refresh-token"
@@ -680,6 +702,143 @@ export default function TokenPage() {
           </CardContent>
         </Card>
       )}
+
+      <Card data-testid="card-technical-indicators">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5" />
+            Technical Indicators
+          </CardTitle>
+          <CardDescription>Momentum and trend signals from price data</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoadingIndicators ? (
+            <div className="space-y-3">
+              <Skeleton className="h-8 w-48" />
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
+              </div>
+            </div>
+          ) : indicators?.available === false ? (
+            <div className="text-center py-4 text-muted-foreground">
+              <BarChart3 className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm" data-testid="text-indicators-unavailable">Not enough price data</p>
+              <p className="text-xs mt-1">{indicators?.message || "Technical indicators require sufficient historical price data"}</p>
+            </div>
+          ) : indicators?.composite ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 flex-wrap" data-testid="indicator-composite">
+                <span className="text-sm font-medium">Composite Score:</span>
+                <Badge
+                  variant={indicators.composite.score >= 60 ? "default" : indicators.composite.score <= 40 ? "destructive" : "secondary"}
+                  className={indicators.composite.score >= 60 ? "bg-green-500/15 text-green-500 border-green-500/30" : indicators.composite.score <= 40 ? "bg-red-500/15 text-red-500 border-red-500/30" : ""}
+                >
+                  {indicators.composite.score}/100
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className={
+                    indicators.composite.bias === "strong_buy" || indicators.composite.bias === "buy"
+                      ? "text-green-500 border-green-500/30"
+                      : indicators.composite.bias === "sell" || indicators.composite.bias === "strong_sell"
+                        ? "text-red-500 border-red-500/30"
+                        : "text-muted-foreground"
+                  }
+                >
+                  {indicators.composite.bias === "strong_buy" ? "Strong Buy" : indicators.composite.bias === "buy" ? "Buy" : indicators.composite.bias === "neutral" ? "Neutral" : indicators.composite.bias === "sell" ? "Sell" : "Strong Sell"}
+                </Badge>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="p-3 rounded-lg bg-muted/50 space-y-1" data-testid="indicator-rsi">
+                  <p className="text-xs text-muted-foreground">RSI</p>
+                  {indicators.rsi ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm">{indicators.rsi.value.toFixed(1)}</span>
+                      <Badge variant="outline" className={indicators.rsi.signal === "oversold" ? "text-green-500 border-green-500/30" : indicators.rsi.signal === "overbought" ? "text-red-500 border-red-500/30" : "text-muted-foreground"}>
+                        {indicators.rsi.signal}
+                      </Badge>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 space-y-1" data-testid="indicator-macd">
+                  <p className="text-xs text-muted-foreground">MACD</p>
+                  {indicators.macd ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm">{indicators.macd.histogram > 0 ? "+" : ""}{indicators.macd.histogram.toFixed(6)}</span>
+                      <Badge variant="outline" className={indicators.macd.trend === "bullish" ? "text-green-500 border-green-500/30" : "text-red-500 border-red-500/30"}>
+                        {indicators.macd.trend}
+                      </Badge>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 space-y-1" data-testid="indicator-ema">
+                  <p className="text-xs text-muted-foreground">EMA Cross</p>
+                  {indicators.ema ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm">{indicators.ema.signal === "bullish" ? "Bullish cross" : "Bearish cross"}</span>
+                      <Badge variant="outline" className={indicators.ema.signal === "bullish" ? "text-green-500 border-green-500/30" : "text-red-500 border-red-500/30"}>
+                        {indicators.ema.signal}
+                      </Badge>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 space-y-1" data-testid="indicator-bollinger">
+                  <p className="text-xs text-muted-foreground">Bollinger</p>
+                  {indicators.bollinger ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm capitalize">{indicators.bollinger.position}</span>
+                      <span className="text-xs text-muted-foreground">BW: {(indicators.bollinger.bandwidth * 100).toFixed(1)}%</span>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 space-y-1" data-testid="indicator-obv">
+                  <p className="text-xs text-muted-foreground">OBV</p>
+                  {indicators.obv ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`font-medium text-sm capitalize ${indicators.obv.trend === "accumulating" ? "text-green-500" : indicators.obv.trend === "distributing" ? "text-red-500" : "text-muted-foreground"}`}>
+                        {indicators.obv.trend}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50 space-y-1" data-testid="indicator-stochastic">
+                  <p className="text-xs text-muted-foreground">Stochastic</p>
+                  {indicators.stochastic ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm">K: {indicators.stochastic.k.toFixed(1)}</span>
+                      <Badge variant="outline" className={indicators.stochastic.signal === "oversold" ? "text-green-500 border-green-500/30" : indicators.stochastic.signal === "overbought" ? "text-red-500 border-red-500/30" : "text-muted-foreground"}>
+                        {indicators.stochastic.signal}
+                      </Badge>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">N/A</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-4 text-muted-foreground">
+              <BarChart3 className="h-8 w-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No indicator data available</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* External Links & Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
