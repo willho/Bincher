@@ -4115,3 +4115,37 @@ export const jupiterLatencyStats = pgTable("jupiter_latency_stats", {
 export const insertJupiterLatencyStatsSchema = createInsertSchema(jupiterLatencyStats).omit({ id: true });
 export type JupiterLatencyStat = typeof jupiterLatencyStats.$inferSelect;
 export type InsertJupiterLatencyStat = z.infer<typeof insertJupiterLatencyStatsSchema>;
+
+// =====================
+// EXIT STRATEGY LEARNING
+// =====================
+
+export const exitStrategyLearnings = pgTable("exit_strategy_learnings", {
+  id: serial("id").primaryKey(),
+
+  // Cluster identifier
+  clusterId: text("cluster_id").notNull(), // spike_and_bleed, slow_moon, etc
+  clusterName: text("cluster_name").notNull(),
+
+  // Strategy comparison
+  baselineStrategy: jsonb("baseline_strategy").notNull(), // Original hardcoded values
+  learnedStrategy: jsonb("learned_strategy").notNull(), // Refined via actual trades
+
+  // Learning details
+  sampleCount: integer("sample_count").notNull(), // Trades analyzed
+  confidence: real("confidence").notNull(), // 0-1, higher = more reliable
+  improvement: real("improvement"), // % better than baseline (-100 to +100)
+
+  // Exit tier details (for analysis)
+  tierHitRates: jsonb("tier_hit_rates"), // { "2.0": 0.85, "4.0": 0.62, ...}
+  tierAveragePnl: jsonb("tier_average_pnl"),
+
+  // Timing
+  createdAt: integer("created_at").notNull(),
+  appliedAt: integer("applied_at"), // When this strategy started being used
+  updatedAt: integer("updated_at"),
+});
+
+export const insertExitStrategyLearningSchema = createInsertSchema(exitStrategyLearnings).omit({ id: true, createdAt: true });
+export type ExitStrategyLearning = typeof exitStrategyLearnings.$inferSelect;
+export type InsertExitStrategyLearning = z.infer<typeof insertExitStrategyLearningSchema>;
