@@ -282,6 +282,8 @@ function registerDefaultHandlers(): void {
     "boost_detected",
     "social_call",
     "social_detected",
+    "pumpfun_graduated",
+    "raydium_new_pool",
   ] as DiscoveryEventType[]) {
     onEvent(type, runImmediateDiscoveryScan);
     onEvent(type, publishToInsightBus);
