@@ -49,6 +49,11 @@ async function assertEquals<T>(actual: T, expected: T, message: string): Promise
 // =====================
 
 const MOCK_TOKENS = {
+  BONDING_CURVE: {
+    mint: "BC12345678901234567890123456789012345678901012",
+    symbol: "BOND",
+    name: "Bonding Curve Token",
+  },
   GRADUATED: {
     mint: "GRAD123456789012345678901234567890123456789012",
     symbol: "GRAD",
@@ -66,6 +71,84 @@ const MOCK_TOKENS = {
     name: "Well Performing Token",
   },
 };
+
+// =====================
+// TEST 0: Bonding Curve Discovery
+// =====================
+
+export async function testBondingCurveDiscovery(): Promise<void> {
+  console.log("\n=== Test 0: Bonding Curve Discovery ===");
+
+  try {
+    const now = Math.floor(Date.now() / 1000);
+
+    // Simulate a token discovered on pump.fun bonding curve
+    const [bcToken] = await db
+      .insert(tokenDataPool)
+      .values({
+        tokenMint: "BC" + MOCK_TOKENS.GRADUATED.mint.slice(2), // Bonding curve version
+        tokenSymbol: "BOND",
+        tokenName: "Bonding Curve Token",
+        pairCreatedAt: now - 600, // Created 10 minutes ago
+        isPumpfun: true,
+        pumpfunGraduated: false,
+        pumpfunBondingCurveProgress: 45.5, // 45.5% progress toward graduation
+        marketCap: 25000,
+        deployerAddress: "DeployerABC123",
+        createdAt: now,
+      })
+      .returning();
+
+    await assert(bcToken !== undefined, "Bonding curve token registered");
+    await assert(bcToken.isPumpfun === true, "Token marked as pump.fun");
+    await assert(bcToken.pumpfunGraduated === false, "Token not yet graduated");
+    await assertEquals(
+      bcToken.pumpfunBondingCurveProgress,
+      45.5,
+      "Bonding curve progress tracked (45.5%)"
+    );
+
+    // Create token outcome with bonding curve metrics
+    const [outcome] = await db
+      .insert(tokenOutcomes)
+      .values({
+        tokenMint: bcToken.tokenMint,
+        earlyBuyerWinRate: 0.8,
+        earlyBuyerMedianMultiplier: 2.1,
+        profitableWalletCount: 28,
+        bondingVelocity: 11.4, // 11.4% per hour
+        bondingBuyerGrowthRate: 15, // 15 new buyers per hour
+        bondingEarlyBuyerConcentration: 0.25, // Top 10 buyers hold 25%
+        isPlayedOut: false,
+        createdAt: now,
+      })
+      .returning();
+
+    await assert(outcome !== undefined, "Bonding curve outcome recorded");
+    await assertEquals(
+      outcome.bondingVelocity,
+      11.4,
+      "Bonding velocity tracked (11.4%/hour)"
+    );
+    await assertEquals(outcome.bondingBuyerGrowthRate, 15, "Buyer growth tracked (15/hour)");
+
+    // Verify token can be tracked for graduation
+    const trackedToken = await db.query.tokenDataPool.findFirst({
+      where: eq(tokenDataPool.tokenMint, bcToken.tokenMint),
+    });
+
+    await assert(trackedToken !== undefined, "Token queryable for graduation tracking");
+    await assert(
+      trackedToken?.pumpfunBondingCurveProgress! < 100,
+      "Token identified as pre-graduation"
+    );
+
+    console.log("✓ Bonding curve token discovery pipeline verified");
+  } catch (error) {
+    console.error("Test failed with error:", error);
+    testsFailed++;
+  }
+}
 
 // =====================
 // TEST 1: Graduation Event Creation
@@ -428,6 +511,7 @@ async function cleanupTestData(): Promise<void> {
   try {
     // Delete all test tokens and related records
     const testMints = [
+      MOCK_TOKENS.BONDING_CURVE.mint,
       MOCK_TOKENS.GRADUATED.mint,
       MOCK_TOKENS.NEW_POOL.mint,
       MOCK_TOKENS.WELL_PERFORMING.mint,
@@ -455,10 +539,12 @@ async function cleanupTestData(): Promise<void> {
 
 export async function runAllTests(): Promise<void> {
   console.log("╔════════════════════════════════════════════╗");
-  console.log("║  Integration Tests: Graduation & Pools     ║");
+  console.log("║  Integration Tests: Token Lifecycle       ║");
+  console.log("║  (Bonding Curve → Graduation → Raydium)  ║");
   console.log("╚════════════════════════════════════════════╝");
 
   try {
+    await testBondingCurveDiscovery();
     await testGraduationEventCreation();
     await testPoolDiscoveryAndQuality();
     await testFingerprintLearning();
