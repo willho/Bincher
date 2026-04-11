@@ -131,6 +131,12 @@ app.use((req, res, next) => {
 
     const { startSystemPicks } = await import("./system-picks");
     startSystemPicks();
+
+    const { startRetrolearnerV2 } = await import("./retrolearner-v2");
+    startRetrolearnerV2();
+
+    const { startSystemPicksV2 } = await import("./system-picks-v2");
+    startSystemPicksV2();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");
