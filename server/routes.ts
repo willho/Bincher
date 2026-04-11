@@ -8375,6 +8375,43 @@ export async function registerRoutes(
     }
   });
 
+  // =====================
+  // Pump.fun Bonding Curve Endpoints
+  // =====================
+
+  app.get("/api/pumpfun/bonding-curve/tracked", requireAuth, async (req, res) => {
+    try {
+      const { getTrackedBondingCurveTokens } = await import("./pumpfun-bonding-curve");
+      const tracked = getTrackedBondingCurveTokens();
+      res.json({ tokens: tracked, count: tracked.length });
+    } catch (error: any) {
+      console.error("Error fetching tracked bonding curve tokens:", error);
+      res.status(500).json({ error: "Failed to fetch tracked tokens" });
+    }
+  });
+
+  app.get("/api/pumpfun/bonding-curve/stats", requireAuth, async (req, res) => {
+    try {
+      const { getPumpFunMonitoringStats } = await import("./pumpfun-bonding-curve");
+      const stats = getPumpFunMonitoringStats();
+      res.json(stats);
+    } catch (error: any) {
+      console.error("Error fetching pump.fun stats:", error);
+      res.status(500).json({ error: "Failed to fetch stats" });
+    }
+  });
+
+  app.get("/api/pumpfun/bonding-curve/force-check", requireAuth, async (req, res) => {
+    try {
+      const { forceNewTokenCheck } = await import("./pumpfun-bonding-curve");
+      const newTokens = await forceNewTokenCheck();
+      res.json({ found: newTokens.length, tokens: newTokens });
+    } catch (error: any) {
+      console.error("Error forcing new token check:", error);
+      res.status(500).json({ error: "Failed to force check" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   restoreMonitoring();
   

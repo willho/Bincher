@@ -120,6 +120,9 @@ app.use((req, res, next) => {
     const { initializeWhaleTracker } = await import("./whale-tracker");
     initializeWhaleTracker();
 
+    const { startPumpFunMonitoring } = await import("./pumpfun-bonding-curve");
+    startPumpFunMonitoring();
+
     const { startGraduationTracking } = await import("./graduation-tracker");
     startGraduationTracking();
 
