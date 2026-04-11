@@ -125,6 +125,9 @@ app.use((req, res, next) => {
 
     const { startRaydiumPoolDiscovery } = await import("./raydium-pool-discovery");
     startRaydiumPoolDiscovery();
+
+    const { startRetrolearner } = await import("./retrolearner");
+    startRetrolearner();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");
