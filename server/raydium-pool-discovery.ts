@@ -1,196 +1,158 @@
 import { db } from "./db";
-import { eq, and, gte } from "drizzle-orm";
+import { eq, gte, desc } from "drizzle-orm";
 import { raydiumPoolDiscoveries, tokenDataPool } from "@shared/schema";
 import { emit } from "./discovery-event-bus";
-import axios, { AxiosInstance } from "axios";
-
-const RAYDIUM_PROGRAM_ID = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
-
-interface RpcEndpoint {
-  url: string;
-  name: string;
-  lastError?: Error;
-  consecutiveFailures: number;
-}
+import axios from "axios";
 
 interface PoolDiscoveryConfig {
   pollIntervalMs: number;
-  requestsPerSecond: number;
   minLiquidityUsd: number;
   maxAgeMinutes: number;
 }
 
 const config: PoolDiscoveryConfig = {
-  pollIntervalMs: 500, // 2 per second (500ms interval)
-  requestsPerSecond: 2,
-  minLiquidityUsd: 1000, // Only track pools with >$1000 liquidity
+  pollIntervalMs: 30000, // Poll GeckoTerminal every 30 seconds (well within rate limits)
+  minLiquidityUsd: 500, // Track pools with >$500 liquidity
   maxAgeMinutes: 60, // Only look at pools created in last hour
 };
 
-const endpoints: RpcEndpoint[] = [
-  {
-    url: "https://api.mainnet.solana.com",
-    name: "Solana Official",
-    consecutiveFailures: 0,
-  },
-  {
-    url: "https://free.rpcpool.com",
-    name: "RPCPool Free",
-    consecutiveFailures: 0,
-  },
-];
-
-let currentEndpointIndex = 0;
-let lastPollTime = 0;
 let discoveredPools = new Set<string>();
-let lastKnownSlot = 0;
+let lastPollTime = 0;
 let pollInterval: NodeJS.Timeout | null = null;
+let consecutiveFailures = 0;
 
 /**
- * Get next RPC endpoint with round-robin + fallback
- */
-function getNextEndpoint(): RpcEndpoint {
-  let attempts = 0;
-  while (attempts < endpoints.length) {
-    const endpoint = endpoints[currentEndpointIndex];
-    currentEndpointIndex = (currentEndpointIndex + 1) % endpoints.length;
-
-    if (endpoint.consecutiveFailures < 5) {
-      return endpoint;
-    }
-    attempts++;
-  }
-
-  // If all failed, reset and return first
-  endpoints.forEach((ep) => {
-    ep.consecutiveFailures = 0;
-  });
-  return endpoints[0];
-}
-
-/**
- * Poll for new Raydium pools via RPC getProgramAccounts
+ * Poll for new Solana pools via GeckoTerminal API
+ * GeckoTerminal provides free access to new_pools endpoint with ~15-30s delay
  */
 async function pollForNewPools(): Promise<void> {
   try {
-    const endpoint = getNextEndpoint();
     const now = Math.floor(Date.now() / 1000);
 
-    // Create axios instance with timeout
-    const rpc = axios.create({
-      timeout: 10000,
-      headers: { "Content-Type": "application/json" },
-    });
-
-    // Query getProgramAccounts for Raydium V4
-    // This returns all accounts owned by the program
-    const response = await rpc.post(endpoint.url, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getProgramAccounts",
-      params: [
-        RAYDIUM_PROGRAM_ID,
-        {
-          encoding: "jsonParsed",
-          filters: [
-            {
-              dataSize: 100, // Approximate size of pool account
-            },
-          ],
+    // Query GeckoTerminal for new Solana pools
+    const response = await axios.get(
+      "https://api.geckoterminal.com/api/v2/networks/solana/new_pools",
+      {
+        timeout: 10000,
+        params: {
+          include: "dex", // Include DEX info
+          order: "created_at", // Order by creation time
         },
-      ],
-    });
-
-    if (response.data.error) {
-      throw new Error(`RPC Error: ${response.data.error.message}`);
-    }
-
-    endpoint.consecutiveFailures = 0;
-
-    const accounts = response.data.result || [];
-    console.log(
-      `[RaydiumDiscovery] Fetched ${accounts.length} pool accounts from ${endpoint.name}`
+      }
     );
 
-    // Process accounts
-    for (const account of accounts) {
-      try {
-        // Extract pool info from account data
-        const poolAddress = account.pubkey;
+    if (!response.data?.data || response.data.data.length === 0) {
+      console.log("[RaydiumDiscovery] No new pools from GeckoTerminal");
+      consecutiveFailures = 0;
+      return;
+    }
 
+    consecutiveFailures = 0;
+    const pools = response.data.data;
+
+    console.log(`[RaydiumDiscovery] Found ${pools.length} new pools from GeckoTerminal`);
+
+    // Process each pool
+    for (const pool of pools) {
+      try {
+        const poolAddress = pool.attributes?.address;
+        if (!poolAddress) continue;
+
+        // Skip if already tracked
         if (discoveredPools.has(poolAddress)) {
-          continue; // Already tracked
+          continue;
         }
 
-        // Check if already in database
-        const existing = await db.query.raydiumPoolDiscoveries.findFirst({
-          where: eq(raydiumPoolDiscoveries.poolAddress, poolAddress),
+        // Extract token mints from the pool
+        const baseToken = pool.relationships?.base_token?.data?.id;
+        const quoteToken = pool.relationships?.quote_token?.data?.id;
+
+        if (!baseToken || !quoteToken) {
+          continue;
+        }
+
+        // Extract liquidity info
+        const liquidity = pool.attributes?.reserve_in_usd || 0;
+
+        // Skip pools below minimum liquidity
+        if (liquidity < config.minLiquidityUsd) {
+          continue;
+        }
+
+        // Check if pool is too old
+        const createdAt = pool.attributes?.created_at;
+        const poolAge = createdAt
+          ? (now - Math.floor(new Date(createdAt).getTime() / 1000)) / 60
+          : 0;
+
+        if (poolAge > config.maxAgeMinutes) {
+          continue;
+        }
+
+        discoveredPools.add(poolAddress);
+
+        // Store pool discovery
+        const dexId = pool.relationships?.dex?.data?.id || "unknown";
+
+        await db
+          .insert(raydiumPoolDiscoveries)
+          .values({
+            poolAddress,
+            baseTokenMint: baseToken,
+            quoteTokenMint: quoteToken,
+            discoveredAt: now,
+            sourceType: "rpc_scan",
+            liquidityUsd: liquidity,
+            lastUpdatedAt: now,
+            isVerified: false,
+            qualityScore: 0,
+          })
+          .onConflictDoNothing(); // Ignore if already exists
+
+        // Try to link to tokenDataPool if we can identify the token
+        // Use base token as primary token link
+        const existingToken = await db.query.tokenDataPool.findFirst({
+          where: eq(tokenDataPool.tokenMint, baseToken),
+          limit: 1,
         });
 
-        if (!existing) {
-          // New pool discovered
-          discoveredPools.add(poolAddress);
+        // Emit discovery event
+        await emit({
+          type: "raydium_new_pool",
+          tokenMint: baseToken,
+          source: "raydium_discovery",
+          data: {
+            poolAddress,
+            baseToken,
+            quoteToken,
+            dexId,
+            liquidityUsd: liquidity,
+            poolAgeMinutes: poolAge,
+          },
+          timestamp: now,
+          urgency: 65,
+        });
 
-          // Try to extract token mints from parsed data
-          const data = account.account.data;
-          const baseToken = extractTokenFromData(data, 0);
-          const quoteToken = extractTokenFromData(data, 1);
-
-          if (baseToken && quoteToken) {
-            // Store pool discovery
-            const discovery = await db.insert(raydiumPoolDiscoveries).values({
-              poolAddress,
-              baseTokenMint: baseToken,
-              quoteTokenMint: quoteToken,
-              discoveredAt: now,
-              sourceType: "rpc_scan",
-              liquidityUsd: 0, // Would need to calculate from pool state
-              lastUpdatedAt: now,
-              isVerified: false,
-              qualityScore: 0,
-            });
-
-            // Try to link to tokenDataPool
-            const linkToToken = baseToken; // Use base token as primary
-            const existingToken = await db.query.tokenDataPool.findFirst({
-              where: eq(tokenDataPool.tokenMint, linkToToken),
-            });
-
-            // Emit discovery event
-            await emit({
-              type: "raydium_new_pool",
-              tokenMint: linkToToken,
-              source: "raydium_discovery",
-              data: {
-                poolAddress,
-                baseToken,
-                quoteToken,
-                discovered: true,
-              },
-              timestamp: now,
-              urgency: 70,
-            });
-
-            console.log(
-              `[RaydiumDiscovery] New pool discovered: ${poolAddress} (${baseToken}/${quoteToken})`
-            );
-          }
-        }
+        console.log(
+          `[RaydiumDiscovery] New pool discovered: ${poolAddress} (${baseToken}/${quoteToken}, $${liquidity})`
+        );
       } catch (error) {
-        // Skip this account on error
-        console.debug(`[RaydiumDiscovery] Error processing account:`, error);
+        // Skip this pool on error
+        console.debug(
+          `[RaydiumDiscovery] Error processing pool:`,
+          error instanceof Error ? error.message : error
+        );
       }
     }
   } catch (error) {
-    const endpoint = endpoints[currentEndpointIndex];
-    endpoint.consecutiveFailures++;
+    consecutiveFailures++;
+    console.error(
+      `[RaydiumDiscovery] Poll error (failures: ${consecutiveFailures}):`,
+      error instanceof Error ? error.message : error
+    );
 
-    console.error(`[RaydiumDiscovery] Poll error (${endpoint.name}):`, error instanceof Error ? error.message : error);
-
-    // Implement exponential backoff
-    if (endpoint.consecutiveFailures >= 3) {
-      console.warn(`[RaydiumDiscovery] Endpoint ${endpoint.name} failing, switching...`);
-      getNextEndpoint();
+    if (consecutiveFailures >= 5) {
+      console.warn("[RaydiumDiscovery] Too many consecutive failures, backing off...");
     }
   }
 
@@ -198,34 +160,12 @@ async function pollForNewPools(): Promise<void> {
 }
 
 /**
- * Extract token mint from raw pool account data
- * This is a simplified version - real implementation would parse Raydium account structure
- */
-function extractTokenFromData(data: any, index: number): string | null {
-  try {
-    if (typeof data === "string") {
-      // Base64 encoded
-      // In production, would decode and parse binary format
-      return null;
-    }
-
-    if (data.parsed?.info) {
-      const info = data.parsed.info;
-      if (index === 0 && info.baseToken) return info.baseToken;
-      if (index === 1 && info.quoteToken) return info.quoteToken;
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Start the polling loop
  */
 export async function startRaydiumPoolDiscovery(): Promise<void> {
-  console.log("[RaydiumDiscovery] Starting Raydium pool discovery polling at 2 req/sec...");
+  console.log(
+    "[RaydiumDiscovery] Starting Raydium pool discovery via GeckoTerminal (30s interval)..."
+  );
 
   // Load existing pools to avoid re-processing
   try {
@@ -242,7 +182,25 @@ export async function startRaydiumPoolDiscovery(): Promise<void> {
   await pollForNewPools();
 
   // Set up polling with configured interval
-  pollInterval = setInterval(pollForNewPools, config.pollIntervalMs);
+  // Exponential backoff if failures
+  const getInterval = () => {
+    if (consecutiveFailures >= 5) {
+      return config.pollIntervalMs * 5; // Back off to 2.5 minutes
+    }
+    return config.pollIntervalMs;
+  };
+
+  const scheduleNextPoll = () => {
+    const interval = getInterval();
+    pollInterval = setTimeout(() => {
+      pollForNewPools().then(scheduleNextPoll).catch((error) => {
+        console.error("[RaydiumDiscovery] Unhandled error in poll loop:", error);
+        scheduleNextPoll();
+      });
+    }, interval);
+  };
+
+  scheduleNextPoll();
 }
 
 /**
@@ -250,7 +208,7 @@ export async function startRaydiumPoolDiscovery(): Promise<void> {
  */
 export function stopRaydiumPoolDiscovery(): void {
   if (pollInterval) {
-    clearInterval(pollInterval);
+    clearTimeout(pollInterval);
     pollInterval = null;
     console.log("[RaydiumDiscovery] Stopped pool discovery");
   }
@@ -265,7 +223,7 @@ export async function getRecentPools(limitMinutes: number = 10) {
 
     return await db.query.raydiumPoolDiscoveries.findMany({
       where: gte(raydiumPoolDiscoveries.discoveredAt, cutoffTime),
-      orderBy: (pools, { desc }) => desc(pools.discoveredAt),
+      orderBy: [desc(raydiumPoolDiscoveries.discoveredAt)],
       limit: 100,
     });
   } catch (error) {
