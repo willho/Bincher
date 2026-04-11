@@ -140,6 +140,9 @@ app.use((req, res, next) => {
 
     const { startSystemPicksV2 } = await import("./system-picks-v2");
     startSystemPicksV2();
+
+    const { startTokenLifecycleLearning } = await import("./token-lifecycle-learning");
+    startTokenLifecycleLearning();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");
