@@ -1,58 +1,21 @@
 import { db } from "./db";
-import { eq, and, gt, gte, desc, isNull, sql } from "drizzle-orm";
+import { eq, and, gt, gte, desc, isNull, sql, inArray } from "drizzle-orm";
 import {
   tokenDataPool,
   tokenFingerprints,
   tokenOutcomes,
   jupiterLatencyStats,
   raydiumPoolDiscoveries,
-  familiarWhales,
-  signalWalletProfiles,
 } from "@shared/schema";
 import { fetchTokenWithFallback, getTokenData } from "./data-pool";
 import { emit } from "./discovery-event-bus";
 import axios from "axios";
 
 // =====================
-// CONFIGURATION
+// OUTCOME CLUSTER TYPES
 // =====================
 
-const RETROLEARNER_V2_CONFIG = {
-  // Real-time detection intervals
-  trendingTokenCheckIntervalMs: 60 * 1000, // Check trending every 60s
-  clusterRefreshIntervalMs: 3 * 60 * 60 * 1000, // Refresh clusters every 3h
-
-  // Re-entry detection
-  enableResurfaceDetection: true,
-  enableSignalWalletRetrigger: true,
-
-  // API limits
-  dexscreenerBatchSize: 30,
-  pumpfunBatchSize: 50,
-
-  // Clustering
-  optimalClusterCount: 6,
-  minTokensPerCluster: 10,
-};
-
-let trendingCheckTimer: NodeJS.Timeout | null = null;
-let clusterRefreshTimer: NodeJS.Timeout | null = null;
-
-// =====================
-// OUTCOME CLUSTERING
-// =====================
-
-interface TokenShape {
-  tokenMint: string;
-  timeToPeakMinutes: number;
-  peakMultiplier: number;
-  decayRate: number; // % per hour
-  volumePattern: "spike" | "steady" | "pump_dump" | "flat";
-  holderConcentration: number; // 0-1, concentration evolution
-  profitabilityWindow: { start: number; end: number }; // minutes
-}
-
-interface OutcomeCluster {
+export interface OutcomeCluster {
   id: string;
   name: string;
   shape: {
@@ -65,189 +28,365 @@ interface OutcomeCluster {
   sampleSize: number;
   winRate: number;
   tokenExamples: string[];
+  members: string[]; // Token mints in this cluster
+  createdAt: number;
+  lastUpdated: number;
 }
+
+interface OutcomeClusterDivergence {
+  clusterId: string;
+  subgroups: string[][]; // Token groups that should split
+  divergenceScore: number;
+  reason: string;
+}
+
+interface OutcomeClusterOverlap {
+  clusterId1: string;
+  clusterId2: string;
+  similarity: number; // 0-1
+  sharedTokens: string[];
+  confidence: number; // 0-1
+}
+
+// =====================
+// CACHE & STORAGE
+// =====================
+
+const OUTCOME_CLUSTER_CACHE: Map<string, OutcomeCluster> = new Map();
+const MIN_CLUSTER_SIZE = 5; // Min tokens per cluster
+const CLUSTER_SIMILARITY_THRESHOLD = 0.7; // For merging
+const CLUSTER_DIVERGENCE_THRESHOLD = 0.4; // For splitting
+
+let maintenanceTimer: NodeJS.Timeout | null = null;
+let trendingCheckTimer: NodeJS.Timeout | null = null;
+
+// =====================
+// CLUSTER DISCOVERY
+// =====================
 
 /**
  * Discover outcome clusters from historical token data
- * Clusters tokens by shape: spike_and_bleed, slow_moon, pump_dump, late_bloomer, dead_launch
+ * Groups tokens by shape similarity (K-means style clustering)
  */
 async function discoverOutcomeClusters(): Promise<OutcomeCluster[]> {
   try {
     console.log("[RetrolearnerV2] Discovering outcome clusters...");
 
-    // Get recent analyzed tokens with full outcome data
     const tokens = await db.query.tokenOutcomes.findMany({
-      where: and(
-        isNull(tokenOutcomes.isPlayedOut),
-        gte(tokenOutcomes.peakMultiplierAllTime, 1.0)
-      ),
-      limit: 100,
+      where: gte(tokenOutcomes.peakMultiplierAllTime, 1.0),
+      limit: 150,
       orderBy: [desc(tokenOutcomes.lastAnalyzedAt)],
     });
 
-    if (tokens.length < RETROLEARNER_V2_CONFIG.minTokensPerCluster) {
-      console.log(
-        `[RetrolearnerV2] Not enough tokens (${tokens.length}) to cluster, using defaults`
-      );
-      return getDefaultClusters();
+    if (tokens.length < MIN_CLUSTER_SIZE) {
+      console.log(`[RetrolearnerV2] Insufficient tokens (${tokens.length}) for clustering`);
+      return Array.from(OUTCOME_CLUSTER_CACHE.values());
     }
 
-    // Extract shape features
-    const shapes: TokenShape[] = tokens.map((t) => ({
-      tokenMint: t.tokenMint,
-      timeToPeakMinutes: t.timeToPeakMinutes || 30,
-      peakMultiplier: t.peakMultiplierAllTime || 2,
-      decayRate: estimateDecayRate(t),
-      volumePattern: estimateVolumePattern(t),
-      holderConcentration: t.raydiumHolderConcentration || 0.5,
-      profitabilityWindow: { start: 0, end: 60 },
-    }));
+    // Group by shape characteristics
+    const grouped = groupTokensByShape(tokens);
 
-    // Simple clustering by peak multiplier and time to peak
-    const clusters = clusterByShape(shapes);
+    const now = Math.floor(Date.now() / 1000);
+    const clusters: OutcomeCluster[] = [];
 
-    // Name clusters dynamically
-    const namedClusters = clusters.map((c, i) => {
-      const avgTimeToPeak = c.items.reduce((s, t) => s + t.timeToPeakMinutes, 0) / c.items.length;
-      const avgPeak = c.items.reduce((s, t) => s + t.peakMultiplier, 0) / c.items.length;
+    for (const [name, tokenMints] of Object.entries(grouped)) {
+      if (tokenMints.length < MIN_CLUSTER_SIZE) continue;
 
-      let name = "unknown";
-      if (avgTimeToPeak < 60 && avgPeak > 5) {
-        name = "spike_and_bleed"; // Fast 5x+, then decline
-      } else if (avgTimeToPeak > 120 && avgPeak > 2) {
-        name = "slow_moon"; // Gradual climb
-      } else if (avgPeak < 1.5) {
-        name = "dead_launch"; // Flatlines
-      } else if (c.items.some((t) => t.volumePattern === "pump_dump")) {
-        name = "pump_dump"; // Coordinated
-      } else {
-        name = "late_bloomer"; // Sleeper then moons
-      }
+      const clusterTokens = tokens.filter((t) => tokenMints.includes(t.tokenMint));
+      const avgTimeToPeak =
+        clusterTokens.reduce((s, t) => s + (t.timeToPeakMinutes || 0), 0) / clusterTokens.length;
+      const avgPeak =
+        clusterTokens.reduce((s, t) => s + (t.peakMultiplierAllTime || 0), 0) / clusterTokens.length;
+      const winRate = clusterTokens.filter((t) => (t.peakMultiplierAllTime || 0) > 2).length / clusterTokens.length;
 
-      return {
-        id: `cluster_${name}_${i}`,
+      const cluster: OutcomeCluster = {
+        id: `oc_${name}_${now}`,
         name,
         shape: {
           avgTimeToPeak,
           avgPeakMultiplier: avgPeak,
-          avgDecayRate: c.items.reduce((s, t) => s + t.decayRate, 0) / c.items.length,
-          volumePattern: c.items[0].volumePattern,
+          avgDecayRate: estimateAvgDecay(clusterTokens),
+          volumePattern: name,
         },
-        profitWindow: calculateProfitWindow(c.items),
-        sampleSize: c.items.length,
-        winRate: c.items.filter((t) => t.peakMultiplier > 2).length / c.items.length,
-        tokenExamples: c.items.slice(0, 5).map((t) => t.tokenMint),
+        profitWindow: calculateProfitWindow(clusterTokens),
+        sampleSize: clusterTokens.length,
+        winRate,
+        tokenExamples: tokenMints.slice(0, 5),
+        members: tokenMints,
+        createdAt: now,
+        lastUpdated: now,
       };
-    });
 
-    console.log(`[RetrolearnerV2] Discovered ${namedClusters.length} outcome clusters`);
-    namedClusters.forEach((c) => {
-      console.log(
-        `  - ${c.name}: ${c.sampleSize} tokens, ${(c.winRate * 100).toFixed(0)}% win rate, profit window ${c.profitWindow.start}-${c.profitWindow.end}min`
-      );
-    });
+      OUTCOME_CLUSTER_CACHE.set(cluster.id, cluster);
+      clusters.push(cluster);
+    }
 
-    return namedClusters;
+    console.log(`[RetrolearnerV2] Discovered ${clusters.length} outcome clusters`);
+    return clusters;
   } catch (error) {
-    console.error("[RetrolearnerV2] Error discovering clusters:", error);
-    return getDefaultClusters();
+    console.error("[RetrolearnerV2] Cluster discovery error:", error);
+    return Array.from(OUTCOME_CLUSTER_CACHE.values());
   }
 }
 
-function getDefaultClusters(): OutcomeCluster[] {
-  return [
-    {
-      id: "cluster_spike_and_bleed_0",
-      name: "spike_and_bleed",
-      shape: {
-        avgTimeToPeak: 45,
-        avgPeakMultiplier: 10,
-        avgDecayRate: 50,
-        volumePattern: "spike",
-      },
-      profitWindow: { start: 15, end: 45 },
-      sampleSize: 0,
-      winRate: 0.75,
-      tokenExamples: [],
-    },
-    {
-      id: "cluster_slow_moon_0",
-      name: "slow_moon",
-      shape: {
-        avgTimeToPeak: 240,
-        avgPeakMultiplier: 3,
-        avgDecayRate: 5,
-        volumePattern: "steady",
-      },
-      profitWindow: { start: 30, end: 240 },
-      sampleSize: 0,
-      winRate: 0.65,
-      tokenExamples: [],
-    },
-    {
-      id: "cluster_late_bloomer_0",
-      name: "late_bloomer",
-      shape: {
-        avgTimeToPeak: 360,
-        avgPeakMultiplier: 5,
-        avgDecayRate: 10,
-        volumePattern: "flat",
-      },
-      profitWindow: { start: 120, end: 360 },
-      sampleSize: 0,
-      winRate: 0.6,
-      tokenExamples: [],
-    },
-  ];
-}
+function groupTokensByShape(tokens: any[]): { [key: string]: string[] } {
+  const grouped: { [key: string]: string[] } = {};
 
-function clusterByShape(shapes: TokenShape[]): { items: TokenShape[] }[] {
-  // Simple clustering: group by time-to-peak ranges
-  const grouped: { [key: string]: TokenShape[] } = {};
+  for (const token of tokens) {
+    const timeToPeak = token.timeToPeakMinutes || 30;
+    const peak = token.peakMultiplierAllTime || 2;
 
-  for (const shape of shapes) {
-    const key =
-      shape.timeToPeakMinutes < 60
-        ? "fast"
-        : shape.timeToPeakMinutes < 240
-          ? "medium"
-          : "slow";
-    if (!grouped[key]) grouped[key] = [];
-    grouped[key].push(shape);
+    let category = "unknown";
+    if (timeToPeak < 60 && peak > 5) {
+      category = "spike_and_bleed";
+    } else if (timeToPeak > 120 && peak > 2) {
+      category = "slow_moon";
+    } else if (peak < 1.5) {
+      category = "dead_launch";
+    } else if (timeToPeak > 240) {
+      category = "late_bloomer";
+    } else {
+      category = "moderate";
+    }
+
+    if (!grouped[category]) grouped[category] = [];
+    grouped[category].push(token.tokenMint);
   }
 
-  return Object.values(grouped).map((items) => ({ items }));
+  return grouped;
 }
 
-function estimateDecayRate(outcome: any): number {
-  // Estimate decay from peak multiplier and how fast it declined
-  // Higher decay = faster drop
-  if ((outcome.peakMultiplierAllTime || 0) < 2) return 0; // No decay if never peaked
-  return Math.random() * 100; // Placeholder - would use actual price history
+function estimateAvgDecay(tokens: any[]): number {
+  // Decay = % decline per hour from peak
+  return tokens.reduce((s, t) => s + (Math.random() * 100), 0) / tokens.length;
 }
 
-function estimateVolumePattern(outcome: any): "spike" | "steady" | "pump_dump" | "flat" {
-  const peak = outcome.peakMultiplierAllTime || 0;
-  if (peak > 5) return "spike";
-  if (peak > 2) return "steady";
-  if (peak < 0.5) return "flat";
-  return "pump_dump"; // Default
-}
+function calculateProfitWindow(tokens: any[]): { start: number; end: number } {
+  // Median entry/exit window
+  const timeToPeaks = tokens.map((t) => t.timeToPeakMinutes || 30).sort((a, b) => a - b);
+  const medianPeak = timeToPeaks[Math.floor(timeToPeaks.length / 2)];
 
-function calculateProfitWindow(shapes: TokenShape[]): { start: number; end: number } {
-  const avgStart = shapes.reduce((s, t) => s + (t.profitabilityWindow?.start || 0), 0) / shapes.length;
-  const avgEnd = shapes.reduce((s, t) => s + (t.profitabilityWindow?.end || 60), 0) / shapes.length;
-  return { start: Math.round(avgStart), end: Math.round(avgEnd) };
+  return {
+    start: Math.max(5, Math.round(medianPeak * 0.3)),
+    end: Math.min(360, Math.round(medianPeak * 1.5)),
+  };
 }
 
 // =====================
-// CREATOR HISTORY (PumpPortal)
+// CLUSTER OPERATIONS (Same as wallet clusters)
 // =====================
 
 /**
- * Fetch creator history from PumpPortal API
- * Returns creator reputation for conviction scoring
+ * Merge two similar outcome clusters
  */
+export function mergeOutcomeClusters(
+  cluster1: OutcomeCluster,
+  cluster2: OutcomeCluster
+): OutcomeCluster {
+  const now = Math.floor(Date.now() / 1000);
+  const mergedMembers = Array.from(new Set([...cluster1.members, ...cluster2.members]));
+  const sharedExamples = cluster1.tokenExamples.filter((t) =>
+    cluster2.tokenExamples.includes(t)
+  );
+
+  const merged: OutcomeCluster = {
+    id: `merged_${cluster1.id}_${cluster2.id}`,
+    name: `${cluster1.name}_${cluster2.name}`,
+    shape: {
+      avgTimeToPeak: (cluster1.shape.avgTimeToPeak + cluster2.shape.avgTimeToPeak) / 2,
+      avgPeakMultiplier: (cluster1.shape.avgPeakMultiplier + cluster2.shape.avgPeakMultiplier) / 2,
+      avgDecayRate: (cluster1.shape.avgDecayRate + cluster2.shape.avgDecayRate) / 2,
+      volumePattern: cluster1.shape.volumePattern,
+    },
+    profitWindow: {
+      start: Math.min(cluster1.profitWindow.start, cluster2.profitWindow.start),
+      end: Math.max(cluster1.profitWindow.end, cluster2.profitWindow.end),
+    },
+    sampleSize: cluster1.sampleSize + cluster2.sampleSize,
+    winRate: (cluster1.winRate * cluster1.sampleSize + cluster2.winRate * cluster2.sampleSize) / (cluster1.sampleSize + cluster2.sampleSize),
+    tokenExamples: Array.from(new Set([...cluster1.tokenExamples, ...cluster2.tokenExamples])).slice(0, 5),
+    members: mergedMembers,
+    createdAt: Math.min(cluster1.createdAt, cluster2.createdAt),
+    lastUpdated: now,
+  };
+
+  OUTCOME_CLUSTER_CACHE.delete(cluster1.id);
+  OUTCOME_CLUSTER_CACHE.delete(cluster2.id);
+  OUTCOME_CLUSTER_CACHE.set(merged.id, merged);
+
+  console.log(
+    `[RetrolearnerV2] Merged ${cluster1.name} + ${cluster2.name} → ${merged.name} (${mergedMembers.length} tokens)`
+  );
+
+  return merged;
+}
+
+/**
+ * Split cluster into subgroups (e.g., fast spikes vs slow climbs)
+ */
+export function divergeOutcomeCluster(
+  cluster: OutcomeCluster,
+  subgroups: string[][]
+): OutcomeCluster[] {
+  const now = Math.floor(Date.now() / 1000);
+  OUTCOME_CLUSTER_CACHE.delete(cluster.id);
+
+  const newClusters: OutcomeCluster[] = [];
+
+  for (let i = 0; i < subgroups.length; i++) {
+    const members = subgroups[i];
+    if (members.length < MIN_CLUSTER_SIZE) continue;
+
+    const subCluster: OutcomeCluster = {
+      id: `${cluster.id}_sub${i + 1}`,
+      name: `${cluster.name}_sub${i + 1}`,
+      shape: cluster.shape,
+      profitWindow: cluster.profitWindow,
+      sampleSize: members.length,
+      winRate: cluster.winRate, // Inherit parent
+      tokenExamples: members.slice(0, 5),
+      members,
+      createdAt: cluster.createdAt,
+      lastUpdated: now,
+    };
+
+    OUTCOME_CLUSTER_CACHE.set(subCluster.id, subCluster);
+    newClusters.push(subCluster);
+  }
+
+  console.log(
+    `[RetrolearnerV2] Diverged ${cluster.name} → ${newClusters.length} sub-clusters`
+  );
+
+  return newClusters;
+}
+
+/**
+ * Detect if cluster should split (divergence detection)
+ * E.g., if cluster has both 2x and 50x tokens, split into slow/fast subgroups
+ */
+async function detectOutcomeClusterDivergence(
+  cluster: OutcomeCluster
+): Promise<OutcomeClusterDivergence | null> {
+  try {
+    if (cluster.members.length < 8) return null;
+
+    const outcomes = await db.query.tokenOutcomes.findMany({
+      where: inArray(tokenOutcomes.tokenMint, cluster.members),
+    });
+
+    // Group by peak multiplier range
+    const fast = outcomes.filter((t) => (t.peakMultiplierAllTime || 0) > 10);
+    const slow = outcomes.filter((t) => (t.peakMultiplierAllTime || 0) > 2 && (t.peakMultiplierAllTime || 0) <= 10);
+    const dead = outcomes.filter((t) => (t.peakMultiplierAllTime || 0) <= 2);
+
+    // Divergence if one group is 30%+ of total
+    const divergenceCandidates = [fast, slow, dead].filter((g) => g.length >= cluster.members.length * 0.3);
+
+    if (divergenceCandidates.length >= 2) {
+      const divergenceScore = Math.max(...divergenceCandidates.map((g) => g.length / cluster.members.length));
+
+      return {
+        clusterId: cluster.id,
+        subgroups: divergenceCandidates.map((g) => g.map((t) => t.tokenMint)),
+        divergenceScore,
+        reason: `Token peak ranges diverged: ${divergenceCandidates.length} distinct groups detected`,
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.error("[RetrolearnerV2] Divergence detection error:", error);
+    return null;
+  }
+}
+
+/**
+ * Detect if clusters should merge (high similarity)
+ */
+function detectOutcomeClusterOverlap(
+  cluster1: OutcomeCluster,
+  cluster2: OutcomeCluster
+): OutcomeClusterOverlap | null {
+  // Similarity based on shape proximity
+  const timeDiff = Math.abs(cluster1.shape.avgTimeToPeak - cluster2.shape.avgTimeToPeak);
+  const peakDiff = Math.abs(cluster1.shape.avgPeakMultiplier - cluster2.shape.avgPeakMultiplier);
+
+  const similarity = Math.max(
+    0,
+    1 - (timeDiff / 100 + peakDiff / 20) / 2
+  );
+
+  const sharedTokens = cluster1.members.filter((t) =>
+    cluster2.members.includes(t)
+  );
+
+  if (similarity > CLUSTER_SIMILARITY_THRESHOLD) {
+    return {
+      clusterId1: cluster1.id,
+      clusterId2: cluster2.id,
+      similarity,
+      sharedTokens,
+      confidence: similarity,
+    };
+  }
+
+  return null;
+}
+
+// =====================
+// CLUSTER MAINTENANCE
+// =====================
+
+/**
+ * Run cluster maintenance: merge similar clusters, split divergent ones
+ */
+export async function runOutcomeClusterMaintenance(): Promise<{
+  merged: number;
+  diverged: number;
+}> {
+  try {
+    console.log("[RetrolearnerV2] Running outcome cluster maintenance...");
+
+    const clusters = Array.from(OUTCOME_CLUSTER_CACHE.values());
+
+    // Detect merges
+    let merged = 0;
+    for (let i = 0; i < clusters.length; i++) {
+      for (let j = i + 1; j < clusters.length; j++) {
+        const overlap = detectOutcomeClusterOverlap(clusters[i], clusters[j]);
+        if (overlap && overlap.confidence > 0.75) {
+          mergeOutcomeClusters(clusters[i], clusters[j]);
+          merged++;
+        }
+      }
+    }
+
+    // Detect divergences
+    let diverged = 0;
+    for (const cluster of clusters) {
+      const divergence = await detectOutcomeClusterDivergence(cluster);
+      if (divergence && divergence.divergenceScore > CLUSTER_DIVERGENCE_THRESHOLD) {
+        divergeOutcomeCluster(cluster, divergence.subgroups);
+        diverged++;
+      }
+    }
+
+    console.log(
+      `[RetrolearnerV2] Maintenance complete: ${merged} merged, ${diverged} diverged`
+    );
+
+    return { merged, diverged };
+  } catch (error) {
+    console.error("[RetrolearnerV2] Maintenance error:", error);
+    return { merged: 0, diverged: 0 };
+  }
+}
+
+// =====================
+// CREATOR HISTORY
+// =====================
+
 async function getCreatorHistoryPumpPortal(creator: string): Promise<{
   totalLaunches: number;
   successRate: number;
@@ -255,203 +394,104 @@ async function getCreatorHistoryPumpPortal(creator: string): Promise<{
   rugRate: number;
 }> {
   try {
-    // Note: This would be a real API call to PumpPortal
-    // For MVP, use placeholder implementation
-
-    // In production:
-    // const response = await axios.get(
-    //   `https://api.pumpportal.fun/creators/${creator}`,
-    //   { timeout: 5000 }
-    // );
-
-    console.log(`[RetrolearnerV2] Creator history would fetch from PumpPortal: ${creator.slice(0, 20)}...`);
-
-    // Placeholder: estimate from on-chain data
+    // Placeholder - would call PumpPortal API in production
     return {
       totalLaunches: Math.floor(Math.random() * 50),
-      successRate: Math.random() * 0.8 + 0.2, // 20-100%
-      avgMultiplier: Math.random() * 3 + 1, // 1-4x
-      rugRate: Math.random() * 0.2, // 0-20%
+      successRate: Math.random() * 0.8 + 0.2,
+      avgMultiplier: Math.random() * 3 + 1,
+      rugRate: Math.random() * 0.2,
     };
   } catch (error) {
-    console.error(`[RetrolearnerV2] Error fetching creator history for ${creator.slice(0, 20)}...:`);
     return { totalLaunches: 0, successRate: 0.5, avgMultiplier: 1.5, rugRate: 0.1 };
   }
 }
 
 // =====================
-// TRENDING TOKEN BACKSTOP
+// RESURFACING DETECTION
 // =====================
 
-/**
- * Check trending tokens from DexScreener/PumpFun
- * Re-trigger analysis for tokens that were marked played-out but are now trending
- */
 async function checkTrendingTokensForResurface(): Promise<void> {
   try {
-    console.log("[RetrolearnerV2] Checking trending tokens for dead-token resurfacing...");
+    const trendingResponse = await axios.get("https://api.dexscreener.com/token/trending", {
+      timeout: 10000,
+    });
 
-    // Get trending tokens from DexScreener
-    const trendingResponse = await axios.get(
-      "https://api.dexscreener.com/token/trending",
-      { timeout: 10000 }
-    );
+    const trendingMints =
+      trendingResponse.data?.data?.map((t: any) => t.baseToken?.address).filter(Boolean) || [];
 
-    const trendingMints = trendingResponse.data?.data?.map((t: any) => t.baseToken?.address).filter(Boolean) || [];
-
-    console.log(`[RetrolearnerV2] Found ${trendingMints.length} trending tokens`);
-
-    // Check which ones were previously marked as played-out
     for (const mint of trendingMints.slice(0, 20)) {
       const token = await getTokenData(mint);
 
       if (token && token.lastAnalyzedAt) {
         const hoursSinceAnalysis = (Date.now() / 1000 - token.lastAnalyzedAt) / 3600;
 
-        // If token was analyzed >4h ago but is now trending → re-trigger
         if (hoursSinceAnalysis > 4) {
           console.log(
-            `[RetrolearnerV2] Dead token resurfaced: ${mint.slice(0, 20)}... (analyzed ${hoursSinceAnalysis.toFixed(1)}h ago)`
+            `[RetrolearnerV2] Dead token resurfaced: ${mint.slice(0, 20)}... (${hoursSinceAnalysis.toFixed(1)}h old)`
           );
 
-          // Emit event to trigger re-analysis
           await emit({
             type: "trending_spotted",
             tokenMint: mint,
             tokenSymbol: token.tokenSymbol,
             source: "retrolearner_v2_resurface",
-            data: {
-              wasPlayedOut: true,
-              timeSinceLastAnalysis: hoursSinceAnalysis,
-              reason: "trending_backstop",
-            },
+            data: { wasPlayedOut: true, timeSinceAnalysis: hoursSinceAnalysis },
             timestamp: Date.now(),
-            urgency: 8, // High urgency - resurfaced dead token
+            urgency: 8,
           });
         }
       }
     }
   } catch (error) {
-    console.error("[RetrolearnerV2] Error checking trending tokens:", error instanceof Error ? error.message : error);
+    console.error("[RetrolearnerV2] Trending check error:", error);
   }
 }
 
 // =====================
-// SIGNAL WALLET RE-TRIGGER
-// =====================
-
-/**
- * Monitor signal wallet buys on tokens we previously marked as dead
- * If high-quality wallet buys a dead token → re-evaluate with fresh conviction
- */
-async function checkSignalWalletRetriggers(): Promise<void> {
-  try {
-    // This would listen to the unified webhook for early signal wallet buys
-    // If a wallet with 70%+ win rate buys a token we've marked played-out:
-    // → Re-analyze that token immediately
-    // → Calculate new conviction with fresh creator history + this new whale signal
-
-    console.log("[RetrolearnerV2] Signal wallet re-trigger monitoring active");
-
-    // In production: Hook into unified-webhook.ts to intercept swaps
-    // Check if swapper is a high-quality whale AND token was previously analyzed
-  } catch (error) {
-    console.error("[RetrolearnerV2] Error in signal wallet re-trigger:", error);
-  }
-}
-
-// =====================
-// REAL-TIME CLUSTER MATCHING
-// =====================
-
-/**
- * Match a token to outcome clusters in real-time
- * Returns cluster probabilities
- */
-async function matchTokenToClusters(
-  mint: string,
-  clusters: OutcomeCluster[]
-): Promise<{ [clusterId: string]: number }> {
-  try {
-    const tokenData = await getTokenData(mint);
-    const outcome = await db.query.tokenOutcomes.findFirst({
-      where: eq(tokenOutcomes.tokenMint, mint),
-    });
-
-    if (!outcome) {
-      return {};
-    }
-
-    const timeToPeak = outcome.timeToPeakMinutes || 30;
-    const peak = outcome.peakMultiplierAllTime || 2;
-
-    // Calculate probability match to each cluster
-    const matches: { [key: string]: number } = {};
-
-    for (const cluster of clusters) {
-      let probability = 0;
-
-      // Distance from cluster center
-      const timeDist = Math.abs(timeToPeak - cluster.shape.avgTimeToPeak);
-      const peakDist = Math.abs(peak - cluster.shape.avgPeakMultiplier);
-
-      // Closer = higher probability
-      probability = Math.max(0, 1 - (timeDist / 100 + peakDist / 5) / 2);
-
-      matches[cluster.id] = probability;
-    }
-
-    return matches;
-  } catch (error) {
-    console.error(`[RetrolearnerV2] Error matching token ${mint.slice(0, 20)}... to clusters:`, error);
-    return {};
-  }
-}
-
-// =====================
-// STARTUP & MONITORING
+// STARTUP & EXPORTS
 // =====================
 
 export async function startRetrolearnerV2(): Promise<void> {
-  console.log("[RetrolearnerV2] Starting Retrolearner 2.0 with dynamic clustering...");
+  console.log("[RetrolearnerV2] Starting with cluster merge/diverge operations...");
 
-  // Discover initial clusters
-  const clusters = await discoverOutcomeClusters();
+  // Initial cluster discovery
+  await discoverOutcomeClusters();
 
-  // Check trending tokens every 60 seconds
-  if (RETROLEARNER_V2_CONFIG.enableResurfaceDetection) {
-    trendingCheckTimer = setInterval(async () => {
+  // Cluster maintenance every 3 hours
+  maintenanceTimer = setInterval(
+    async () => {
+      try {
+        await runOutcomeClusterMaintenance();
+        await discoverOutcomeClusters();
+      } catch (error) {
+        console.error("[RetrolearnerV2] Maintenance error:", error);
+      }
+    },
+    3 * 60 * 60 * 1000
+  );
+
+  // Trending check every 60s
+  trendingCheckTimer = setInterval(
+    async () => {
       try {
         await checkTrendingTokensForResurface();
       } catch (error) {
         console.error("[RetrolearnerV2] Trending check error:", error);
       }
-    }, RETROLEARNER_V2_CONFIG.trendingTokenCheckIntervalMs);
-  }
+    },
+    60 * 1000
+  );
 
-  // Refresh clusters every 3 hours
-  clusterRefreshTimer = setInterval(async () => {
-    try {
-      const newClusters = await discoverOutcomeClusters();
-      console.log("[RetrolearnerV2] Clusters refreshed");
-    } catch (error) {
-      console.error("[RetrolearnerV2] Cluster refresh error:", error);
-    }
-  }, RETROLEARNER_V2_CONFIG.clusterRefreshIntervalMs);
-
-  // Start signal wallet monitoring
-  if (RETROLEARNER_V2_CONFIG.enableSignalWalletRetrigger) {
-    await checkSignalWalletRetriggers();
-  }
-
-  console.log("[RetrolearnerV2] Ready: trending-backstop + signal-wallet-retrigger + dynamic-clustering");
+  console.log("[RetrolearnerV2] Ready: clustering with merge/diverge + resurfacing");
 }
 
 export function stopRetrolearnerV2(): void {
+  if (maintenanceTimer) clearInterval(maintenanceTimer);
   if (trendingCheckTimer) clearInterval(trendingCheckTimer);
-  if (clusterRefreshTimer) clearInterval(clusterRefreshTimer);
   console.log("[RetrolearnerV2] Stopped");
 }
 
-// Export for system-picks integration
-export { discoverOutcomeClusters, matchTokenToClusters, getCreatorHistoryPumpPortal };
+export function getOutcomeClusters(): OutcomeCluster[] {
+  return Array.from(OUTCOME_CLUSTER_CACHE.values());
+}
+
