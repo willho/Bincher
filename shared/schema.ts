@@ -3982,3 +3982,136 @@ export const indicatorVectors = pgTable("indicator_vectors", {
 export const insertIndicatorVectorSchema = createInsertSchema(indicatorVectors).omit({ id: true });
 export type IndicatorVector = typeof indicatorVectors.$inferSelect;
 export type InsertIndicatorVector = z.infer<typeof insertIndicatorVectorSchema>;
+
+// Retrolearner - Token Fingerprints
+// Learned patterns per fingerprint type (pregrad bonding curve vs postgrad Raydium)
+// Used to match new tokens against proven playbooks and predict outcomes
+export const tokenFingerprints = pgTable("token_fingerprints", {
+  id: serial("id").primaryKey(),
+
+  // Fingerprint identification
+  fingerprintType: text("fingerprint_type").notNull(), // "pregrad_bonding_curve" | "postgrad_raydium"
+  clusterId: text("cluster_id").notNull(), // Links to strategy cluster (same cluster = similar trading style)
+
+  // Reference
+  tokenMint: text("token_mint"), // Example token this fingerprint is based on
+
+  // Win/loss metrics
+  winRate: real("win_rate"), // % of trades that were profitable (> 1x)
+  medianMultiplier: real("median_multiplier"), // Median exit multiplier achieved
+  sampleCount: integer("sample_count").default(0), // # of trades analyzed for this fingerprint
+
+  // Entry execution metrics
+  entrySlippageAvg: real("entry_slippage_avg"), // Average slippage % on entry
+  entrySlippageP95: real("entry_slippage_p95"), // 95th percentile slippage
+
+  // Stop loss metrics
+  slHitRate: real("sl_hit_rate"), // % of trades where stop loss was triggered
+  slThresholdPercent: real("sl_threshold_percent"), // Optimal stop loss threshold (%)
+
+  // Trailing stop loss curve (adjusts as token matures)
+  tslCurveStartMultiplier: real("tsl_curve_start_multiplier"), // Initial trailing stop level
+  tslCurveEndMultiplier: real("tsl_curve_end_multiplier"), // Final trailing stop level (for longer holds)
+  tslCurveHoldMinutes: integer("tsl_curve_hold_minutes"), // Time window for TSL curve
+
+  // Hold time metrics
+  avgHoldMinutes: real("avg_hold_minutes"), // Average hold duration
+  medianHoldMinutes: integer("median_hold_minutes"), // Median hold duration
+
+  // Confidence in this fingerprint
+  confidence: real("confidence").default(0.5), // 0-1 confidence score
+
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("idx_fingerprint_type_cluster").on(table.fingerprintType, table.clusterId),
+  index("idx_cluster").on(table.clusterId),
+]);
+
+export const insertTokenFingerprintsSchema = createInsertSchema(tokenFingerprints).omit({ id: true });
+export type TokenFingerprint = typeof tokenFingerprints.$inferSelect;
+export type InsertTokenFingerprint = z.infer<typeof insertTokenFingerprintsSchema>;
+
+// Retrolearner - Token Outcomes
+// Performance data for each token analyzed by retrolearner
+// Used to identify well-performing tokens and extract learning patterns
+export const tokenOutcomes = pgTable("token_outcomes", {
+  id: serial("id").primaryKey(),
+
+  // Token identification
+  tokenMint: text("token_mint").notNull().unique(),
+
+  // Early buyer success metrics
+  earlyBuyerWinRate: real("early_buyer_win_rate"), // % of early buyers who profited
+  earlyBuyerMedianMultiplier: real("early_buyer_median_multiplier"), // Median multiplier for early buyers
+  profitableWalletCount: integer("profitable_wallet_count"), // # of wallets that profited
+
+  // Peak performance metrics
+  peakMultiplierAllTime: real("peak_multiplier_all_time"), // Highest multiplier ever reached
+  peakMultiplierCurrentWindow: real("peak_multiplier_current_window"), // Highest in current observation window
+  timeToPeakMinutes: integer("time_to_peak_minutes"), // Minutes from launch to peak
+
+  // Token lifecycle status
+  isPlayedOut: boolean("is_played_out").default(false), // Has token stabilized/ended?
+  playedOutReason: text("played_out_reason"), // "time_and_volume_dry" | "price_stabilized" | "holder_exit" etc.
+
+  // Lifecycle context for learning
+  // Pre-grad: bonding curve velocity/buyer concentration
+  bondingVelocity: real("bonding_velocity"), // % of bonding curve completed per hour
+  bondingBuyerGrowthRate: real("bonding_buyer_growth_rate"), // New unique buyers per hour
+  bondingEarlyBuyerConcentration: real("bonding_early_buyer_concentration"), // % held by top 10 buyers
+
+  // Post-grad: Raydium trajectory
+  raydiumVolumeAcceleration: real("raydium_volume_acceleration"), // Volume trend (increasing/decreasing)
+  raydiumPriceSlope: real("raydium_price_slope"), // Price trajectory slope
+  raydiumHolderGrowth: real("raydium_holder_growth"), // New holders per hour
+
+  // Timestamps
+  lastAnalyzedAt: integer("last_analyzed_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("idx_token_mint_outcomes").on(table.tokenMint),
+  index("idx_is_played_out").on(table.isPlayedOut),
+  index("idx_last_analyzed").on(table.lastAnalyzedAt),
+]);
+
+export const insertTokenOutcomesSchema = createInsertSchema(tokenOutcomes).omit({ id: true });
+export type TokenOutcome = typeof tokenOutcomes.$inferSelect;
+export type InsertTokenOutcome = z.infer<typeof insertTokenOutcomesSchema>;
+
+// Retrolearner - Jupiter Latency Stats
+// Sampled latency data for Jupiter methods
+// Used by retrolearner simulation to model realistic execution timing
+export const jupiterLatencyStats = pgTable("jupiter_latency_stats", {
+  id: serial("id").primaryKey(),
+
+  // Method identification
+  method: text("method").notNull(), // "swap" | "route" | "quote"
+  environment: text("environment").notNull(), // "devnet" | "mainnet"
+
+  // Latency percentiles (milliseconds)
+  p50Latency: real("p50_latency").notNull(), // Median latency
+  p95Latency: real("p95_latency").notNull(), // 95th percentile (used in retrolearner simulation)
+  p99Latency: real("p99_latency").notNull(), // 99th percentile
+
+  // Execution metrics
+  avgSlippage: real("avg_slippage"), // Average slippage % observed
+  successRate: real("success_rate").default(1.0), // % of calls that succeeded
+
+  // Sample info
+  sampleCount: integer("sample_count").notNull(), // # of measurements in this stat
+
+  // Timing
+  sampledAt: integer("sampled_at").notNull(), // When this latency sample was collected
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("idx_method_env").on(table.method, table.environment),
+  index("idx_sampled_at").on(table.sampledAt),
+]);
+
+export const insertJupiterLatencyStatsSchema = createInsertSchema(jupiterLatencyStats).omit({ id: true });
+export type JupiterLatencyStat = typeof jupiterLatencyStats.$inferSelect;
+export type InsertJupiterLatencyStat = z.infer<typeof insertJupiterLatencyStatsSchema>;
