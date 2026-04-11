@@ -11,7 +11,7 @@ interface PoolDiscoveryConfig {
 }
 
 const config: PoolDiscoveryConfig = {
-  pollIntervalMs: 30000, // Poll GeckoTerminal every 30 seconds (well within rate limits)
+  pollIntervalMs: 120000, // Poll GeckoTerminal every 120 seconds (0.5 req/sec, safe for free tier)
   minLiquidityUsd: 500, // Track pools with >$500 liquidity
   maxAgeMinutes: 60, // Only look at pools created in last hour
 };
