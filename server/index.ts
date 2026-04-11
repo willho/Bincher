@@ -119,6 +119,12 @@ app.use((req, res, next) => {
     
     const { initializeWhaleTracker } = await import("./whale-tracker");
     initializeWhaleTracker();
+
+    const { startGraduationTracking } = await import("./graduation-tracker");
+    startGraduationTracking();
+
+    const { startRaydiumPoolDiscovery } = await import("./raydium-pool-discovery");
+    startRaydiumPoolDiscovery();
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");

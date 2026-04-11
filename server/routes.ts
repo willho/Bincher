@@ -8326,6 +8326,55 @@ export async function registerRoutes(
     }
   });
 
+  // Token Graduation & Raydium Pool Endpoints
+  app.get("/api/tokens/:mint/graduation-status", requireAuth, async (req, res) => {
+    try {
+      const { getGraduationStatus } = await import("./graduation-tracker");
+      const status = await getGraduationStatus(req.params.mint);
+      res.json({ graduation: status });
+    } catch (error: any) {
+      console.error("Error fetching graduation status:", error);
+      res.status(500).json({ error: "Failed to fetch graduation status" });
+    }
+  });
+
+  app.get("/api/pools/raydium/new", requireAuth, async (req, res) => {
+    try {
+      const { getRecentPools } = await import("./raydium-pool-discovery");
+      const limitMinutes = parseInt(req.query.limitMinutes as string) || 60;
+      const limit = parseInt(req.query.limit as string) || 20;
+      const pools = await getRecentPools(limitMinutes);
+      res.json({ pools: pools.slice(0, limit) });
+    } catch (error: any) {
+      console.error("Error fetching recent pools:", error);
+      res.status(500).json({ error: "Failed to fetch pools" });
+    }
+  });
+
+  app.get("/api/pools/raydium/:poolAddress/quality", requireAuth, async (req, res) => {
+    try {
+      const { scoreRaydiumPool } = await import("./raydium-pool-quality");
+      const score = await scoreRaydiumPool(req.params.poolAddress);
+      res.json({ poolAddress: req.params.poolAddress, quality: score });
+    } catch (error: any) {
+      console.error("Error scoring pool:", error);
+      res.status(500).json({ error: "Failed to score pool" });
+    }
+  });
+
+  app.get("/api/pools/raydium/top-quality", requireAuth, async (req, res) => {
+    try {
+      const { getTopQualityPools } = await import("./raydium-pool-quality");
+      const limitMinutes = parseInt(req.query.limitMinutes as string) || 60;
+      const limit = parseInt(req.query.limit as string) || 10;
+      const pools = await getTopQualityPools(limitMinutes, limit);
+      res.json({ pools });
+    } catch (error: any) {
+      console.error("Error fetching top quality pools:", error);
+      res.status(500).json({ error: "Failed to fetch top quality pools" });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   restoreMonitoring();
   

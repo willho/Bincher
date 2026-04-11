@@ -24,7 +24,9 @@ export type DiscoveryEventType =
   | "boost_detected"
   | "multi_signal_convergence"
   | "social_call"
-  | "social_detected";
+  | "social_detected"
+  | "pumpfun_graduated"
+  | "raydium_new_pool";
 
 interface BusEvent {
   type: DiscoveryEventType;

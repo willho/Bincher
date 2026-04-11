@@ -2277,11 +2277,66 @@ export const tokenDataPool = pgTable("token_data_pool", {
   // Token image
   imageUrl: text("image_url"),
   imageUrlFetchedAt: integer("image_url_fetched_at"),
+
+  // Raydium pool tracking (post-graduation or direct launch)
+  raydiumPoolAddress: text("raydium_pool_address"), // Pool address on Raydium
+  raydiumPoolDiscoveredAt: integer("raydium_pool_discovered_at"), // When we first detected the pool
+  raydiumLiquidityUsd: real("raydium_liquidity_usd"), // Current pool liquidity
+  raydiumCreatorAddress: text("raydium_creator_address"), // Pool creator/deployer
+  raydiumCreatorReputation: real("raydium_creator_reputation"), // Reputation score of creator
+  raydiumTopHolderCount: integer("raydium_top_holder_count"), // # of significant holders
+  raydiumHolderConcentration: real("raydium_holder_concentration"), // % held by top 10
+  isDirectRaydiumLaunch: boolean("is_direct_raydium_launch").default(false), // true if launched directly on Raydium
+  poolOriginType: text("pool_origin_type"), // "pumpfun_graduated" | "direct_raydium" | "other_dex"
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
 export type TokenDataPoolEntry = typeof tokenDataPool.$inferSelect;
 export type InsertTokenDataPoolEntry = z.infer<typeof insertTokenDataPoolSchema>;
+
+// Raydium pool discoveries - track newly discovered Raydium pools
+export const raydiumPoolDiscoveries = pgTable("raydium_pool_discoveries", {
+  id: serial("id").primaryKey(),
+  poolAddress: text("pool_address").notNull().unique(),
+  baseTokenMint: text("base_token_mint").notNull(),
+  quoteTokenMint: text("quote_token_mint").notNull(),
+  creatorAddress: text("creator_address"),
+  discoveredAt: integer("discovered_at").notNull(),
+  sourceType: text("source_type").notNull(), // "rpc_scan" | "webhook" | "event_detected"
+  liquidityUsd: real("liquidity_usd"),
+  lastUpdatedAt: integer("last_updated_at").notNull(),
+  associatedTokenMint: text("associated_token_mint"), // If we can identify the primary token
+  isVerified: boolean("is_verified").default(false), // Does token match our data pool?
+  qualityScore: real("quality_score"), // Pool quality assessment (0-100)
+}, (table) => [
+  index("idx_discovered_at").on(table.discoveredAt),
+  index("idx_base_token").on(table.baseTokenMint),
+]);
+
+export const insertRaydiumPoolDiscoveriesSchema = createInsertSchema(raydiumPoolDiscoveries).omit({ id: true });
+export type RaydiumPoolDiscoveryEntry = typeof raydiumPoolDiscoveries.$inferSelect;
+export type InsertRaydiumPoolDiscoveryEntry = z.infer<typeof insertRaydiumPoolDiscoveriesSchema>;
+
+// Graduation events - detailed tracking of pump.fun → Raydium transitions
+export const graduationEvents = pgTable("graduation_events", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull().unique(),
+  graduationTime: integer("graduation_time").notNull(),
+  sourcePoolAddress: text("source_pool_address"), // pump.fun or other bonding curve
+  destinationPoolAddress: text("destination_pool_address").notNull(), // Raydium pool
+  timeToGraduation: integer("time_to_graduation"), // seconds from launch to graduation
+  liquidityOnGraduation: real("liquidity_on_graduation"), // Starting liquidity in Raydium
+  priceOnGraduation: real("price_on_graduation"),
+  learningExported: boolean("learning_exported").default(false), // Whether we've extracted patterns
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_graduation_time").on(table.graduationTime),
+  index("idx_token_mint").on(table.tokenMint),
+]);
+
+export const insertGraduationEventsSchema = createInsertSchema(graduationEvents).omit({ id: true });
+export type GraduationEvent = typeof graduationEvents.$inferSelect;
+export type InsertGraduationEvent = z.infer<typeof insertGraduationEventsSchema>;
 
 // Price history cache - OHLCV data from DexScreener
 export const priceHistoryCache = pgTable("price_history_cache", {
