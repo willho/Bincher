@@ -14,6 +14,7 @@ import {
   matchTokenToClusters,
   getCreatorHistoryPumpPortal,
 } from "./retrolearner-v2";
+import { getExitStrategy } from "./exit-strategies";
 
 // =====================
 // CONFIGURATION
@@ -178,61 +179,28 @@ async function calculateConviction(
 
 /**
  * Get cluster-specific entry/exit parameters
+ * Entry windows define how long we wait for initial entry signal
  */
-function getClusterStrategy(clusterName: string) {
-  const strategies: { [key: string]: any } = {
-    spike_and_bleed: {
-      entryWindow: 5, // Must buy within 5 minutes
-      takeProfitMultiplier: 5, // Exit at 5x
-      stopLossPercent: 30, // Tight SL for volatility
-      trailingStopPercent: 15,
-      maxHoldMinutes: 60,
-      description: "Fast entry, aggressive exit",
-    },
-    slow_moon: {
-      entryWindow: 30, // More time to enter
-      takeProfitMultiplier: 3, // Lower target
-      stopLossPercent: 50,
-      trailingStopPercent: 20,
-      maxHoldMinutes: 240, // Hold longer
-      description: "Patient entry, steady climb",
-    },
-    late_bloomer: {
-      entryWindow: 120, // Very patient entry
-      takeProfitMultiplier: 10, // Big target for big moves
-      stopLossPercent: 60,
-      trailingStopPercent: 25,
-      maxHoldMinutes: 360, // Very long hold
-      description: "Wait and hold strategy",
-    },
-    pump_dump: {
-      takeProfitMultiplier: 2, // Quick flip
-      stopLossPercent: 20, // Very tight
-      trailingStopPercent: 10,
-      maxHoldMinutes: 15, // Get out fast
-      skip: true, // Generally avoid
-      description: "Avoid or quick exit only",
-    },
+function getClusterEntryWindow(clusterName: string): number {
+  const entryWindows: { [key: string]: number } = {
+    spike_and_bleed: 5,    // Must buy within 5 minutes
+    slow_moon: 30,         // More time to enter
+    late_bloomer: 120,     // Very patient entry
+    pump_dump: 15,         // Quick entry or miss it
+    dead_launch: 10,       // Very quick decision
   };
-
-  return strategies[clusterName] || strategies.slow_moon;
+  return entryWindows[clusterName] || 30;
 }
 
 /**
- * Determine if should skip this cluster pattern
+ * Determine if conviction meets cluster threshold
  */
-function shouldSkipCluster(
+function meetsClusterThreshold(
   clusterName: string,
   conviction: ConvictionCalculation
 ): boolean {
-  // Skip pump-dump unless conviction very high
-  if (clusterName === "pump_dump" && conviction.finalConviction < 0.85) {
-    return true;
-  }
-
-  // Skip if conviction below cluster threshold
   const threshold = (SYSTEM_PICKS_V2_CONFIG.clusterThresholds as any)[clusterName] || 0.5;
-  return conviction.finalConviction < threshold;
+  return conviction.finalConviction >= threshold;
 }
 
 // =====================
@@ -248,9 +216,10 @@ async function openSystemPickV2(
   conviction: ConvictionCalculation
 ): Promise<void> {
   try {
-    const strategy = getClusterStrategy(conviction.clusterName);
+    const strategy = getExitStrategy(conviction.clusterName);
 
-    if (strategy.skip) {
+    // Skip pump_dump unless conviction is very high
+    if (conviction.clusterName === "pump_dump" && conviction.finalConviction < 0.85) {
       console.log(
         `[SystemPicksV2] Skipping ${tokenSymbol}/${mint.slice(0, 8)}... (${conviction.clusterName}, conviction=${(conviction.finalConviction * 100).toFixed(0)}%)`
       );
@@ -270,10 +239,12 @@ async function openSystemPickV2(
       takeProfitMultiplier: strategy.takeProfitMultiplier,
       trailingStop: true,
       trailingStopPercent: strategy.trailingStopPercent,
+      // TODO: Pass exitTiers when paper-trading.ts supports partial exits
+      // exitTiers: strategy.exitTiers,
     });
 
     console.log(
-      `[SystemPicksV2] Strategy: ${strategy.description} (SL=${strategy.stopLossPercent}%, TP=${strategy.takeProfitMultiplier}x, hold=${strategy.maxHoldMinutes}min)`
+      `[SystemPicksV2] Strategy: ${strategy.description} (SL=${strategy.stopLossPercent}%, hold=${strategy.maxHoldMinutes}min)`
     );
   } catch (error) {
     console.error(
@@ -370,7 +341,7 @@ async function scanForHighConvictionPicks(): Promise<void> {
       }
 
       // Skip if below cluster threshold
-      if (shouldSkipCluster(conviction.clusterName, conviction)) {
+      if (!meetsClusterThreshold(conviction.clusterName, conviction)) {
         continue;
       }
 
