@@ -8412,6 +8412,66 @@ export async function registerRoutes(
     }
   });
 
+  // Test WebSocket providers for real-time pump.fun token streams
+  app.get("/api/test/websocket-providers", requireAuth, async (req, res) => {
+    const { WebSocket: WS } = await import("ws");
+
+    const providers = [
+      { name: "PumpDev.io", url: "wss://pumpdev.io/ws", subscribe: null },
+      { name: "PumpPortal", url: "wss://pumpportal.fun/api/data", subscribe: JSON.stringify({ method: "subscribeNewToken" }) },
+      { name: "SolanaTracker", url: "wss://ws.solanatracker.io/", subscribe: null },
+    ];
+
+    const results: any[] = [];
+    let completed = 0;
+
+    const done = () => {
+      if (++completed === providers.length) {
+        res.json({ results, working: results.filter(r => r.success).length });
+      }
+    };
+
+    for (const p of providers) {
+      const start = Date.now();
+      try {
+        const ws = new WS(p.url);
+        let gotMessage = false;
+
+        ws.on("open", () => {
+          if (p.subscribe) ws.send(p.subscribe);
+        });
+
+        ws.on("message", (data: any) => {
+          if (!gotMessage) {
+            gotMessage = true;
+            const elapsed = Date.now() - start;
+            results.push({ name: p.name, success: true, elapsed, sample: data.toString().substring(0, 300) });
+            ws.close();
+            done();
+          }
+        });
+
+        ws.on("error", (err: any) => {
+          if (!gotMessage) {
+            results.push({ name: p.name, success: false, error: err.message });
+            done();
+          }
+        });
+
+        setTimeout(() => {
+          if (!gotMessage) {
+            results.push({ name: p.name, success: false, error: "timeout (10s)" });
+            ws.close();
+            done();
+          }
+        }, 10000);
+      } catch (err: any) {
+        results.push({ name: p.name, success: false, error: err.message });
+        done();
+      }
+    }
+  });
+
   // Restore monitoring on startup if it was active
   restoreMonitoring();
   
