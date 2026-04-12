@@ -373,6 +373,22 @@ export function AdminDashboard() {
     },
   });
 
+  const [wsTestResults, setWsTestResults] = useState<any>(null);
+  const testWebSocketMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("GET", "/api/test/websocket-providers");
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setWsTestResults(data);
+      const working = data.results?.filter((r: any) => r.success).length || 0;
+      toast({ description: `${working}/${data.results?.length || 0} WebSocket providers working` });
+    },
+    onError: (error: Error) => {
+      toast({ description: error.message || "WebSocket test failed", variant: "destructive" });
+    },
+  });
+
   const addAdminApiKeyMutation = useMutation({
     mutationFn: (data: { service: string; apiKey: string; keyLabel: string; priority: number }) =>
       apiRequest("POST", "/api/admin/api-keys", data),
@@ -1608,6 +1624,57 @@ export function AdminDashboard() {
             </>
           ) : (
             <p className="text-muted-foreground text-center py-4">Failed to load production status</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* WebSocket Provider Test */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Globe className="h-5 w-5" />
+            WebSocket Diagnostics
+          </CardTitle>
+          <CardDescription>Test real-time pump.fun token stream providers</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Button
+            onClick={() => testWebSocketMutation.mutate()}
+            disabled={testWebSocketMutation.isPending}
+            className="w-full"
+          >
+            {testWebSocketMutation.isPending ? (
+              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Testing providers (up to 10s each)...</>
+            ) : (
+              <><Activity className="h-4 w-4 mr-2" />Test WebSocket Providers</>
+            )}
+          </Button>
+
+          {wsTestResults && wsTestResults.results && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">
+                {wsTestResults.working}/{wsTestResults.results.length} providers working
+              </p>
+              {wsTestResults.results.map((r: any, i: number) => (
+                <div key={i} className="flex items-start gap-2 p-2 rounded-lg bg-muted/50">
+                  {r.success ? (
+                    <CheckCircle className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{r.name}</p>
+                    {r.success ? (
+                      <p className="text-xs text-muted-foreground truncate">
+                        {r.elapsed}ms - {r.sample?.substring(0, 100)}...
+                      </p>
+                    ) : (
+                      <p className="text-xs text-destructive">{r.error}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>
