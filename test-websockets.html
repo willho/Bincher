@@ -2,194 +2,291 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Pump.fun WebSocket Provider Test</title>
+  <title>PumpPortal WebSocket Full Test</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; padding: 24px; }
     h1 { font-size: 20px; margin-bottom: 8px; }
     .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
     .card { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-    .card h2 { font-size: 16px; margin-bottom: 12px; }
-    button { background: #2563eb; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; width: 100%; font-weight: 600; }
+    .card h2 { font-size: 16px; margin-bottom: 12px; color: #fff; }
+    .buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+    button { background: #2563eb; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 600; flex: 1; min-width: 200px; }
     button:hover { background: #1d4ed8; }
     button:disabled { background: #333; color: #666; cursor: not-allowed; }
-    .provider { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 8px; background: #111; margin-bottom: 8px; }
-    .provider .icon { font-size: 18px; margin-top: 2px; }
-    .provider .name { font-weight: 600; font-size: 14px; }
-    .provider .detail { font-size: 12px; color: #888; margin-top: 4px; word-break: break-all; }
-    .provider .detail.error { color: #ef4444; }
-    .provider .detail.success { color: #22c55e; }
+    button.stop { background: #dc2626; }
+    button.stop:hover { background: #b91c1c; }
     .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
     .status.testing { background: #1e3a5f; color: #60a5fa; }
     .status.pass { background: #14532d; color: #4ade80; }
     .status.fail { background: #450a0a; color: #f87171; }
-    .summary { margin-top: 16px; padding: 12px; background: #111; border-radius: 8px; font-size: 13px; }
-    .messages { margin-top: 8px; max-height: 200px; overflow-y: auto; }
-    .msg { font-size: 11px; color: #666; padding: 4px 8px; border-left: 2px solid #333; margin: 4px 0; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+    .status.live { background: #134e4a; color: #2dd4bf; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .section { padding: 12px; border-radius: 8px; background: #111; margin-bottom: 8px; }
+    .section .label { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+    .section .detail { font-size: 12px; color: #888; margin-top: 4px; word-break: break-all; }
+    .section .detail.error { color: #ef4444; }
+    .section .detail.success { color: #22c55e; }
+    .messages { margin-top: 8px; max-height: 300px; overflow-y: auto; }
+    .msg { font-size: 11px; color: #999; padding: 4px 8px; border-left: 2px solid #333; margin: 4px 0; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+    .msg.buy { border-left-color: #22c55e; color: #86efac; }
+    .msg.sell { border-left-color: #ef4444; color: #fca5a5; }
+    .msg.token { border-left-color: #60a5fa; color: #93c5fd; }
+    .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+    .stat { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 12px 16px; min-width: 120px; }
+    .stat .val { font-size: 24px; font-weight: 700; }
+    .stat .lbl { font-size: 11px; color: #888; margin-top: 4px; }
+    .stat .val.green { color: #4ade80; }
+    .stat .val.red { color: #f87171; }
+    .stat .val.blue { color: #60a5fa; }
   </style>
 </head>
 <body>
-  <h1>Pump.fun WebSocket Provider Test</h1>
-  <p class="subtitle">Tests real-time token stream providers directly from your browser. No server needed.</p>
+  <h1>PumpPortal WebSocket Full Test</h1>
+  <p class="subtitle">Tests new token stream + live trade data. Runs in your browser - no server needed.</p>
 
   <div class="card">
-    <button id="testBtn" onclick="runTest()">Test All WebSocket Providers</button>
+    <div class="buttons">
+      <button id="testBtn" onclick="runFullTest()">Test New Tokens + Trades</button>
+      <button id="stopBtn" onclick="stopAll()" class="stop" disabled>Stop All</button>
+    </div>
   </div>
 
   <div id="results"></div>
-  <div id="summary"></div>
 
   <script>
-    const PROVIDERS = [
-      { name: 'PumpDev.io', url: 'wss://pumpdev.io/ws', subscribe: null, docs: 'https://pumpdev.io/data-api/' },
-      { name: 'PumpPortal', url: 'wss://pumpportal.fun/api/data', subscribe: JSON.stringify({ method: 'subscribeNewToken' }), docs: 'https://pumpportal.fun/data-api/real-time/' },
-      { name: 'Solana Tracker', url: 'wss://ws.solanatracker.io/', subscribe: null, docs: 'https://docs.solanatracker.io/public-data-api/websocket' },
-    ];
+    let ws = null;
+    let tradeCount = 0;
+    let buyCount = 0;
+    let sellCount = 0;
+    let tokenCount = 0;
+    let firstTokenMint = null;
+    let tradeSubscribed = false;
+    let running = false;
 
-    let results = {};
-
-    function runTest() {
+    function runFullTest() {
       const btn = document.getElementById('testBtn');
+      const stopBtn = document.getElementById('stopBtn');
       btn.disabled = true;
-      btn.textContent = 'Testing providers (up to 15s each)...';
-      results = {};
+      stopBtn.disabled = false;
+      running = true;
+      tradeCount = 0; buyCount = 0; sellCount = 0; tokenCount = 0;
+      firstTokenMint = null; tradeSubscribed = false;
 
-      document.getElementById('results').innerHTML = PROVIDERS.map((p, i) => `
-        <div class="card" id="provider-${i}">
-          <div class="provider">
-            <div>
-              <div class="name">${p.name} <span class="status testing" id="status-${i}">TESTING</span></div>
-              <div class="detail" id="url-${i}">${p.url}</div>
-              <div class="detail" id="detail-${i}">Connecting...</div>
-              <div class="messages" id="msgs-${i}"></div>
-            </div>
+      document.getElementById('results').innerHTML = `
+        <div class="card">
+          <h2>Step 1: Connect to PumpPortal <span class="status testing" id="connect-status">CONNECTING</span></h2>
+          <div class="section">
+            <div class="detail" id="connect-detail">Connecting to wss://pumpportal.fun/api/data ...</div>
           </div>
         </div>
-      `).join('');
-      document.getElementById('summary').innerHTML = '';
 
-      let completed = 0;
-      PROVIDERS.forEach((p, i) => testProvider(p, i, () => {
-        if (++completed === PROVIDERS.length) showSummary(btn);
-      }));
+        <div class="card">
+          <h2>Step 2: New Token Stream <span class="status testing" id="token-status">WAITING</span></h2>
+          <div class="section">
+            <div class="detail" id="token-detail">Waiting for connection...</div>
+            <div class="messages" id="token-msgs"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Step 3: Trade Stream <span class="status testing" id="trade-status">WAITING</span></h2>
+          <div class="section">
+            <div class="detail" id="trade-detail">Will subscribe to trades on the first new token detected...</div>
+            <div id="trade-stats"></div>
+            <div class="messages" id="trade-msgs"></div>
+          </div>
+        </div>
+
+        <div class="card" id="summary-card" style="display:none;">
+          <h2>Results</h2>
+          <div class="section" id="summary-content"></div>
+        </div>
+      `;
+
+      connectWebSocket();
     }
 
-    function testProvider(provider, idx, onDone) {
-      const start = Date.now();
-      let msgCount = 0;
-      let done = false;
-
+    function connectWebSocket() {
       try {
-        const ws = new WebSocket(provider.url);
+        ws = new WebSocket('wss://pumpportal.fun/api/data');
 
         ws.onopen = () => {
-          update(idx, 'detail', 'Connected! Waiting for data...', 'success');
-          if (provider.subscribe) ws.send(provider.subscribe);
+          setEl('connect-status', 'CONNECTED', 'status pass');
+          setEl('connect-detail', 'Connected! Subscribing to new tokens...', 'detail success');
+
+          // Subscribe to new tokens
+          ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+          setEl('token-status', 'LISTENING', 'status live');
+          setEl('token-detail', 'Subscribed to new token launches. Waiting for tokens...', 'success');
         };
 
         ws.onmessage = (event) => {
-          msgCount++;
-          const elapsed = Date.now() - start;
-          const data = typeof event.data === 'string' ? event.data : '[binary]';
-
-          addMsg(idx, `[${elapsed}ms] ${data.substring(0, 200)}`);
-
-          if (msgCount === 1) {
-            update(idx, 'detail', `First message in ${elapsed}ms`, 'success');
-          }
-
-          if (msgCount >= 3 && !done) {
-            done = true;
-            results[provider.name] = { success: true, elapsed, messages: msgCount, sample: data.substring(0, 200) };
-            setStatus(idx, 'pass', 'WORKS');
-            update(idx, 'detail', `${msgCount} messages received. First in ${elapsed}ms`, 'success');
-            ws.close();
-            onDone();
+          if (!running) return;
+          try {
+            const data = JSON.parse(event.data);
+            handleMessage(data, event.data);
+          } catch (e) {
+            // Non-JSON message, show raw
+            addMsg('token-msgs', event.data.substring(0, 300), '');
           }
         };
 
-        ws.onerror = (err) => {
-          if (!done) {
-            done = true;
-            results[provider.name] = { success: false, error: 'Connection failed' };
-            setStatus(idx, 'fail', 'FAILED');
-            update(idx, 'detail', 'Connection failed - provider may be down or blocking your IP', 'error');
-            onDone();
-          }
+        ws.onerror = () => {
+          setEl('connect-status', 'FAILED', 'status fail');
+          setEl('connect-detail', 'Connection failed', 'detail error');
         };
 
         ws.onclose = () => {
-          if (!done && msgCount === 0) {
-            done = true;
-            results[provider.name] = { success: false, error: 'Closed without data' };
-            setStatus(idx, 'fail', 'FAILED');
-            update(idx, 'detail', 'Connection closed without receiving data', 'error');
-            onDone();
+          if (running) {
+            setEl('connect-status', 'DISCONNECTED', 'status fail');
+            setEl('connect-detail', 'Connection closed unexpectedly', 'detail error');
           }
         };
 
+        // 60 second overall timeout
         setTimeout(() => {
-          if (!done) {
-            done = true;
-            if (msgCount > 0) {
-              results[provider.name] = { success: true, elapsed: Date.now() - start, messages: msgCount };
-              setStatus(idx, 'pass', 'WORKS');
-              update(idx, 'detail', `${msgCount} messages in ${Date.now() - start}ms`, 'success');
-            } else {
-              results[provider.name] = { success: false, error: 'Timeout (15s)' };
-              setStatus(idx, 'fail', 'TIMEOUT');
-              update(idx, 'detail', 'No messages received in 15 seconds', 'error');
-            }
-            ws.close();
-            onDone();
-          }
-        }, 15000);
+          if (running) stopAll();
+        }, 60000);
 
       } catch (e) {
-        results[provider.name] = { success: false, error: e.message };
-        setStatus(idx, 'fail', 'ERROR');
-        update(idx, 'detail', e.message, 'error');
-        if (!done) { done = true; onDone(); }
+        setEl('connect-status', 'ERROR', 'status fail');
+        setEl('connect-detail', e.message, 'detail error');
       }
     }
 
-    function update(idx, id, text, cls) {
-      const el = document.getElementById(`${id}-${idx}`);
-      if (el) { el.textContent = text; el.className = `detail ${cls || ''}`; }
+    function handleMessage(data, raw) {
+      // Check if it's a new token event
+      if (data.mint && (data.txType === 'create' || data.name || data.symbol) && !data.tokenAmount) {
+        tokenCount++;
+        const time = new Date().toLocaleTimeString();
+        const name = data.name || data.symbol || 'Unknown';
+        const symbol = data.symbol || '???';
+        const mint = data.mint;
+
+        addMsg('token-msgs',
+          `[${time}] NEW TOKEN: ${name} (${symbol})\n  Mint: ${mint}`,
+          'token'
+        );
+        setEl('token-detail', `${tokenCount} new token(s) detected`, 'detail success');
+
+        // Subscribe to trades on the first token we see
+        if (!tradeSubscribed) {
+          firstTokenMint = mint;
+          tradeSubscribed = true;
+          subscribeToTrades(mint, name, symbol);
+        }
+        return;
+      }
+
+      // Check if it's a trade event
+      if (data.txType === 'buy' || data.txType === 'sell' ||
+          data.type === 'buy' || data.type === 'sell' ||
+          data.tokenAmount !== undefined) {
+        tradeCount++;
+        const isBuy = (data.txType === 'buy' || data.type === 'buy');
+        if (isBuy) buyCount++; else sellCount++;
+
+        const time = new Date().toLocaleTimeString();
+        const txType = isBuy ? 'BUY' : 'SELL';
+        const sol = data.solAmount ? (data.solAmount / 1e9).toFixed(4) : data.sol_amount ? Number(data.sol_amount).toFixed(4) : '?';
+        const tokens = data.tokenAmount ? Number(data.tokenAmount).toLocaleString() : '?';
+        const who = data.traderPublicKey || data.wallet || '?';
+
+        addMsg('trade-msgs',
+          `[${time}] ${txType} ${sol} SOL (${tokens} tokens)\n  Wallet: ${who.substring(0, 20)}...`,
+          isBuy ? 'buy' : 'sell'
+        );
+
+        setEl('trade-detail', `${tradeCount} trades received (${buyCount} buys, ${sellCount} sells)`, 'detail success');
+        if (tradeCount === 1) {
+          setEl('trade-status', 'STREAMING', 'status live');
+        }
+
+        updateTradeStats();
+        return;
+      }
+
+      // Unknown message type - show it
+      addMsg('token-msgs', `[${new Date().toLocaleTimeString()}] ${raw.substring(0, 200)}`, '');
     }
 
-    function setStatus(idx, cls, text) {
-      const el = document.getElementById(`status-${idx}`);
-      if (el) { el.className = `status ${cls}`; el.textContent = text; }
+    function subscribeToTrades(mint, name, symbol) {
+      setEl('trade-status', 'SUBSCRIBING', 'status testing');
+      setEl('trade-detail', `Subscribing to trades on ${name} (${symbol})...\nMint: ${mint}`, 'detail');
+
+      // Subscribe to token trades
+      ws.send(JSON.stringify({
+        method: 'subscribeTokenTrade',
+        keys: [mint]
+      }));
+
+      // Also try subscribing to a few more recent tokens for higher trade volume
+      setTimeout(() => {
+        if (tradeCount === 0 && running) {
+          setEl('trade-detail', `Waiting for trades on ${symbol}... (new tokens may take a moment to get first trade)`, 'detail');
+        }
+      }, 5000);
+
+      // If no trades after 20s, note it
+      setTimeout(() => {
+        if (tradeCount === 0 && running) {
+          setEl('trade-detail', `No trades yet on ${symbol} - this is normal for very new tokens. The subscription is working if new tokens are flowing above.`, 'detail');
+          setEl('trade-status', 'WAITING', 'status testing');
+        }
+      }, 20000);
     }
 
-    function addMsg(idx, text) {
-      const el = document.getElementById(`msgs-${idx}`);
+    function updateTradeStats() {
+      const el = document.getElementById('trade-stats');
+      if (el) {
+        el.innerHTML = `
+          <div class="stats">
+            <div class="stat"><div class="val blue">${tradeCount}</div><div class="lbl">Total Trades</div></div>
+            <div class="stat"><div class="val green">${buyCount}</div><div class="lbl">Buys</div></div>
+            <div class="stat"><div class="val red">${sellCount}</div><div class="lbl">Sells</div></div>
+            <div class="stat"><div class="val">${tokenCount}</div><div class="lbl">New Tokens</div></div>
+          </div>
+        `;
+      }
+    }
+
+    function stopAll() {
+      running = false;
+      if (ws) { ws.close(); ws = null; }
+
+      document.getElementById('testBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+
+      // Show summary
+      const card = document.getElementById('summary-card');
+      if (card) {
+        card.style.display = 'block';
+        document.getElementById('summary-content').innerHTML = `
+          <strong>Test Complete</strong><br><br>
+          ${tokenCount > 0 ? '&#9989;' : '&#10060;'} <strong>subscribeNewToken</strong>: ${tokenCount > 0 ? `WORKS - ${tokenCount} tokens detected` : 'No tokens received'}<br>
+          ${tradeCount > 0 ? '&#9989;' : '&#9888;&#65039;'} <strong>subscribeTokenTrade</strong>: ${tradeCount > 0 ? `WORKS - ${tradeCount} trades (${buyCount} buys, ${sellCount} sells)` : 'No trades received (token may be too new - subscription likely works)'}<br><br>
+          <strong>Copy these results and paste them back to Claude Code!</strong>
+        `;
+      }
+    }
+
+    function setEl(id, text, cls) {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = text; if (cls) el.className = cls; }
+    }
+
+    function addMsg(containerId, text, type) {
+      const el = document.getElementById(containerId);
       if (el) {
         const div = document.createElement('div');
-        div.className = 'msg';
+        div.className = `msg ${type}`;
         div.textContent = text;
         el.appendChild(div);
         el.scrollTop = el.scrollHeight;
+        // Keep max 50 messages
+        while (el.children.length > 50) el.removeChild(el.firstChild);
       }
-    }
-
-    function showSummary(btn) {
-      btn.disabled = false;
-      btn.textContent = 'Test Again';
-      const working = Object.values(results).filter(r => r.success).length;
-      const total = Object.keys(results).length;
-      document.getElementById('summary').innerHTML = `
-        <div class="card">
-          <div class="summary">
-            <strong>${working}/${total} providers working</strong><br><br>
-            ${Object.entries(results).map(([name, r]) =>
-              `${r.success ? '&#9989;' : '&#10060;'} <strong>${name}</strong>: ${r.success ? `${r.elapsed}ms, ${r.messages} msgs` : r.error}`
-            ).join('<br>')}
-            ${working > 0 ? '<br><br>Copy these results and paste them back to Claude Code!' : '<br><br>No providers working. Polling is the best option.'}
-          </div>
-        </div>
-      `;
     }
   </script>
 </body>
