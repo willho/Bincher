@@ -7,7 +7,7 @@
  * Usage: node test-pumpportal-websocket.js
  */
 
-const WebSocket = require('ws');
+import WebSocket from 'ws';
 
 console.log('Testing PumpPortal WebSocket connection...\n');
 
