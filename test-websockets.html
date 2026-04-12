@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pump.fun WebSocket Provider Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; padding: 24px; }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
+    .card { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .card h2 { font-size: 16px; margin-bottom: 12px; }
+    button { background: #2563eb; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; width: 100%; font-weight: 600; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    .provider { display: flex; align-items: flex-start; gap: 12px; padding: 12px; border-radius: 8px; background: #111; margin-bottom: 8px; }
+    .provider .icon { font-size: 18px; margin-top: 2px; }
+    .provider .name { font-weight: 600; font-size: 14px; }
+    .provider .detail { font-size: 12px; color: #888; margin-top: 4px; word-break: break-all; }
+    .provider .detail.error { color: #ef4444; }
+    .provider .detail.success { color: #22c55e; }
+    .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .status.testing { background: #1e3a5f; color: #60a5fa; }
+    .status.pass { background: #14532d; color: #4ade80; }
+    .status.fail { background: #450a0a; color: #f87171; }
+    .summary { margin-top: 16px; padding: 12px; background: #111; border-radius: 8px; font-size: 13px; }
+    .messages { margin-top: 8px; max-height: 200px; overflow-y: auto; }
+    .msg { font-size: 11px; color: #666; padding: 4px 8px; border-left: 2px solid #333; margin: 4px 0; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Pump.fun WebSocket Provider Test</h1>
+  <p class="subtitle">Tests real-time token stream providers directly from your browser. No server needed.</p>
+
+  <div class="card">
+    <button id="testBtn" onclick="runTest()">Test All WebSocket Providers</button>
+  </div>
+
+  <div id="results"></div>
+  <div id="summary"></div>
+
+  <script>
+    const PROVIDERS = [
+      { name: 'PumpDev.io', url: 'wss://pumpdev.io/ws', subscribe: null, docs: 'https://pumpdev.io/data-api/' },
+      { name: 'PumpPortal', url: 'wss://pumpportal.fun/api/data', subscribe: JSON.stringify({ method: 'subscribeNewToken' }), docs: 'https://pumpportal.fun/data-api/real-time/' },
+      { name: 'Solana Tracker', url: 'wss://ws.solanatracker.io/', subscribe: null, docs: 'https://docs.solanatracker.io/public-data-api/websocket' },
+    ];
+
+    let results = {};
+
+    function runTest() {
+      const btn = document.getElementById('testBtn');
+      btn.disabled = true;
+      btn.textContent = 'Testing providers (up to 15s each)...';
+      results = {};
+
+      document.getElementById('results').innerHTML = PROVIDERS.map((p, i) => `
+        <div class="card" id="provider-${i}">
+          <div class="provider">
+            <div>
+              <div class="name">${p.name} <span class="status testing" id="status-${i}">TESTING</span></div>
+              <div class="detail" id="url-${i}">${p.url}</div>
+              <div class="detail" id="detail-${i}">Connecting...</div>
+              <div class="messages" id="msgs-${i}"></div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+      document.getElementById('summary').innerHTML = '';
+
+      let completed = 0;
+      PROVIDERS.forEach((p, i) => testProvider(p, i, () => {
+        if (++completed === PROVIDERS.length) showSummary(btn);
+      }));
+    }
+
+    function testProvider(provider, idx, onDone) {
+      const start = Date.now();
+      let msgCount = 0;
+      let done = false;
+
+      try {
+        const ws = new WebSocket(provider.url);
+
+        ws.onopen = () => {
+          update(idx, 'detail', 'Connected! Waiting for data...', 'success');
+          if (provider.subscribe) ws.send(provider.subscribe);
+        };
+
+        ws.onmessage = (event) => {
+          msgCount++;
+          const elapsed = Date.now() - start;
+          const data = typeof event.data === 'string' ? event.data : '[binary]';
+
+          addMsg(idx, `[${elapsed}ms] ${data.substring(0, 200)}`);
+
+          if (msgCount === 1) {
+            update(idx, 'detail', `First message in ${elapsed}ms`, 'success');
+          }
+
+          if (msgCount >= 3 && !done) {
+            done = true;
+            results[provider.name] = { success: true, elapsed, messages: msgCount, sample: data.substring(0, 200) };
+            setStatus(idx, 'pass', 'WORKS');
+            update(idx, 'detail', `${msgCount} messages received. First in ${elapsed}ms`, 'success');
+            ws.close();
+            onDone();
+          }
+        };
+
+        ws.onerror = (err) => {
+          if (!done) {
+            done = true;
+            results[provider.name] = { success: false, error: 'Connection failed' };
+            setStatus(idx, 'fail', 'FAILED');
+            update(idx, 'detail', 'Connection failed - provider may be down or blocking your IP', 'error');
+            onDone();
+          }
+        };
+
+        ws.onclose = () => {
+          if (!done && msgCount === 0) {
+            done = true;
+            results[provider.name] = { success: false, error: 'Closed without data' };
+            setStatus(idx, 'fail', 'FAILED');
+            update(idx, 'detail', 'Connection closed without receiving data', 'error');
+            onDone();
+          }
+        };
+
+        setTimeout(() => {
+          if (!done) {
+            done = true;
+            if (msgCount > 0) {
+              results[provider.name] = { success: true, elapsed: Date.now() - start, messages: msgCount };
+              setStatus(idx, 'pass', 'WORKS');
+              update(idx, 'detail', `${msgCount} messages in ${Date.now() - start}ms`, 'success');
+            } else {
+              results[provider.name] = { success: false, error: 'Timeout (15s)' };
+              setStatus(idx, 'fail', 'TIMEOUT');
+              update(idx, 'detail', 'No messages received in 15 seconds', 'error');
+            }
+            ws.close();
+            onDone();
+          }
+        }, 15000);
+
+      } catch (e) {
+        results[provider.name] = { success: false, error: e.message };
+        setStatus(idx, 'fail', 'ERROR');
+        update(idx, 'detail', e.message, 'error');
+        if (!done) { done = true; onDone(); }
+      }
+    }
+
+    function update(idx, id, text, cls) {
+      const el = document.getElementById(`${id}-${idx}`);
+      if (el) { el.textContent = text; el.className = `detail ${cls || ''}`; }
+    }
+
+    function setStatus(idx, cls, text) {
+      const el = document.getElementById(`status-${idx}`);
+      if (el) { el.className = `status ${cls}`; el.textContent = text; }
+    }
+
+    function addMsg(idx, text) {
+      const el = document.getElementById(`msgs-${idx}`);
+      if (el) {
+        const div = document.createElement('div');
+        div.className = 'msg';
+        div.textContent = text;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+
+    function showSummary(btn) {
+      btn.disabled = false;
+      btn.textContent = 'Test Again';
+      const working = Object.values(results).filter(r => r.success).length;
+      const total = Object.keys(results).length;
+      document.getElementById('summary').innerHTML = `
+        <div class="card">
+          <div class="summary">
+            <strong>${working}/${total} providers working</strong><br><br>
+            ${Object.entries(results).map(([name, r]) =>
+              `${r.success ? '&#9989;' : '&#10060;'} <strong>${name}</strong>: ${r.success ? `${r.elapsed}ms, ${r.messages} msgs` : r.error}`
+            ).join('<br>')}
+            ${working > 0 ? '<br><br>Copy these results and paste them back to Claude Code!' : '<br><br>No providers working. Polling is the best option.'}
+          </div>
+        </div>
+      `;
+    }
+  </script>
+</body>
+</html>
