@@ -234,6 +234,27 @@
         <div class="log" id="whales-log"></div>
       </div>
 
+      <!-- Subscription Limits Card -->
+      <div class="card full-width">
+        <h2>📊 Subscription & Connection Limits</h2>
+        <div class="metric">
+          <span class="metric-label">Active Connections</span>
+          <span class="metric-value good" id="active-connections">0/15</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Subscription Rate</span>
+          <span class="metric-value" id="sub-msg-rate">0/200 msg/s</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Total Subscriptions</span>
+          <span class="metric-value good" id="total-subscriptions">0</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Max Batch Size</span>
+          <span class="metric-value" id="max-batch-size">5000 addresses</span>
+        </div>
+      </div>
+
       <!-- Summary Card -->
       <div class="card full-width">
         <h2>📊 Test Summary</h2>
@@ -262,15 +283,17 @@
     let testActive = false;
     let testStartTime = 0;
     const providers = {
-      pumpportal: { url: 'wss://pumpportal.fun/api/data', ws: null, stats: { messages: 0, newTokens: 0, startTime: 0, errors: 0 } },
-      pumpdev: { url: 'wss://pumpdev.io/ws', ws: null, stats: { messages: 0, trades: 0, startTime: 0, errors: 0 } }
+      pumpportal: { url: 'wss://pumpportal.fun/api/data', ws: null, stats: { messages: 0, newTokens: 0, startTime: 0, errors: 0, subscriptionMsgs: 0 } },
+      pumpdev: { url: 'wss://pumpdev.io/ws', ws: null, stats: { messages: 0, trades: 0, startTime: 0, errors: 0, subscriptionMsgs: 0 } }
     };
 
     const metrics = {
       realTokens: new Set(),
       discoveredTokens: new Map(), // mint -> { discoveredAt, receivedTrade: false, tradeLat: null }
       activeSenders: new Map(), // sender -> { count, lastSeen }
-      tradeLatencies: []
+      tradeLatencies: [],
+      activeConnections: 0,
+      subscriptionHistory: [] // Track subscription messages per second
     };
 
     // Helpers
@@ -352,6 +375,7 @@
 
         ws.onopen = () => {
           updateStatus(provider, 'connected');
+          metrics.activeConnections++;
           log(abbr, 'Connected', 'success');
           if (provider === 'pumpportal') {
             ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
@@ -385,8 +409,8 @@
               if (msg.txType === 'trade' || msg.mint) {
                 config.stats.trades++;
 
-                // Track sender (wallet/bot)
-                const sender = msg.sender || msg.user || msg.owner;
+                // Track sender (wallet/bot) - PumpPortal uses 'traderPublicKey' field
+                const sender = msg.traderPublicKey || msg.sender || msg.user || msg.owner;
                 if (sender) {
                   if (!metrics.activeSenders.has(sender)) {
                     metrics.activeSenders.set(sender, { count: 0, lastSeen: Date.now() });
@@ -414,12 +438,14 @@
 
         ws.onerror = () => {
           updateStatus(provider, 'disconnected');
+          metrics.activeConnections = Math.max(0, metrics.activeConnections - 1);
           log(abbr, 'Error occurred', 'error');
           config.stats.errors++;
         };
 
         ws.onclose = () => {
           updateStatus(provider, 'disconnected');
+          metrics.activeConnections = Math.max(0, metrics.activeConnections - 1);
           log(abbr, 'Disconnected', 'error');
         };
       } catch (error) {
@@ -431,6 +457,11 @@
     function sendWhenReady(provider, message) {
       const config = providers[provider];
       const abbr = getAbbr(provider);
+
+      // Track subscription messages for rate limiting
+      config.stats.subscriptionMsgs++;
+      metrics.subscriptionHistory.push(Date.now());
+
       if (!config.ws || config.ws.readyState !== WebSocket.OPEN) {
         let attempts = 0;
         const retry = setInterval(() => {
@@ -533,6 +564,18 @@
       document.getElementById('combined-throughput').textContent = combinedMps.toFixed(1) + ' msg/s';
       document.getElementById('error-count').textContent = providers.pumpportal.stats.errors + providers.pumpdev.stats.errors;
 
+      // Subscription limits tracking
+      document.getElementById('active-connections').textContent = metrics.activeConnections + '/15';
+
+      // Calculate subscription message rate (messages/sec in last 1 second)
+      const nowTime = Date.now();
+      const recentSubMsgs = metrics.subscriptionHistory.filter(t => nowTime - t < 1000).length;
+      document.getElementById('sub-msg-rate').textContent = recentSubMsgs + '/200 msg/s';
+
+      // Total current subscriptions (tokens + wallets)
+      const totalSubs = metrics.realTokens.size + metrics.activeSenders.size;
+      document.getElementById('total-subscriptions').textContent = totalSubs;
+
       // Periodically subscribe to top wallets
       if (testTime % 5000 < 1000) {
         subscribeToTopWallets();
@@ -549,6 +592,8 @@
       metrics.discoveredTokens.clear();
       metrics.activeSenders.clear();
       metrics.tradeLatencies = [];
+      metrics.activeConnections = 0;
+      metrics.subscriptionHistory = [];
       document.getElementById('stop-btn').disabled = false;
 
       fetchRealTokens().then(() => {
