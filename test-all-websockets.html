@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebSocket Complete Test Suite</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; padding: 24px; }
+    h1 { font-size: 24px; margin-bottom: 4px; font-weight: 700; }
+    .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #333; flex-wrap: wrap; }
+    .tab-btn { background: none; border: none; color: #888; padding: 12px 16px; cursor: pointer; border-bottom: 3px solid transparent; font-size: 13px; font-weight: 600; transition: all 0.2s; }
+    .tab-btn.active { color: #e5e5e5; border-bottom-color: #2563eb; }
+    .tab-btn:hover { color: #b0b0b0; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .card { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .card h2 { font-size: 16px; margin-bottom: 12px; color: #fff; }
+    .card p { font-size: 12px; color: #888; margin-bottom: 12px; line-height: 1.5; }
+    .buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+    button { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 13px; cursor: pointer; font-weight: 600; min-width: 120px; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    button.stop { background: #dc2626; min-width: 80px; }
+    button.stop:hover { background: #b91c1c; }
+    .status-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; margin-left: 8px; }
+    .status-badge.connecting { background: #1e3a5f; color: #60a5fa; animation: pulse 1s infinite; }
+    .status-badge.connected { background: #14532d; color: #4ade80; }
+    .status-badge.error { background: #450a0a; color: #f87171; }
+    .status-badge.streaming { background: #134e4a; color: #2dd4bf; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .status-row { padding: 12px; border-radius: 8px; background: #111; margin-bottom: 8px; }
+    .status-text { font-size: 12px; color: #888; }
+    .status-text.success { color: #22c55e; }
+    .status-text.error { color: #ef4444; }
+    .messages { margin-top: 8px; max-height: 450px; overflow-y: auto; border: 1px solid #333; border-radius: 8px; background: #0a0a0a; }
+    .msg { padding: 6px 8px; border-bottom: 1px solid #222; line-height: 1.3; font-size: 11px; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+    .msg:hover { background: #1a1a1a; }
+    .msg.token { color: #93c5fd; border-left: 2px solid #60a5fa; padding-left: 6px; }
+    .msg.trade { color: #86efac; border-left: 2px solid #22c55e; padding-left: 6px; }
+    .msg.buy { color: #86efac; }
+    .msg.sell { color: #fca5a5; }
+    .msg.raw { color: #888; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 12px; margin-top: 12px; }
+    .stat { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 12px; text-align: center; }
+    .stat .val { font-size: 20px; font-weight: 700; color: #60a5fa; }
+    .stat .lbl { font-size: 10px; color: #888; margin-top: 4px; }
+    .stat .val.green { color: #4ade80; }
+    .stat .val.red { color: #f87171; }
+  </style>
+</head>
+<body>
+  <h1>🚀 WebSocket Test Suite</h1>
+  <p class="subtitle">Test PumpPortal and PumpDev real-time data streams. See exactly what messages they send.</p>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('pumpportal')">📡 PumpPortal</button>
+    <button class="tab-btn" onclick="switchTab('pumpdev')">📡 PumpDev</button>
+    <button class="tab-btn" onclick="switchTab('debug')">🔍 Raw Debug</button>
+  </div>
+
+  <!-- PUMPPORTAL TAB -->
+  <div id="pumpportal" class="tab-content active">
+    <div class="card">
+      <h2>PumpPortal Real-Time Test</h2>
+      <p>Tests subscribeNewToken and subscribeTokenTrade. Listen for new launches and their trades in real-time.</p>
+      <div class="buttons">
+        <button onclick="startPumpPortalTest()">Start Test</button>
+        <button class="stop" onclick="stopPumpPortalTest()" id="pp-stop" disabled>Stop</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Status <span class="status-badge" id="pp-badge"></span></h2>
+      <div class="status-row">
+        <div class="status-text" id="pp-status">Ready. Click "Start Test" to begin.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Events</h2>
+      <div id="pp-stats" class="stats"></div>
+      <div class="messages" id="pp-msgs"></div>
+    </div>
+  </div>
+
+  <!-- PUMPDEV TAB -->
+  <div id="pumpdev" class="tab-content">
+    <div class="card">
+      <h2>PumpDev Real-Time Test</h2>
+      <p>Connects to PumpDev auto-stream. Shows token launches and trades as they happen (no subscription needed).</p>
+      <div class="buttons">
+        <button onclick="startPumpDevTest()">Start Test</button>
+        <button class="stop" onclick="stopPumpDevTest()" id="pd-stop" disabled>Stop</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Status <span class="status-badge" id="pd-badge"></span></h2>
+      <div class="status-row">
+        <div class="status-text" id="pd-status">Ready. Click "Start Test" to begin.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Events</h2>
+      <div id="pd-stats" class="stats"></div>
+      <div class="messages" id="pd-msgs"></div>
+    </div>
+  </div>
+
+  <!-- DEBUG TAB -->
+  <div id="debug" class="tab-content">
+    <div class="card">
+      <h2>Raw Message Inspector</h2>
+      <p>Shows every message in raw JSON format. Helps identify message structure and identify tokens vs trades.</p>
+      <div class="buttons">
+        <button onclick="startPumpPortalDebug()">Start PumpPortal Debug</button>
+        <button onclick="startPumpDevDebug()">Start PumpDev Debug</button>
+        <button class="stop" onclick="stopDebug()" id="debug-stop" disabled>Stop All</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Raw Messages</h2>
+      <div class="messages" id="debug-msgs"></div>
+    </div>
+  </div>
+
+  <script>
+    let ppWs = null, pdWs = null, debugWs = null;
+    let ppStats = { msgs: 0, tokens: 0, trades: 0 };
+    let pdStats = { msgs: 0, tokens: 0, trades: 0 };
+    let activeTab = 'pumpportal';
+
+    function switchTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById(tab).classList.add('active');
+      document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+    }
+
+    // ===== PUMPPORTAL TEST =====
+    function startPumpPortalTest() {
+      ppStats = { msgs: 0, tokens: 0, trades: 0 };
+      document.getElementById('pp-stop').disabled = false;
+
+      setBadge('pp', 'connecting', 'CONNECTING...');
+      setStatus('pp', 'Connecting to PumpPortal...', 'normal');
+      clearMsgs('pp');
+
+      ppWs = new WebSocket('wss://pumpportal.fun/api/data');
+
+      ppWs.onopen = () => {
+        setBadge('pp', 'streaming', 'CONNECTED');
+        setStatus('pp', 'Connected! Subscribing to new tokens...', 'success');
+        ppWs.send(JSON.stringify({ method: 'subscribeNewToken' }));
+
+        setTimeout(() => {
+          ppWs.send(JSON.stringify({
+            method: 'subscribeTokenTrade',
+            keys: ['DezXAZ8z7PnrnRJjgjG7P5KaufXo7QQXqVmWY8MyPrCR']
+          }));
+          addMsg('pp', '↳ Subscribed to sample token trades', 'raw');
+        }, 1000);
+      };
+
+      ppWs.onmessage = (e) => {
+        ppStats.msgs++;
+        try {
+          const d = JSON.parse(e.data);
+          let type = 'raw', msg = '';
+
+          if (d.name && !d.txType) {
+            ppStats.tokens++;
+            type = 'token';
+            msg = `🆕 ${d.symbol}: ${d.name}`;
+          } else if (d.txType || d.type) {
+            ppStats.trades++;
+            type = d.txType === 'buy' ? 'trade buy' : 'trade sell';
+            const sol = d.solAmount ? (d.solAmount / 1e9).toFixed(3) : '?';
+            msg = `${d.txType === 'buy' ? '📈' : '📉'} ${d.txType?.toUpperCase()}: ${sol}Ⓢ`;
+          } else {
+            msg = JSON.stringify(d).substring(0, 150);
+          }
+
+          addMsg('pp', msg, type);
+          updateStats('pp');
+        } catch (err) {
+          addMsg('pp', e.data.substring(0, 200), 'raw');
+        }
+      };
+
+      ppWs.onerror = () => {
+        setBadge('pp', 'error', 'ERROR');
+        setStatus('pp', 'Connection error', 'error');
+      };
+
+      ppWs.onclose = () => {
+        setBadge('pp', 'error', 'DISCONNECTED');
+      };
+    }
+
+    function stopPumpPortalTest() {
+      if (ppWs) { ppWs.close(); ppWs = null; }
+      document.getElementById('pp-stop').disabled = true;
+      setBadge('pp', 'error', 'STOPPED');
+    }
+
+    // ===== PUMPDEV TEST =====
+    function startPumpDevTest() {
+      pdStats = { msgs: 0, tokens: 0, trades: 0 };
+      document.getElementById('pd-stop').disabled = false;
+
+      setBadge('pd', 'connecting', 'CONNECTING...');
+      setStatus('pd', 'Connecting to PumpDev...', 'normal');
+      clearMsgs('pd');
+
+      pdWs = new WebSocket('wss://pumpdev.io/ws');
+
+      pdWs.onopen = () => {
+        setBadge('pd', 'streaming', 'STREAMING');
+        setStatus('pd', 'Connected! Auto-streaming events...', 'success');
+      };
+
+      pdWs.onmessage = (e) => {
+        pdStats.msgs++;
+        try {
+          const d = JSON.parse(e.data);
+          let type = 'raw', msg = '';
+
+          const eventType = d.type || d.txType;
+
+          if (eventType === 'create') {
+            pdStats.tokens++;
+            type = 'token';
+            msg = `🆕 ${d.symbol || '?'}: ${d.name || '?'}`;
+          } else if (eventType === 'buy' || eventType === 'sell') {
+            pdStats.trades++;
+            type = eventType === 'buy' ? 'trade buy' : 'trade sell';
+            msg = `${eventType === 'buy' ? '📈' : '📉'} ${eventType.toUpperCase()}`;
+          } else {
+            msg = JSON.stringify(d).substring(0, 150);
+          }
+
+          addMsg('pd', msg, type);
+          updateStats('pd');
+        } catch (err) {
+          addMsg('pd', e.data.substring(0, 200), 'raw');
+        }
+      };
+
+      pdWs.onerror = () => {
+        setBadge('pd', 'error', 'ERROR');
+        setStatus('pd', 'Connection error', 'error');
+      };
+
+      pdWs.onclose = () => {
+        setBadge('pd', 'error', 'DISCONNECTED');
+      };
+    }
+
+    function stopPumpDevTest() {
+      if (pdWs) { pdWs.close(); pdWs = null; }
+      document.getElementById('pd-stop').disabled = true;
+      setBadge('pd', 'error', 'STOPPED');
+    }
+
+    // ===== DEBUG MODE =====
+    function startPumpPortalDebug() {
+      clearMsgs('debug');
+      document.getElementById('debug-stop').disabled = false;
+
+      if (debugWs) debugWs.close();
+      addMsg('debug', '>>> Starting PumpPortal debug...', 'raw');
+
+      debugWs = new WebSocket('wss://pumpportal.fun/api/data');
+
+      debugWs.onopen = () => {
+        addMsg('debug', '✓ Connected. Subscribing...', 'raw');
+        debugWs.send(JSON.stringify({ method: 'subscribeNewToken' }));
+      };
+
+      debugWs.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          const typeHint = d.name ? '(token)' : d.txType ? `(${d.txType})` : '(unknown)';
+          addMsg('debug', `${typeHint}\n${JSON.stringify(d, null, 2)}`.substring(0, 500), 'raw');
+        } catch {
+          addMsg('debug', `(raw)\n${e.data}`.substring(0, 500), 'raw');
+        }
+      };
+
+      debugWs.onerror = () => addMsg('debug', '✗ Error', 'raw');
+    }
+
+    function startPumpDevDebug() {
+      clearMsgs('debug');
+      document.getElementById('debug-stop').disabled = false;
+
+      if (debugWs) debugWs.close();
+      addMsg('debug', '>>> Starting PumpDev debug...', 'raw');
+
+      debugWs = new WebSocket('wss://pumpdev.io/ws');
+
+      debugWs.onopen = () => {
+        addMsg('debug', '✓ Connected. Auto-streaming...', 'raw');
+      };
+
+      debugWs.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          const eventType = d.type || d.txType;
+          const typeHint = eventType ? `(${eventType})` : '(unknown)';
+          addMsg('debug', `${typeHint}\n${JSON.stringify(d, null, 2)}`.substring(0, 500), 'raw');
+        } catch {
+          addMsg('debug', `(raw)\n${e.data}`.substring(0, 500), 'raw');
+        }
+      };
+
+      debugWs.onerror = () => addMsg('debug', '✗ Error', 'raw');
+    }
+
+    function stopDebug() {
+      if (debugWs) { debugWs.close(); debugWs = null; }
+      document.getElementById('debug-stop').disabled = true;
+      addMsg('debug', '>>> Stopped', 'raw');
+    }
+
+    // ===== HELPERS =====
+    function setBadge(provider, cls, text) {
+      const el = document.getElementById(`${provider}-badge`);
+      if (el) {
+        el.className = `status-badge ${cls}`;
+        el.textContent = text;
+      }
+    }
+
+    function setStatus(provider, text, cls) {
+      const el = document.getElementById(`${provider}-status`);
+      if (el) {
+        el.textContent = text;
+        el.className = `status-text ${cls === 'success' ? 'success' : cls === 'error' ? 'error' : ''}`;
+      }
+    }
+
+    function addMsg(provider, text, cls) {
+      const el = document.getElementById(`${provider}-msgs`);
+      if (el) {
+        const div = document.createElement('div');
+        div.className = `msg ${cls}`;
+        div.textContent = text;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+        while (el.children.length > 150) el.removeChild(el.firstChild);
+      }
+    }
+
+    function clearMsgs(provider) {
+      const el = document.getElementById(`${provider}-msgs`);
+      if (el) el.innerHTML = '';
+    }
+
+    function updateStats(provider) {
+      const stats = provider === 'pp' ? ppStats : pdStats;
+      const el = document.getElementById(`${provider}-stats`);
+      if (el) {
+        el.innerHTML = `
+          <div class="stat">
+            <div class="val">${stats.msgs}</div>
+            <div class="lbl">Messages</div>
+          </div>
+          <div class="stat">
+            <div class="val green">${stats.tokens}</div>
+            <div class="lbl">Tokens</div>
+          </div>
+          <div class="stat">
+            <div class="val green">${stats.trades}</div>
+            <div class="lbl">Trades</div>
+          </div>
+        `;
+      }
+    }
+  </script>
+</body>
+</html>
