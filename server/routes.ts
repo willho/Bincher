@@ -8472,6 +8472,59 @@ export async function registerRoutes(
     }
   });
 
+  // WebSocket monitoring status endpoint (with load balancer metrics)
+  app.get("/api/websocket/stats", requireAuth, async (req, res) => {
+    try {
+      const { getWebSocketStats, getWebSocketSubscriptions, getLoadBalancerStatus } = await import("./pumpfun-websocket-dual");
+      const stats = getWebSocketStats();
+      const subscriptions = getWebSocketSubscriptions();
+
+      let loadBalancerStatus = null;
+      try {
+        loadBalancerStatus = getLoadBalancerStatus?.();
+      } catch (error) {
+        // Load balancer may not be initialized yet
+      }
+
+      res.json({
+        stats,
+        subscriptions,
+        loadBalancerStatus,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Whale wallet subscription endpoints (dual-provider)
+  app.post("/api/websocket/whale/:wallet", requireAuth, async (req, res) => {
+    try {
+      const { wallet } = req.params;
+      const { provider } = req.body; // "pumpportal" | "pumpdev" | "both"
+
+      const { addWhaleWallet } = await import("./pumpfun-websocket-dual");
+      addWhaleWallet(wallet, provider || "both");
+
+      res.json({ success: true, wallet, provider: provider || "both" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/websocket/whale/:wallet", requireAuth, async (req, res) => {
+    try {
+      const { wallet } = req.params;
+      const { provider } = req.body;
+
+      const { removeWhaleWallet } = await import("./pumpfun-websocket-dual");
+      removeWhaleWallet(wallet, provider || "both");
+
+      res.json({ success: true, wallet });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Pump.fun API proxy for WebSocket tests (CORS-friendly)
   app.get("/api/pumpfun/trending", async (req, res) => {
     try {
@@ -8500,6 +8553,15 @@ export async function registerRoutes(
 
   const { startRpcUsageLogger } = await import("./rpc-usage-logger");
   startRpcUsageLogger();
+
+  // Start dual-provider WebSocket for real-time token discovery and trades
+  const { startPumpFunWebSocket } = await import("./pumpfun-websocket-dual");
+  try {
+    await startPumpFunWebSocket();
+    console.log("[WebSocket] Dual-provider system started with integrated discovery event bus");
+  } catch (error) {
+    console.error("[WebSocket] Failed to start:", error);
+  }
 
   return httpServer;
 }
