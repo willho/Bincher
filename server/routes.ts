@@ -8472,6 +8472,77 @@ export async function registerRoutes(
     }
   });
 
+  // WebSocket monitoring status endpoint
+  app.get("/api/websocket/stats", requireAuth, async (req, res) => {
+    try {
+      const { getWebSocketStats, getWebSocketSubscriptions } = await import("./pumpfun-websocket");
+      const stats = getWebSocketStats();
+      const subscriptions = getWebSocketSubscriptions();
+
+      res.json({
+        stats,
+        subscriptions,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // WebSocket control endpoints
+  app.post("/api/websocket/subscribe/:mint", requireAuth, async (req, res) => {
+    try {
+      const { mint } = req.params;
+      const { tier } = req.body;
+
+      const { subscribeTrades } = await import("./pumpfun-websocket");
+      subscribeTrades(mint, tier || "warm");
+
+      res.json({ success: true, mint });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/websocket/unsubscribe/:mint", requireAuth, async (req, res) => {
+    try {
+      const { mint } = req.params;
+
+      const { unsubscribeTrades } = await import("./pumpfun-websocket");
+      unsubscribeTrades(mint);
+
+      res.json({ success: true, mint });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Whale wallet subscription endpoints
+  app.post("/api/websocket/whale/:wallet", requireAuth, async (req, res) => {
+    try {
+      const { wallet } = req.params;
+
+      const { subscribeWhaleWallet } = await import("./pumpfun-websocket");
+      subscribeWhaleWallet(wallet);
+
+      res.json({ success: true, wallet });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/websocket/whale/:wallet", requireAuth, async (req, res) => {
+    try {
+      const { wallet } = req.params;
+
+      const { unsubscribeWhaleWallet } = await import("./pumpfun-websocket");
+      unsubscribeWhaleWallet(wallet);
+
+      res.json({ success: true, wallet });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Pump.fun API proxy for WebSocket tests (CORS-friendly)
   app.get("/api/pumpfun/trending", async (req, res) => {
     try {
@@ -8500,6 +8571,67 @@ export async function registerRoutes(
 
   const { startRpcUsageLogger } = await import("./rpc-usage-logger");
   startRpcUsageLogger();
+
+  // Start WebSocket client for real-time token discovery and trades
+  const { startPumpFunWebSocket, getPumpFunWebSocket } = await import("./pumpfun-websocket");
+  try {
+    await startPumpFunWebSocket();
+    // Wire WebSocket events into discovery event bus
+    const ws = getPumpFunWebSocket();
+    if (ws) {
+      const { emit: emitDiscoveryEvent } = await import("./discovery-event-bus");
+
+      ws.on("new_token", async (event: any) => {
+        try {
+          await emitDiscoveryEvent({
+            type: "new_token",
+            tokenMint: event.mint,
+            tokenSymbol: event.symbol,
+            source: "websocket_pumpfun",
+            data: { ...event, provider: ws.getStats().provider },
+            timestamp: event.timestamp,
+            urgency: 90, // High urgency for real-time discovery
+          });
+        } catch (error) {
+          console.error("[Routes] Error emitting new_token event:", error);
+        }
+      });
+
+      ws.on("trade", async (event: any) => {
+        try {
+          await emitDiscoveryEvent({
+            type: "volume_spike",
+            tokenMint: event.mint,
+            source: "websocket_trades",
+            data: { direction: event.direction, solAmount: event.solAmount, timestamp: event.timestamp },
+            timestamp: event.timestamp,
+            urgency: 60,
+          });
+        } catch (error) {
+          console.error("[Routes] Error emitting trade event:", error);
+        }
+      });
+
+      ws.on("whale_activity", async (event: any) => {
+        try {
+          await emitDiscoveryEvent({
+            type: "whale_activity",
+            tokenMint: event.mint,
+            source: "websocket_whales",
+            data: { wallet: event.wallet, direction: event.direction, amount: event.amount },
+            timestamp: event.timestamp,
+            urgency: 95, // Very high urgency for whale activity
+          });
+        } catch (error) {
+          console.error("[Routes] Error emitting whale_activity event:", error);
+        }
+      });
+
+      console.log("[WebSocket] Integrated with discovery event bus");
+    }
+  } catch (error) {
+    console.error("[WebSocket] Failed to start:", error);
+  }
 
   return httpServer;
 }

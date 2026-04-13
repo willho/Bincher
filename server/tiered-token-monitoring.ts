@@ -318,6 +318,60 @@ async function coordinateMonitoring(): Promise<void> {
   }
 }
 
+/**
+ * Get tier assignment for a token based on creator reputation
+ * Used by WebSocket client to determine subscription tier
+ */
+export function getTierForToken(creatorScore: number, ageMinutes: number): "webhook" | "hot" | "warm" | "cold" {
+  // First 5 minutes: webhook (real-time monitoring)
+  if (ageMinutes < 5) {
+    return "webhook";
+  }
+
+  // After 5 minutes: determine based on creator score
+  // Low score (risky): hot (frequent polling)
+  // Medium score: warm (less frequent polling)
+  // High score (trusted): cold (no polling)
+  if (creatorScore < 0.4) {
+    return "hot";
+  } else if (creatorScore < 0.7) {
+    return "warm";
+  } else {
+    return "cold";
+  }
+}
+
+/**
+ * Called by WebSocket when new tokens are discovered
+ * Returns the tier the token should be subscribed at
+ */
+export async function assessNewTokenForWebSocketSubscription(
+  tokenMint: string,
+  creatorAddress?: string
+): Promise<"webhook" | "hot" | "warm" | "cold" | null> {
+  try {
+    if (!creatorAddress) {
+      // Unknown creator - default to hot tier (close monitoring)
+      return "hot";
+    }
+
+    const creatorHistory = await getCreatorReputation(creatorAddress);
+    const creatorScore = scoreCreatorReputation(creatorHistory);
+
+    const tier = getTierForToken(creatorScore, 0); // Age is 0 for brand new tokens
+
+    console.log(
+      `[TokenMonitoring] New token ${tokenMint.slice(0, 8)}... (creator: ${classifyCreator(creatorHistory)}, score: ${(creatorScore * 100).toFixed(0)}%, tier: ${tier})`
+    );
+
+    return tier;
+  } catch (error) {
+    console.error(`[TokenMonitoring] Error assessing token for subscription:`, error);
+    // Default to hot on error
+    return "hot";
+  }
+}
+
 export default {
   registerTokenForMonitoring,
   getMonitoringAction,
@@ -325,4 +379,6 @@ export default {
   pollTokenPrice,
   getMonitoringStats,
   startTokenMonitoringCoordinator,
+  getTierForToken,
+  assessNewTokenForWebSocketSubscription,
 };
