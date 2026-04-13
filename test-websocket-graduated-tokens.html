@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebSocket Trade Test: Graduated Tokens</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; padding: 24px; }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    .subtitle { color: #888; font-size: 14px; margin-bottom: 24px; }
+    .card { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    .card h2 { font-size: 16px; margin-bottom: 12px; color: #fff; }
+    .buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+    button { background: #2563eb; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 600; flex: 1; min-width: 180px; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    button.stop { background: #dc2626; }
+    button.stop:hover { background: #b91c1c; }
+    .status { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .status.loading { background: #1e3a5f; color: #60a5fa; animation: pulse 1s infinite; }
+    .status.testing { background: #1e3a5f; color: #60a5fa; }
+    .status.pass { background: #14532d; color: #4ade80; }
+    .status.fail { background: #450a0a; color: #f87171; }
+    .status.live { background: #134e4a; color: #2dd4bf; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .section { padding: 12px; border-radius: 8px; background: #111; margin-bottom: 8px; }
+    .section .label { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+    .section .detail { font-size: 12px; color: #888; margin-top: 4px; word-break: break-all; }
+    .section .detail.error { color: #ef4444; }
+    .section .detail.success { color: #22c55e; }
+    .tokens-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+    .token-card { background: #111; border: 1px solid #333; border-radius: 8px; padding: 12px; }
+    .token-card .name { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+    .token-card .symbol { font-size: 11px; color: #888; }
+    .token-card .mint { font-size: 11px; color: #666; font-family: monospace; margin-top: 4px; word-break: break-all; }
+    .token-card .action { margin-top: 8px; }
+    .token-card button { padding: 6px 12px; font-size: 12px; min-width: 0; }
+    .messages { margin-top: 8px; max-height: 400px; overflow-y: auto; }
+    .msg { font-size: 11px; color: #999; padding: 4px 8px; border-left: 2px solid #333; margin: 4px 0; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+    .msg.buy { border-left-color: #22c55e; color: #86efac; }
+    .msg.sell { border-left-color: #ef4444; color: #fca5a5; }
+    .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; }
+    .stat { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 12px 16px; min-width: 100px; }
+    .stat .val { font-size: 24px; font-weight: 700; }
+    .stat .lbl { font-size: 11px; color: #888; margin-top: 4px; }
+    .stat .val.green { color: #4ade80; }
+    .stat .val.red { color: #f87171; }
+    .stat .val.blue { color: #60a5fa; }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Trade Test: Graduated Tokens</h1>
+  <p class="subtitle">Tests real-time trades on tokens that graduated from pump.fun to Raydium. Pulls trending tokens from DexScreener.</p>
+
+  <div class="card">
+    <div class="buttons">
+      <button id="loadBtn" onclick="loadTrendingTokens()">Load Trending Tokens from DexScreener</button>
+      <button id="stopBtn" onclick="stopAll()" class="stop" disabled>Stop All</button>
+    </div>
+  </div>
+
+  <div id="results"></div>
+
+  <script>
+    let ws = null;
+    let running = false;
+    let tradesByToken = {};
+    let subscribedTokens = new Set();
+    let ws_connected = false;
+
+    async function loadTrendingTokens() {
+      const btn = document.getElementById('loadBtn');
+      btn.disabled = true;
+      btn.textContent = 'Loading trending tokens...';
+
+      document.getElementById('results').innerHTML = `
+        <div class="card">
+          <h2>Step 1: Fetch Trending Tokens <span class="status loading" id="load-status">LOADING</span></h2>
+          <div class="section">
+            <div class="detail" id="load-detail">Fetching from DexScreener...</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Step 2: Connect WebSocket <span class="status testing" id="ws-status">WAITING</span></h2>
+          <div class="section">
+            <div class="detail" id="ws-detail">Waiting to load tokens...</div>
+          </div>
+        </div>
+
+        <div class="card" id="tokens-card" style="display:none;">
+          <h2>Step 3: Select Tokens to Monitor</h2>
+          <div class="section">
+            <div class="tokens-list" id="tokens-list"></div>
+          </div>
+        </div>
+
+        <div class="card" id="trades-card" style="display:none;">
+          <h2>Live Trades <span class="status live" id="trade-status">STREAMING</span></h2>
+          <div id="trade-stats"></div>
+          <div class="messages" id="trade-msgs"></div>
+        </div>
+      `;
+
+      try {
+        // Fetch trending tokens from DexScreener API
+        const response = await fetch('https://api.dexscreener.com/latest/dex/tokens?order=desc&orderBy=h24Trading');
+        const data = await response.json();
+
+        if (!data.pairs || data.pairs.length === 0) {
+          setEl('load-status', 'FAILED', 'status fail');
+          setEl('load-detail', 'No tokens found from DexScreener', 'detail error');
+          btn.disabled = false;
+          btn.textContent = 'Load Trending Tokens from DexScreener';
+          return;
+        }
+
+        // Extract top 5 trending tokens with high volume
+        const tokens = data.pairs
+          .filter(p => p.baseToken && p.chainId === 'solana' && p.volume?.h24 > 100000)
+          .slice(0, 5)
+          .map(p => ({
+            mint: p.baseToken.address,
+            name: p.baseToken.name,
+            symbol: p.baseToken.symbol,
+            priceUsd: parseFloat(p.priceUsd),
+            volumeH24: p.volume?.h24 || 0,
+            priceChange: p.priceChange?.h24 || 0,
+          }));
+
+        if (tokens.length === 0) {
+          setEl('load-status', 'FAILED', 'status fail');
+          setEl('load-detail', 'No Solana tokens with volume > $100k found', 'detail error');
+          btn.disabled = false;
+          btn.textContent = 'Load Trending Tokens from DexScreener';
+          return;
+        }
+
+        setEl('load-status', 'SUCCESS', 'status pass');
+        setEl('load-detail', `Loaded ${tokens.length} trending Solana tokens from DexScreener (24h volume > $100k)`, 'detail success');
+
+        // Display tokens and allow selection
+        const tokensCard = document.getElementById('tokens-card');
+        const tokensList = document.getElementById('tokens-list');
+        tokensCard.style.display = 'block';
+
+        tokensList.innerHTML = tokens.map(t => `
+          <div class="token-card">
+            <div class="name">${t.name}</div>
+            <div class="symbol">${t.symbol}</div>
+            <div class="mint">${t.mint.substring(0, 20)}...</div>
+            <div style="font-size: 11px; color: #888; margin-top: 4px;">
+              $${t.priceUsd.toFixed(6)} | Vol: $${(t.volumeH24/1000).toFixed(0)}k
+            </div>
+            <div class="action">
+              <button onclick="subscribeToToken('${t.mint}', '${t.name}', '${t.symbol}')" style="padding: 6px 12px; font-size: 12px;">Subscribe</button>
+            </div>
+          </div>
+        `).join('');
+
+        // Auto-connect WebSocket
+        document.getElementById('stopBtn').disabled = false;
+        connectWebSocket();
+
+      } catch (error) {
+        setEl('load-status', 'ERROR', 'status fail');
+        setEl('load-detail', `Error: ${error.message}`, 'detail error');
+        btn.disabled = false;
+        btn.textContent = 'Load Trending Tokens from DexScreener';
+      }
+    }
+
+    function connectWebSocket() {
+      setEl('ws-status', 'CONNECTING', 'status testing');
+      setEl('ws-detail', 'Connecting to PumpPortal WebSocket...', 'detail');
+      running = true;
+
+      try {
+        ws = new WebSocket('wss://pumpportal.fun/api/data');
+
+        ws.onopen = () => {
+          ws_connected = true;
+          setEl('ws-status', 'CONNECTED', 'status pass');
+          setEl('ws-detail', 'Connected to PumpPortal! Select tokens above to monitor trades.', 'detail success');
+        };
+
+        ws.onmessage = (event) => {
+          if (!running) return;
+          try {
+            const data = JSON.parse(event.data);
+            handleTradeMessage(data);
+          } catch (e) {
+            // Ignore parse errors
+          }
+        };
+
+        ws.onerror = () => {
+          setEl('ws-status', 'FAILED', 'status fail');
+          setEl('ws-detail', 'WebSocket connection failed', 'detail error');
+        };
+
+        ws.onclose = () => {
+          ws_connected = false;
+          if (running) {
+            setEl('ws-status', 'DISCONNECTED', 'status fail');
+            setEl('ws-detail', 'Connection closed', 'detail error');
+          }
+        };
+
+      } catch (e) {
+        setEl('ws-status', 'ERROR', 'status fail');
+        setEl('ws-detail', e.message, 'detail error');
+      }
+    }
+
+    function subscribeToToken(mint, name, symbol) {
+      if (!ws_connected) {
+        alert('WebSocket not connected yet');
+        return;
+      }
+
+      if (subscribedTokens.has(mint)) {
+        alert('Already subscribed to ' + symbol);
+        return;
+      }
+
+      subscribedTokens.add(mint);
+      tradesByToken[mint] = { name, symbol, trades: 0, buys: 0, sells: 0 };
+
+      // Send subscription
+      ws.send(JSON.stringify({
+        method: 'subscribeTokenTrade',
+        keys: [mint]
+      }));
+
+      // Show trades card
+      document.getElementById('trades-card').style.display = 'block';
+      addMsg('trade-msgs', `[${new Date().toLocaleTimeString()}] Subscribed to ${symbol} (${name})\n  Mint: ${mint}`, '');
+    }
+
+    function handleTradeMessage(data) {
+      // Check if it's a trade (has solAmount or tokenAmount)
+      if (!data.mint || data.solAmount === undefined) return;
+
+      const mint = data.mint;
+      if (!subscribedTokens.has(mint)) return;
+
+      const isBuy = (data.txType === 'buy' || data.type === 'buy');
+      if (isBuy) {
+        tradesByToken[mint].buys++;
+      } else {
+        tradesByToken[mint].sells++;
+      }
+      tradesByToken[mint].trades++;
+
+      const time = new Date().toLocaleTimeString();
+      const txType = isBuy ? 'BUY' : 'SELL';
+      const sol = (data.solAmount / 1e9).toFixed(4);
+      const tokens = data.tokenAmount ? (data.tokenAmount / 1e6).toFixed(2) : '?';
+      const tokenData = tradesByToken[mint];
+      const symbol = tokenData.symbol;
+
+      addMsg('trade-msgs',
+        `[${time}] ${symbol} | ${txType} ${sol} SOL (${tokens} tokens) | Total: ${tokenData.trades} trades (${tokenData.buys} buy, ${tokenData.sells} sell)`,
+        isBuy ? 'buy' : 'sell'
+      );
+
+      updateStats();
+    }
+
+    function updateStats() {
+      const statsHtml = Object.entries(tradesByToken).map(([mint, data]) => `
+        <div class="stat">
+          <div class="lbl">${data.symbol}</div>
+          <div class="val blue">${data.trades}</div>
+          <div style="font-size: 10px; color: #4ade80; margin-top: 2px;">↑ ${data.buys}</div>
+          <div style="font-size: 10px; color: #f87171;">↓ ${data.sells}</div>
+        </div>
+      `).join('');
+
+      const el = document.getElementById('trade-stats');
+      if (el) el.innerHTML = statsHtml;
+    }
+
+    function stopAll() {
+      running = false;
+      if (ws) { ws.close(); ws = null; }
+      document.getElementById('loadBtn').disabled = false;
+      document.getElementById('loadBtn').textContent = 'Load Trending Tokens from DexScreener';
+      document.getElementById('stopBtn').disabled = true;
+      setEl('ws-status', 'STOPPED', 'status fail');
+      setEl('ws-detail', 'Test stopped', 'detail');
+      setEl('trade-status', 'STOPPED', 'status fail');
+    }
+
+    function setEl(id, text, cls) {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = text; if (cls) el.className = cls; }
+    }
+
+    function addMsg(containerId, text, type) {
+      const el = document.getElementById(containerId);
+      if (el) {
+        const div = document.createElement('div');
+        div.className = `msg ${type}`;
+        div.textContent = text;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+        while (el.children.length > 100) el.removeChild(el.firstChild);
+      }
+    }
+  </script>
+</body>
+</html>
