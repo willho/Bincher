@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PumpPortal All-Trades Subscription Test</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: monospace; background: #0a0a0a; color: #e5e5e5; padding: 20px; line-height: 1.6; }
+    h1 { margin-bottom: 20px; font-size: 18px; color: #60a5fa; }
+    .test { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .test h2 { font-size: 13px; margin-bottom: 12px; color: #e5e5e5; }
+    .subscription { background: #111; padding: 8px; border-radius: 4px; margin: 8px 0; border-left: 2px solid #2563eb; color: #93c5fd; font-size: 11px; }
+    .buttons { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    button { background: #2563eb; color: white; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    .messages { background: #0a0a0a; border: 1px solid #222; border-radius: 4px; padding: 10px; max-height: 400px; overflow-y: auto; font-size: 9px; }
+    .msg { padding: 4px 0; border-bottom: 1px solid #222; color: #888; }
+    .msg.sent { color: #60a5fa; }
+    .msg.received { color: #4ade80; }
+    .msg.error { color: #f87171; }
+    .msg.timeout { color: #fbbf24; }
+    .stats { margin-top: 10px; padding: 10px; background: #111; border-radius: 4px; font-size: 11px; }
+    .stat-line { padding: 2px 0; }
+  </style>
+</head>
+<body>
+  <h1>PumpPortal All-Trades Subscription Tests</h1>
+  <p style="color: #888; margin-bottom: 20px;">Testing different methods to stream ALL pump.fun trades with one subscription (no token list).</p>
+
+  <div class="test">
+    <h2>Test 1: subscribeTokenTrade (empty keys)</h2>
+    <div class="subscription">{"method":"subscribeTokenTrade"}</div>
+    <p style="color: #888; font-size: 10px; margin: 8px 0;">Does empty keys array = all trades?</p>
+    <div class="buttons">
+      <button onclick="test(1)">Run Test (30s)</button>
+      <button onclick="stopTest()">Stop</button>
+    </div>
+    <div class="messages" id="test1"></div>
+  </div>
+
+  <div class="test">
+    <h2>Test 2: subscribeTokenTrade with ["*"]</h2>
+    <div class="subscription">{"method":"subscribeTokenTrade","keys":["*"]}</div>
+    <p style="color: #888; font-size: 10px; margin: 8px 0;">Does wildcard = all trades?</p>
+    <div class="buttons">
+      <button onclick="test(2)">Run Test (30s)</button>
+      <button onclick="stopTest()">Stop</button>
+    </div>
+    <div class="messages" id="test2"></div>
+  </div>
+
+  <div class="test">
+    <h2>Test 3: subscribeTrade (different method name?)</h2>
+    <div class="subscription">{"method":"subscribeTrade"}</div>
+    <p style="color: #888; font-size: 10px; margin: 8px 0;">Alternative method name for all trades?</p>
+    <div class="buttons">
+      <button onclick="test(3)">Run Test (30s)</button>
+      <button onclick="stopTest()">Stop</button>
+    </div>
+    <div class="messages" id="test3"></div>
+  </div>
+
+  <div class="test">
+    <h2>Test 4: subscribeNewTokenTrade</h2>
+    <div class="subscription">{"method":"subscribeNewTokenTrade"}</div>
+    <p style="color: #888; font-size: 10px; margin: 8px 0;">New tokens + their trades in one sub?</p>
+    <div class="buttons">
+      <button onclick="test(4)">Run Test (30s)</button>
+      <button onclick="stopTest()">Stop</button>
+    </div>
+    <div class="messages" id="test4"></div>
+  </div>
+
+  <div class="test">
+    <h2>Test 5: Subscribe to both newToken + empty TokenTrade</h2>
+    <div class="subscription">{"method":"subscribeNewToken"}<br>{"method":"subscribeTokenTrade"}</div>
+    <p style="color: #888; font-size: 10px; margin: 8px 0;">New tokens + all trades with two subs?</p>
+    <div class="buttons">
+      <button onclick="test(5)">Run Test (30s)</button>
+      <button onclick="stopTest()">Stop</button>
+    </div>
+    <div class="messages" id="test5"></div>
+  </div>
+
+  <script>
+    let ws = null;
+    let currentTest = null;
+    let timeout = null;
+
+    function msg(testId, text, cls) {
+      const el = document.getElementById(`test${testId}`);
+      if (el) {
+        const div = document.createElement('div');
+        div.className = `msg ${cls}`;
+        div.textContent = text;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+
+    function test(testNum) {
+      stopTest();
+      currentTest = testNum;
+
+      msg(testNum, `[${new Date().toLocaleTimeString()}] Connecting...`, '');
+
+      ws = new WebSocket('wss://pumpportal.fun/api/data');
+
+      ws.onopen = () => {
+        msg(testNum, `[${new Date().toLocaleTimeString()}] ✓ Connected`, 'received');
+
+        if (testNum === 1) {
+          msg(testNum, `[${new Date().toLocaleTimeString()}] >>> Sending subscribeTokenTrade (no keys)`, 'sent');
+          ws.send(JSON.stringify({ method: 'subscribeTokenTrade' }));
+        } else if (testNum === 2) {
+          msg(testNum, `[${new Date().toLocaleTimeString()}] >>> Sending subscribeTokenTrade with ["*"]`, 'sent');
+          ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: ['*'] }));
+        } else if (testNum === 3) {
+          msg(testNum, `[${new Date().toLocaleTimeString()}] >>> Sending subscribeTrade`, 'sent');
+          ws.send(JSON.stringify({ method: 'subscribeTrade' }));
+        } else if (testNum === 4) {
+          msg(testNum, `[${new Date().toLocaleTimeString()}] >>> Sending subscribeNewTokenTrade`, 'sent');
+          ws.send(JSON.stringify({ method: 'subscribeNewTokenTrade' }));
+        } else if (testNum === 5) {
+          msg(testNum, `[${new Date().toLocaleTimeString()}] >>> Sending subscribeNewToken`, 'sent');
+          ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+          setTimeout(() => {
+            msg(testNum, `[${new Date().toLocaleTimeString()}] >>> Sending subscribeTokenTrade (empty)`, 'sent');
+            ws.send(JSON.stringify({ method: 'subscribeTokenTrade' }));
+          }, 500);
+        }
+      };
+
+      let messageCount = 0;
+      let tradeCount = 0;
+      let tokenCount = 0;
+
+      ws.onmessage = (e) => {
+        messageCount++;
+        try {
+          const d = JSON.parse(e.data);
+
+          // Count different message types
+          if (d.txType === 'buy' || d.txType === 'sell' || d.type === 'buy' || d.type === 'sell') {
+            tradeCount++;
+            const type = d.txType || d.type;
+            msg(testNum, `[${new Date().toLocaleTimeString()}] ◀ TRADE (${type}) mint=${d.mint?.substring(0,12)}... sol=${d.solAmount ? (d.solAmount/1e9).toFixed(2) : '?'}`, 'received');
+          } else if (d.name && !d.txType) {
+            tokenCount++;
+            msg(testNum, `[${new Date().toLocaleTimeString()}] ◀ NEW TOKEN ${d.symbol} mint=${d.mint?.substring(0,12)}...`, 'received');
+          } else if (d.message) {
+            msg(testNum, `[${new Date().toLocaleTimeString()}] ◀ ${d.message}`, 'received');
+          } else {
+            msg(testNum, `[${new Date().toLocaleTimeString()}] ◀ ${JSON.stringify(d).substring(0, 100)}`, 'received');
+          }
+        } catch (err) {
+          msg(testNum, `[${new Date().toLocaleTimeString()}] ◀ ${e.data.substring(0, 100)}`, 'received');
+        }
+      };
+
+      ws.onerror = (err) => {
+        msg(testNum, `[${new Date().toLocaleTimeString()}] ✗ Error`, 'error');
+      };
+
+      ws.onclose = () => {
+        msg(testNum, `[${new Date().toLocaleTimeString()}] Connection closed.`, messageCount > 0 ? 'received' : 'error');
+        if (messageCount > 0) {
+          msg(testNum, `SUMMARY: ${messageCount} total messages | ${tokenCount} new tokens | ${tradeCount} trades`, 'received');
+        }
+      };
+
+      timeout = setTimeout(() => {
+        if (ws) {
+          msg(testNum, `[${new Date().toLocaleTimeString()}] ⏱ Timeout (30s). ${messageCount} messages total.`, messageCount > 0 ? 'timeout' : 'error');
+          msg(testNum, `SUMMARY: ${messageCount} total messages | ${tokenCount} new tokens | ${tradeCount} trades`, messageCount > 0 ? 'received' : 'error');
+          ws.close();
+          ws = null;
+        }
+      }, 30000);
+    }
+
+    function stopTest() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+    }
+  </script>
+</body>
+</html>
