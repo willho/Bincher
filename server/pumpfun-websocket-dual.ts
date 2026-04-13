@@ -18,6 +18,7 @@
 
 import { EventEmitter } from "events";
 import { WebSocket as WSType } from "ws";
+import { startLoadBalancing, getLoadBalancer } from "./websocket-capacity-tracker";
 
 interface ProviderStats {
   name: string;
@@ -144,6 +145,18 @@ class ProviderConnection extends EventEmitter {
       this.messageTimestamps.push(now);
       if (this.messageTimestamps.length > 60) {
         this.messageTimestamps.shift(); // Keep last 60 seconds
+      }
+
+      // Record metric with load balancer
+      try {
+        const lb = getLoadBalancer();
+        if (this.provider.name === "PumpPortal") {
+          lb.ppMetrics.recordMessage(now);
+        } else if (this.provider.name === "PumpDev") {
+          lb.pdMetrics.recordMessage(now);
+        }
+      } catch (error) {
+        // Load balancer not ready yet
       }
 
       // Calculate messages per second
@@ -345,6 +358,21 @@ class DualProviderWebSocket extends EventEmitter {
     console.log(`[WebSocket] PumpPortal ready: ${ppReady ? "✓" : "✗"}`);
     console.log(`[WebSocket] PumpDev ready: ${pdReady ? "✓" : "✗"}`);
 
+    // Start load balancer for dynamic capacity management
+    startLoadBalancing();
+    const lb = getLoadBalancer();
+
+    // Wire up rebalancing callbacks
+    lb.onRebalance = (data) => {
+      console.log(`[LoadBalancer] Moving ${data.items.length} subs from ${data.fromProvider} to ${data.toProvider}`);
+      this.emit("rebalance", data);
+    };
+
+    lb.onRotation = (data) => {
+      console.log(`[LoadBalancer] Rotated out ${data.removed.length} subscriptions`);
+      this.emit("rotation", data);
+    };
+
     // Start batch processors for each provider
     this.startTokenBatching("pumpdev");
     this.startWhaleBatching("pumpportal");
@@ -353,7 +381,7 @@ class DualProviderWebSocket extends EventEmitter {
     // Monitor token lifecycle
     this.startTokenLifecycleMonitoring();
 
-    console.log("[WebSocket] Dual-provider streaming started");
+    console.log("[WebSocket] Dual-provider streaming started with load balancing");
   }
 
   async stop(): Promise<void> {
@@ -530,6 +558,14 @@ class DualProviderWebSocket extends EventEmitter {
     };
   }
 
+  /**
+   * Get load balancer status (overhead metrics, rebalancing info)
+   */
+  getLoadBalancerStatus() {
+    const lb = getLoadBalancer();
+    return lb.getStatus();
+  }
+
   getSubscriptions() {
     return {
       pumpportal: {
@@ -627,6 +663,11 @@ export function isWebSocketActive(): boolean {
 export function getWebSocketSubscriptions() {
   if (!instance) return null;
   return instance.getSubscriptions();
+}
+
+export function getLoadBalancerStatus() {
+  if (!instance) return null;
+  return instance.getLoadBalancerStatus();
 }
 
 export function addWhaleWallet(wallet: string, provider: "pumpportal" | "pumpdev" | "both" = "both"): void {

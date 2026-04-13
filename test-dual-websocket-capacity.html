@@ -300,6 +300,20 @@
         <span class="metric-value" id="pp-mps">0</span>
       </div>
 
+      <div class="metric">
+        <span class="metric-label">Latency</span>
+        <span class="metric-value" id="pp-latency">—</span>
+        <span class="metric-label">Overhead %</span>
+        <span class="metric-value" id="pp-overhead">—</span>
+      </div>
+
+      <div class="metric">
+        <span class="metric-label">Health Score</span>
+        <span class="metric-value" id="pp-health">—</span>
+        <span class="metric-label">Responsiveness</span>
+        <span class="metric-value" id="pp-resp">—</span>
+      </div>
+
       <div class="chart" id="pp-chart">
         <div class="chart-bars" id="pp-bars"></div>
         <div class="legend">
@@ -351,6 +365,20 @@
         <span class="metric-value" id="pd-mps">0</span>
       </div>
 
+      <div class="metric">
+        <span class="metric-label">Latency</span>
+        <span class="metric-value" id="pd-latency">—</span>
+        <span class="metric-label">Overhead %</span>
+        <span class="metric-value" id="pd-overhead">—</span>
+      </div>
+
+      <div class="metric">
+        <span class="metric-label">Health Score</span>
+        <span class="metric-value" id="pd-health">—</span>
+        <span class="metric-label">Responsiveness</span>
+        <span class="metric-value" id="pd-resp">—</span>
+      </div>
+
       <div class="chart" id="pd-chart">
         <div class="chart-bars" id="pd-bars"></div>
         <div class="legend">
@@ -400,6 +428,47 @@
 
       <div class="tokens-list" id="tokens-list">
         <div class="token-row" style="color: #888;">No tokens yet...</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+        <!-- Load Balancing Status -->
+        <div style="background: #0a0a0a; border: 1px solid #222; border-radius: 6px; padding: 12px;">
+          <div style="font-size: 11px; font-weight: 600; color: #fff; margin-bottom: 10px;">⚖️ Load Balancing</div>
+          <div class="metric" style="margin-bottom: 8px;">
+            <span class="metric-label">Balance</span>
+            <span class="metric-value" id="lb-balance">50% / 50%</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Last Rebalance</span>
+            <span class="metric-value" id="lb-last-event">—</span>
+          </div>
+          <div style="font-size: 9px; color: #888; margin-top: 8px; padding: 6px; background: #1a1a1a; border-radius: 4px;" id="lb-status">
+            Monitoring for rebalancing needs...
+          </div>
+        </div>
+
+        <!-- Rotation Status -->
+        <div style="background: #0a0a0a; border: 1px solid #222; border-radius: 6px; padding: 12px;">
+          <div style="font-size: 11px; font-weight: 600; color: #fff; margin-bottom: 10px;">🔄 Rotation Cycle</div>
+          <div class="metric" style="margin-bottom: 8px;">
+            <span class="metric-label">Rotated Out</span>
+            <span class="metric-value" id="rotation-count">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Last Rotation</span>
+            <span class="metric-value" id="rotation-last-time">—</span>
+          </div>
+          <div style="font-size: 9px; color: #888; margin-top: 8px; padding: 6px; background: #1a1a1a; border-radius: 4px;" id="rotation-status">
+            Next rotation in 60 seconds...
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 12px; background: #0a0a0a; border: 1px solid #222; border-radius: 6px; padding: 12px;">
+        <div style="font-size: 11px; font-weight: 600; color: #fff; margin-bottom: 10px;">📋 Recent Events</div>
+        <div id="lb-events-list" style="font-size: 9px; color: #888; max-height: 150px; overflow-y: auto;">
+          <div style="color: #666;">No events yet...</div>
+        </div>
       </div>
     </div>
   </div>
@@ -459,7 +528,12 @@
       try {
         const response = await fetch("/api/websocket/stats");
         if (response.ok) {
-          stats = await response.json();
+          const data = await response.json();
+          stats = {
+            ...data.stats,
+            loadBalancerStatus: data.loadBalancerStatus,
+          };
+
           history.push({
             pp: stats.pumpportal?.messages?.total || 0,
             pd: stats.pumpdev?.messages?.total || 0,
@@ -485,6 +559,7 @@
 
       const pp = stats.pumpportal;
       const pd = stats.pumpdev;
+      const lbStatus = stats.loadBalancerStatus;
 
       // PumpPortal
       const ppConnected = pp?.isConnected;
@@ -496,6 +571,16 @@
       document.getElementById("pp-new-tokens").textContent = pp?.messages?.newTokens || "0";
       document.getElementById("pp-whale-subs").textContent = pp?.subscriptions?.whaleCount || "0";
       document.getElementById("pp-mps").textContent = pp?.messagesPerSecond?.toFixed(1) || "0";
+
+      // Add overhead metrics for PumpPortal
+      if (lbStatus?.providers?.pumpportal) {
+        const ppMetrics = lbStatus.providers.pumpportal;
+        document.getElementById("pp-latency").textContent = `${ppMetrics.messageLatency}ms`;
+        document.getElementById("pp-overhead").className = `metric-value ${ppMetrics.overheadPercent > 80 ? "critical" : ppMetrics.overheadPercent > 50 ? "warning" : ""}`;
+        document.getElementById("pp-overhead").textContent = `${ppMetrics.overheadPercent}%`;
+        document.getElementById("pp-health").textContent = `${ppMetrics.healthScore}/100`;
+        document.getElementById("pp-resp").textContent = `${ppMetrics.responsiveness}%`;
+      }
 
       if (pp?.lastError) {
         const errorEl = document.getElementById("pp-error");
@@ -516,6 +601,16 @@
       document.getElementById("pd-token-subs").textContent = pd?.subscriptions?.tokenTradesCount || "0";
       document.getElementById("pd-mps").textContent = pd?.messagesPerSecond?.toFixed(1) || "0";
 
+      // Add overhead metrics for PumpDev
+      if (lbStatus?.providers?.pumpdev) {
+        const pdMetrics = lbStatus.providers.pumpdev;
+        document.getElementById("pd-latency").textContent = `${pdMetrics.messageLatency}ms`;
+        document.getElementById("pd-overhead").className = `metric-value ${pdMetrics.overheadPercent > 80 ? "critical" : pdMetrics.overheadPercent > 50 ? "warning" : ""}`;
+        document.getElementById("pd-overhead").textContent = `${pdMetrics.overheadPercent}%`;
+        document.getElementById("pd-health").textContent = `${pdMetrics.healthScore}/100`;
+        document.getElementById("pd-resp").textContent = `${pdMetrics.responsiveness}%`;
+      }
+
       if (pd?.lastError) {
         const errorEl = document.getElementById("pd-error");
         errorEl.textContent = "❌ " + pd.lastError;
@@ -530,6 +625,38 @@
       document.getElementById("combined-total-msgs").textContent = combined?.totalMessages || "0";
       document.getElementById("combined-trades").textContent = combined?.trades || "0";
       document.getElementById("combined-mps").textContent = combined?.messagesPerSecond?.toFixed(1) || "0";
+
+      // Load Balancing Status
+      if (lbStatus?.subscriptions) {
+        const ppCount = lbStatus.subscriptions.pumpportal || 0;
+        const pdCount = lbStatus.subscriptions.pumpdev || 0;
+        const total = ppCount + pdCount || 1;
+        const ppPct = ((ppCount / total) * 100).toFixed(0);
+        const pdPct = ((pdCount / total) * 100).toFixed(0);
+        document.getElementById("lb-balance").textContent = `${ppPct}% / ${pdPct}%`;
+
+        if (lbStatus.recentEvents?.length > 0) {
+          const lastEvent = lbStatus.recentEvents[lbStatus.recentEvents.length - 1];
+          const timeSince = Math.round((Date.now() - lastEvent.timestamp) / 1000);
+          document.getElementById("lb-last-event").textContent = `${timeSince}s ago`;
+          document.getElementById("lb-status").textContent = `${lastEvent.action}: ${lastEvent.reason}`;
+        }
+
+        // Events list
+        const eventsList = document.getElementById("lb-events-list");
+        const events = (lbStatus.recentEvents || []).slice(-10).reverse();
+        if (events.length === 0) {
+          eventsList.innerHTML = '<div style="color: #666;">No events yet...</div>';
+        } else {
+          eventsList.innerHTML = events.map(e => {
+            const ago = Math.round((Date.now() - e.timestamp) / 1000);
+            return `<div style="padding: 2px 0; border-bottom: 1px solid #222;">
+              <span style="color: #60a5fa;">${e.action}</span> - ${ago}s ago
+              <div style="color: #666; font-size: 8px; margin-top: 2px;">${e.reason}</div>
+            </div>`;
+          }).join("");
+        }
+      }
 
       // Update tokens list
       const subs = stats.subscriptions || {};

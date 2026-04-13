@@ -8472,16 +8472,24 @@ export async function registerRoutes(
     }
   });
 
-  // WebSocket monitoring status endpoint
+  // WebSocket monitoring status endpoint (with load balancer metrics)
   app.get("/api/websocket/stats", requireAuth, async (req, res) => {
     try {
-      const { getWebSocketStats, getWebSocketSubscriptions } = await import("./pumpfun-websocket-dual");
+      const { getWebSocketStats, getWebSocketSubscriptions, getLoadBalancerStatus } = await import("./pumpfun-websocket-dual");
       const stats = getWebSocketStats();
       const subscriptions = getWebSocketSubscriptions();
+
+      let loadBalancerStatus = null;
+      try {
+        loadBalancerStatus = getLoadBalancerStatus?.();
+      } catch (error) {
+        // Load balancer may not be initialized yet
+      }
 
       res.json({
         stats,
         subscriptions,
+        loadBalancerStatus,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
