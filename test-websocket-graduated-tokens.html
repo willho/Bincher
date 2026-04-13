@@ -49,12 +49,12 @@
   </style>
 </head>
 <body>
-  <h1>WebSocket Trade Test: Graduated Tokens</h1>
-  <p class="subtitle">Tests real-time trades on tokens that graduated from pump.fun to Raydium. Pulls trending tokens from DexScreener.</p>
+  <h1>WebSocket Trade Test: Pre-Graduation Tokens</h1>
+  <p class="subtitle">Tests real-time trades on trending pump.fun bonding curve tokens. Pulls trending tokens on their way to graduation.</p>
 
   <div class="card">
     <div class="buttons">
-      <button id="loadBtn" onclick="loadTrendingTokens()">Load Trending Tokens from DexScreener</button>
+      <button id="loadBtn" onclick="loadTrendingTokens()">Load Trending pump.fun Tokens</button>
       <button id="stopBtn" onclick="stopAll()" class="stop" disabled>Stop All</button>
     </div>
   </div>
@@ -77,7 +77,7 @@
         <div class="card">
           <h2>Step 1: Fetch Trending Tokens <span class="status loading" id="load-status">LOADING</span></h2>
           <div class="section">
-            <div class="detail" id="load-detail">Fetching from DexScreener...</div>
+            <div class="detail" id="load-detail">Fetching from pump.fun trending API...</div>
           </div>
         </div>
 
@@ -103,41 +103,42 @@
       `;
 
       try {
-        // Fetch trending tokens from DexScreener API
-        const response = await fetch('https://api.dexscreener.com/latest/dex/tokens?order=desc&orderBy=h24Trading');
+        // Fetch trending tokens from pump.fun API
+        const response = await fetch('https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=trending&order=desc');
         const data = await response.json();
 
-        if (!data.pairs || data.pairs.length === 0) {
+        if (!data || data.length === 0) {
           setEl('load-status', 'FAILED', 'status fail');
-          setEl('load-detail', 'No tokens found from DexScreener', 'detail error');
+          setEl('load-detail', 'No tokens found from pump.fun trending API', 'detail error');
           btn.disabled = false;
-          btn.textContent = 'Load Trending Tokens from DexScreener';
+          btn.textContent = 'Load Trending pump.fun Tokens';
           return;
         }
 
-        // Extract top 5 trending tokens with high volume
-        const tokens = data.pairs
-          .filter(p => p.baseToken && p.chainId === 'solana' && p.volume?.h24 > 100000)
+        // Extract top 5 trending tokens on bonding curve (high reply count = active)
+        const tokens = data
+          .filter(t => t.usd_market_cap > 10000 && t.reply_count > 10) // Filter for active tokens
           .slice(0, 5)
-          .map(p => ({
-            mint: p.baseToken.address,
-            name: p.baseToken.name,
-            symbol: p.baseToken.symbol,
-            priceUsd: parseFloat(p.priceUsd),
-            volumeH24: p.volume?.h24 || 0,
-            priceChange: p.priceChange?.h24 || 0,
+          .map(t => ({
+            mint: t.mint,
+            name: t.name,
+            symbol: t.symbol,
+            marketCap: t.usd_market_cap,
+            bondingProgress: t.bonding_curve_progress || 0,
+            replyCount: t.reply_count || 0,
+            kingOfTheHill: t.king_of_the_hill || false,
           }));
 
         if (tokens.length === 0) {
           setEl('load-status', 'FAILED', 'status fail');
-          setEl('load-detail', 'No Solana tokens with volume > $100k found', 'detail error');
+          setEl('load-detail', 'No active trending tokens found (need >$10k mcap and >10 replies)', 'detail error');
           btn.disabled = false;
-          btn.textContent = 'Load Trending Tokens from DexScreener';
+          btn.textContent = 'Load Trending pump.fun Tokens';
           return;
         }
 
         setEl('load-status', 'SUCCESS', 'status pass');
-        setEl('load-detail', `Loaded ${tokens.length} trending Solana tokens from DexScreener (24h volume > $100k)`, 'detail success');
+        setEl('load-detail', `Loaded ${tokens.length} trending pump.fun tokens (bonding curve phase)`, 'detail success');
 
         // Display tokens and allow selection
         const tokensCard = document.getElementById('tokens-card');
@@ -150,7 +151,8 @@
             <div class="symbol">${t.symbol}</div>
             <div class="mint">${t.mint.substring(0, 20)}...</div>
             <div style="font-size: 11px; color: #888; margin-top: 4px;">
-              $${t.priceUsd.toFixed(6)} | Vol: $${(t.volumeH24/1000).toFixed(0)}k
+              MC: $${(t.marketCap/1000).toFixed(0)}k | ${t.bondingProgress.toFixed(0)}% → grad
+              ${t.kingOfTheHill ? ' 👑' : ''}
             </div>
             <div class="action">
               <button onclick="subscribeToToken('${t.mint}', '${t.name}', '${t.symbol}')" style="padding: 6px 12px; font-size: 12px;">Subscribe</button>
