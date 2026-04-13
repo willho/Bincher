@@ -158,6 +158,7 @@
         <button onclick="setTestMode('both')">Both (Same Conn)</button>
         <button onclick="setTestMode('whales')">🐳 Whales</button>
         <button onclick="setTestMode('graduated')">📈 Graduated Token</button>
+        <button onclick="setTestMode('wallets1k')">🚀 1K Wallets (Capacity)</button>
         <button onclick="setTestMode('stress')">💪 Stress</button>
       </div>
       <div style="padding: 8px; background: #0a0a0a; border-radius: 4px; font-size: 9px; color: #888; margin-top: 8px;">
@@ -303,6 +304,23 @@
         </div>
       </div>
 
+      <!-- Wallet Capacity Test Card -->
+      <div class="card full-width" id="wallet-capacity-card" style="display: none;">
+        <h2>🚀 1K Wallet Capacity Test Results</h2>
+        <div class="metric">
+          <span class="metric-label">Wallet Subscriptions</span>
+          <span class="metric-value good" id="wallet-subscription-status">0/1000 wallets receiving data</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Message Latency (PumpPortal)</span>
+          <span class="metric-value" id="pp-latency">—</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Subscription Response Time (PumpDev)</span>
+          <span class="metric-value" id="pd-latency">—</span>
+        </div>
+      </div>
+
       <!-- Summary Card -->
       <div class="card full-width">
         <h2>📊 Test Summary</h2>
@@ -330,7 +348,9 @@
     // State
     let testActive = false;
     let testStartTime = 0;
-    let testMode = 'both'; // 'newTokensOnly', 'tradesOnly', 'both', 'whales', 'stress'
+    let testMode = 'both'; // 'newTokensOnly', 'tradesOnly', 'both', 'whales', 'stress', 'wallets1k'
+    let targetWalletCount = 0; // For high-volume wallet tests
+    let subscribedWallets = new Set();
     const providers = {
       pumpportal: { url: 'wss://pumpportal.fun/api/data', ws: null, stats: { messages: 0, newTokens: 0, startTime: 0, errors: 0, subscriptionMsgs: 0 } },
       pumpdev: { url: 'wss://pumpdev.io/ws', ws: null, stats: { messages: 0, trades: 0, startTime: 0, errors: 0, subscriptionMsgs: 0 } }
@@ -346,7 +366,11 @@
       graduatedToken: {
         pumpportal: { trades: 0, startTime: 0 },
         pumpdev: { trades: 0, startTime: 0 }
-      }
+      },
+      // Overhead tracking for capacity testing
+      lastMessageTime: 0,
+      messageLatencies: [],
+      subscriptionLags: new Map() // wallet -> { subscribed: time, firstMessage: time }
     };
 
     // Helpers
@@ -372,6 +396,46 @@
       logEl.appendChild(entry);
       logEl.scrollTop = logEl.scrollHeight;
       while (logEl.children.length > 50) logEl.removeChild(logEl.firstChild);
+    }
+
+    // Generate synthetic wallet addresses for capacity testing
+    function generateSyntheticWallets(count) {
+      const wallets = new Set();
+      while (wallets.size < count) {
+        // Generate random Solana-like addresses (base58, 44 chars)
+        const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+        let addr = '';
+        for (let i = 0; i < 44; i++) {
+          addr += chars[Math.floor(Math.random() * chars.length)];
+        }
+        wallets.add(addr);
+      }
+      return Array.from(wallets);
+    }
+
+    // Subscribe to wallets in batches (respecting 5000 address limit per message)
+    function subscribeToWalletBatch(provider, wallets, batchSize = 100) {
+      const abbr = getAbbr(provider);
+      let subscribed = 0;
+
+      for (let i = 0; i < wallets.length; i += batchSize) {
+        const batch = wallets.slice(i, Math.min(i + batchSize, wallets.length));
+        const subscriptionTime = Date.now();
+
+        batch.forEach(wallet => {
+          metrics.subscriptionLags.set(wallet, { subscribed: subscriptionTime, firstMessage: null });
+          subscribedWallets.add(wallet);
+        });
+
+        setTimeout(() => {
+          sendWhenReady(provider, JSON.stringify({
+            method: 'subscribeAccountTrade',
+            keys: batch
+          }));
+          subscribed += batch.length;
+          logWhale(`Subscribed to ${subscribed}/${wallets.length} wallets on ${abbr}`, 'success');
+        }, i * 50); // Stagger batch submissions to avoid overwhelming
+      }
     }
 
     function updateStatus(provider, status) {
@@ -448,6 +512,23 @@
           try {
             const msg = JSON.parse(event.data);
             config.stats.messages++;
+
+            // Track message latency for overhead metrics
+            const now = Date.now();
+            if (metrics.lastMessageTime > 0) {
+              const latency = now - metrics.lastMessageTime;
+              metrics.messageLatencies.push(latency);
+              if (metrics.messageLatencies.length > 1000) metrics.messageLatencies.shift();
+            }
+            metrics.lastMessageTime = now;
+
+            // Track subscription lag if this is from a subscribed wallet
+            if (testMode === 'wallets1k' && msg.traderPublicKey && metrics.subscriptionLags.has(msg.traderPublicKey)) {
+              const walletLag = metrics.subscriptionLags.get(msg.traderPublicKey);
+              if (!walletLag.firstMessage) {
+                walletLag.firstMessage = now;
+              }
+            }
 
             // Track graduated token trades (for graduated test mode)
             const graduatedMint = '71utbKBwCwL22NsJZzeuR23K3BTZaTmzj3X7kzTzpump';
@@ -660,6 +741,40 @@
       const totalSubs = metrics.realTokens.size + metrics.activeSenders.size;
       document.getElementById('total-subscriptions').textContent = totalSubs;
 
+      // 1k wallet test metrics
+      if (testMode === 'wallets1k') {
+        document.getElementById('wallet-capacity-card').style.display = 'block';
+
+        // Message latency metrics
+        if (metrics.messageLatencies.length > 0) {
+          const sorted = [...metrics.messageLatencies].sort((a, b) => a - b);
+          const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+          const p95 = sorted[Math.floor(sorted.length * 0.95)];
+          const p99 = sorted[Math.floor(sorted.length * 0.99)];
+          const ppLatency = document.getElementById('pp-latency');
+          if (ppLatency) ppLatency.textContent = avg.toFixed(1) + 'ms (p95: ' + (p95 || 0).toFixed(1) + 'ms)';
+        }
+
+        // Subscription lag metrics
+        const lagsWithData = Array.from(metrics.subscriptionLags.values())
+          .filter(lag => lag.firstMessage !== null)
+          .map(lag => lag.firstMessage - lag.subscribed);
+
+        if (lagsWithData.length > 0) {
+          const avgLag = lagsWithData.reduce((a, b) => a + b, 0) / lagsWithData.length;
+          const pdLatency = document.getElementById('pd-latency');
+          if (pdLatency) pdLatency.textContent = avgLag.toFixed(0) + 'ms avg response time';
+        }
+
+        // Wallet subscription status
+        const walletsWithData = Array.from(metrics.subscriptionLags.values())
+          .filter(lag => lag.firstMessage !== null).length;
+        const walletStatus = document.getElementById('wallet-subscription-status');
+        if (walletStatus) walletStatus.textContent = walletsWithData + '/' + targetWalletCount + ' wallets receiving data';
+      } else {
+        document.getElementById('wallet-capacity-card').style.display = 'none';
+      }
+
       // Graduated token comparison (if in graduated mode)
       if (testMode === 'graduated') {
         document.getElementById('graduated-comparison').style.display = 'block';
@@ -712,6 +827,10 @@
       metrics.tradeLatencies = [];
       metrics.activeConnections = 0;
       metrics.subscriptionHistory = [];
+      metrics.messageLatencies = [];
+      metrics.lastMessageTime = 0;
+      metrics.subscriptionLags.clear();
+      subscribedWallets.clear();
       document.getElementById('stop-btn').disabled = false;
 
       log('pp', `Starting test mode: ${testMode}`, 'info');
@@ -719,8 +838,25 @@
       // Graduated token mint
       const graduatedTokenMint = '71utbKBwCwL22NsJZzeuR23K3BTZaTmzj3X7kzTzpump';
 
-      // Fetch tokens for all modes except newTokensOnly
-      if (testMode !== 'newTokensOnly' && testMode !== 'graduated') {
+      // Handle 1k wallet test
+      if (testMode === 'wallets1k') {
+        connect('pumpportal');
+        connect('pumpdev');
+
+        setTimeout(() => {
+          targetWalletCount = 1000;
+          const wallets = generateSyntheticWallets(1000);
+          logWhale(`Generated 1000 synthetic wallets for capacity testing`, 'success');
+
+          // Subscribe on both providers
+          subscribeToWalletBatch('pumpportal', wallets, 100);
+
+          setTimeout(() => {
+            subscribeToWalletBatch('pumpdev', wallets, 100);
+          }, 2000);
+        }, 1500);
+      } else if (testMode !== 'newTokensOnly' && testMode !== 'graduated') {
+        // Fetch tokens for all other modes
         fetchRealTokens().then(() => {
           subscribeToRealTokens();
         });
@@ -741,8 +877,8 @@
           sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: [graduatedTokenMint] }));
           log('pd', `Subscribed to graduated token (PumpDev)`, 'info');
         }, 1500);
-      } else {
-        // both, whales, stress - connect to both
+      } else if (testMode !== 'wallets1k') {
+        // both, whales, stress - connect to both (but not wallets1k which handles its own connect)
         connect('pumpportal');
         connect('pumpdev');
       }
