@@ -231,6 +231,39 @@
         </div>
       </div>
 
+      <!-- Graduated Token Comparison Card -->
+      <div class="card full-width" id="graduated-comparison" style="display: none;">
+        <h2>📈 Graduated Token Trades Comparison</h2>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <div style="font-size: 11px; color: #888; margin-bottom: 8px; font-weight: 600;">🎯 PumpPortal</div>
+            <div class="metric">
+              <span class="metric-label">Trades</span>
+              <span class="metric-value good" id="grad-pp-trades">0</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Throughput</span>
+              <span class="metric-value" id="grad-pp-throughput">0 trades/s</span>
+            </div>
+          </div>
+          <div>
+            <div style="font-size: 11px; color: #888; margin-bottom: 8px; font-weight: 600;">🔧 PumpDev</div>
+            <div class="metric">
+              <span class="metric-label">Trades</span>
+              <span class="metric-value good" id="grad-pd-trades">0</span>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Throughput</span>
+              <span class="metric-value" id="grad-pd-throughput">0 trades/s</span>
+            </div>
+          </div>
+        </div>
+        <div class="metric" style="margin-top: 12px;">
+          <span class="metric-label">Winner</span>
+          <span class="metric-value good" id="grad-winner">—</span>
+        </div>
+      </div>
+
       <!-- Whale Discovery Card -->
       <div class="card full-width">
         <h2>🐳 Auto-Discovered Active Traders</h2>
@@ -309,7 +342,11 @@
       activeSenders: new Map(), // sender -> { count, lastSeen }
       tradeLatencies: [],
       activeConnections: 0,
-      subscriptionHistory: [] // Track subscription messages per second
+      subscriptionHistory: [], // Track subscription messages per second
+      graduatedToken: {
+        pumpportal: { trades: 0, startTime: 0 },
+        pumpdev: { trades: 0, startTime: 0 }
+      }
     };
 
     // Helpers
@@ -412,9 +449,20 @@
             const msg = JSON.parse(event.data);
             config.stats.messages++;
 
+            // Track graduated token trades (for graduated test mode)
+            const graduatedMint = '71utbKBwCwL22NsJZzeuR23K3BTZaTmzj3X7kzTzpump';
+            if (testMode === 'graduated' && msg.mint === graduatedMint) {
+              if (msg.txType === 'trade' || (msg.mint && msg.mint === graduatedMint)) {
+                metrics.graduatedToken[provider].trades++;
+                if (metrics.graduatedToken[provider].startTime === 0) {
+                  metrics.graduatedToken[provider].startTime = Date.now();
+                }
+              }
+            }
+
             if (provider === 'pumpportal') {
               // Check if it's a new token (has mint field = new token discovery)
-              if (msg.mint) {
+              if (msg.mint && !msg.txType) {
                 // Only count as new token if we haven't seen it before
                 if (!metrics.discoveredTokens.has(msg.mint)) {
                   config.stats.newTokens++;
@@ -425,7 +473,9 @@
                   });
 
                   // SWAP FLOW: Auto-subscribe to trades for this token on PumpDev
-                  sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
+                  if (testMode !== 'graduated') {
+                    sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
+                  }
                 }
               }
             } else if (provider === 'pumpdev') {
@@ -609,6 +659,32 @@
       // Total current subscriptions (tokens + wallets)
       const totalSubs = metrics.realTokens.size + metrics.activeSenders.size;
       document.getElementById('total-subscriptions').textContent = totalSubs;
+
+      // Graduated token comparison (if in graduated mode)
+      if (testMode === 'graduated') {
+        document.getElementById('graduated-comparison').style.display = 'block';
+
+        const ppTrades = metrics.graduatedToken.pumpportal.trades;
+        const pdTrades = metrics.graduatedToken.pumpdev.trades;
+
+        document.getElementById('grad-pp-trades').textContent = ppTrades;
+        document.getElementById('grad-pd-trades').textContent = pdTrades;
+
+        const ppTps = metrics.graduatedToken.pumpportal.startTime > 0
+          ? (ppTrades / ((Date.now() - metrics.graduatedToken.pumpportal.startTime) / 1000)).toFixed(2)
+          : 0;
+        const pdTps = metrics.graduatedToken.pumpdev.startTime > 0
+          ? (pdTrades / ((Date.now() - metrics.graduatedToken.pumpdev.startTime) / 1000)).toFixed(2)
+          : 0;
+
+        document.getElementById('grad-pp-throughput').textContent = ppTps + ' trades/s';
+        document.getElementById('grad-pd-throughput').textContent = pdTps + ' trades/s';
+
+        const winner = pdTrades > ppTrades ? '🔧 PumpDev' : ppTrades > pdTrades ? '🎯 PumpPortal' : 'Tied';
+        document.getElementById('grad-winner').textContent = winner;
+      } else {
+        document.getElementById('graduated-comparison').style.display = 'none';
+      }
 
       // Periodically subscribe to top wallets
       if (testTime % 5000 < 1000) {
