@@ -584,17 +584,44 @@
       log('pp', 'Testing new token discovery', 'info');
     }
 
+    function sendWhenReady(provider, message) {
+      const config = providers[provider];
+      const abbr = provider.substring(0, 2);
+
+      if (!config.ws || config.ws.readyState !== WebSocket.OPEN) {
+        // Wait for connection to open
+        let attempts = 0;
+        const retry = setInterval(() => {
+          attempts++;
+          if (config.ws && config.ws.readyState === WebSocket.OPEN) {
+            clearInterval(retry);
+            try {
+              config.ws.send(message);
+            } catch (e) {
+              log(abbr, `Send failed after ready: ${e.message}`, 'error');
+            }
+          } else if (attempts > 50) {
+            // 5 seconds of retrying
+            clearInterval(retry);
+            log(abbr, `Connection timeout, giving up`, 'error');
+          }
+        }, 100);
+      } else {
+        try {
+          config.ws.send(message);
+        } catch (e) {
+          log(provider, `Send failed: ${e.message}`, 'error');
+        }
+      }
+    }
+
     function testTokenTrades(count) {
       if (!testActive) startStandaloneTest();
       const mints = Array(count).fill(0).map(() =>
         Array(44).fill(0).map(() => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 62)]).join('')
       );
-      try {
-        providers.pumpdev.ws?.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: mints }));
-        log('pd', `Subscribed to ${count} trades`, 'info');
-      } catch (e) {
-        log('pd', `Subscribe failed: ${e.message}`, 'error');
-      }
+      sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: mints }));
+      log('pd', `Subscribing to ${count} trades...`, 'info');
     }
 
     function testWhaleMonitoring(count) {
@@ -602,12 +629,8 @@
       const wallets = Array(count).fill(0).map(() =>
         Array(44).fill(0).map(() => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 62)]).join('')
       );
-      try {
-        providers.pumpportal.ws?.send(JSON.stringify({ method: 'subscribeAccountTrade', keys: wallets }));
-        log('pp', `Subscribed to ${count} whale wallets`, 'info');
-      } catch (e) {
-        log('pp', `Whale subscribe failed: ${e.message}`, 'error');
-      }
+      sendWhenReady('pumpportal', JSON.stringify({ method: 'subscribeAccountTrade', keys: wallets }));
+      log('pp', `Subscribing to ${count} whale wallets...`, 'info');
     }
 
     async function stressTest() {
