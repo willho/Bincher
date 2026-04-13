@@ -221,8 +221,9 @@
 
       pdWs.onopen = () => {
         setBadge('pd', 'streaming', 'STREAMING');
-        setStatus('pd', 'Connected! Waiting for auto-stream events...', 'success');
-        addMsg('pd', '↳ PumpDev auto-streams all events (no subscription needed)', 'raw');
+        setStatus('pd', 'Connected! Subscribing to new tokens...', 'success');
+        pdWs.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        addMsg('pd', '↳ Subscribed to new token events', 'raw');
       };
 
       pdWs.onmessage = (e) => {
@@ -310,12 +311,12 @@
 
       if (debugWs) debugWs.close();
       addMsg('debug', '>>> Starting PumpDev debug...', 'raw');
-      addMsg('debug', '(Note: PumpDev auto-streams all events, no subscription needed)', 'raw');
 
       debugWs = new WebSocket('wss://pumpdev.io/ws');
 
       debugWs.onopen = () => {
-        addMsg('debug', '✓ Connected. Listening to auto-stream...', 'raw');
+        addMsg('debug', '✓ Connected. Subscribing to new tokens...', 'raw');
+        debugWs.send(JSON.stringify({ method: 'subscribeNewToken' }));
       };
 
       debugWs.onmessage = (e) => {
