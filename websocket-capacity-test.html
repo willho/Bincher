@@ -157,10 +157,11 @@
         <button onclick="setTestMode('tradesOnly')">Trades Only</button>
         <button onclick="setTestMode('both')">Both (Same Conn)</button>
         <button onclick="setTestMode('whales')">🐳 Whales</button>
+        <button onclick="setTestMode('graduated')">📈 Graduated Token</button>
         <button onclick="setTestMode('stress')">💪 Stress</button>
       </div>
       <div style="padding: 8px; background: #0a0a0a; border-radius: 4px; font-size: 9px; color: #888; margin-top: 8px;">
-        <strong style="color: #e5e5e5;">Test Goal:</strong> Can subscribeNewToken + subscribeTokenTrade coexist on same connection?
+        <strong style="color: #e5e5e5;">Graduated Token:</strong> 71utbKBwCwL22NsJZzeuR23K3BTZaTmzj3X7kzTzpump
       </div>
     </div>
 
@@ -639,8 +640,11 @@
 
       log('pp', `Starting test mode: ${testMode}`, 'info');
 
+      // Graduated token mint
+      const graduatedTokenMint = '71utbKBwCwL22NsJZzeuR23K3BTZaTmzj3X7kzTzpump';
+
       // Fetch tokens for all modes except newTokensOnly
-      if (testMode !== 'newTokensOnly') {
+      if (testMode !== 'newTokensOnly' && testMode !== 'graduated') {
         fetchRealTokens().then(() => {
           subscribeToRealTokens();
         });
@@ -651,6 +655,16 @@
         connect('pumpportal');
       } else if (testMode === 'tradesOnly') {
         connect('pumpdev');
+      } else if (testMode === 'graduated') {
+        // Subscribe to specific graduated token on both providers
+        connect('pumpportal');
+        connect('pumpdev');
+        setTimeout(() => {
+          sendWhenReady('pumpportal', JSON.stringify({ method: 'subscribeTokenTrade', keys: [graduatedTokenMint] }));
+          log('pp', `Subscribed to graduated token (PumpPortal)`, 'info');
+          sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: [graduatedTokenMint] }));
+          log('pd', `Subscribed to graduated token (PumpDev)`, 'info');
+        }, 1500);
       } else {
         // both, whales, stress - connect to both
         connect('pumpportal');
