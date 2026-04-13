@@ -849,21 +849,32 @@
 
     // Test control
     function startTest() {
-      testActive = true;
-      testStartTime = Date.now();
-      metrics.realTokens.clear();
-      metrics.discoveredTokens.clear();
-      metrics.activeSenders.clear();
-      metrics.tradeLatencies = [];
-      metrics.activeConnections = 0;
-      metrics.subscriptionHistory = [];
-      metrics.messageLatencies = [];
-      metrics.lastMessageTime = 0;
-      metrics.subscriptionLags.clear();
-      subscribedWallets.clear();
-      document.getElementById('stop-btn').disabled = false;
+      // Close any existing connections first
+      if (providers.pumpportal.ws) providers.pumpportal.ws.close();
+      if (providers.pumpdev.ws) providers.pumpdev.ws.close();
 
-      log('pp', `Starting test mode: ${testMode}`, 'info');
+      // Wait for connections to fully close before starting
+      setTimeout(() => {
+        testActive = true;
+        testStartTime = Date.now();
+        metrics.realTokens.clear();
+        metrics.discoveredTokens.clear();
+        metrics.activeSenders.clear();
+        metrics.tradeLatencies = [];
+        metrics.activeConnections = 0;
+        metrics.subscriptionHistory = [];
+        metrics.messageLatencies = [];
+        metrics.lastMessageTime = 0;
+        metrics.subscriptionLags.clear();
+        subscribedWallets.clear();
+        document.getElementById('stop-btn').disabled = false;
+
+        log('pp', `Starting test mode: ${testMode}`, 'info');
+        continueStartTest();
+      }, 300);
+    }
+
+    function continueStartTest() {
 
       // Graduated token mint
       const graduatedTokenMint = '71utbKBwCwL22NsJZzeuR23K3BTZaTmzj3X7kzTzpump';
@@ -914,8 +925,27 @@
     function stopTest() {
       testActive = false;
       document.getElementById('stop-btn').disabled = true;
-      if (providers.pumpportal.ws) providers.pumpportal.ws.close();
-      if (providers.pumpdev.ws) providers.pumpdev.ws.close();
+
+      // Explicitly unsubscribe from all subscriptions before closing
+      for (const [provider, config] of Object.entries(providers)) {
+        if (config.ws && config.ws.readyState === WebSocket.OPEN) {
+          try {
+            // Unsubscribe from all subscription types
+            config.ws.send(JSON.stringify({ method: 'unsubscribeNewToken' }));
+            config.ws.send(JSON.stringify({ method: 'unsubscribeTokenTrade' }));
+            config.ws.send(JSON.stringify({ method: 'unsubscribeAccountTrade' }));
+            log(getAbbr(provider), 'Sent unsubscribe messages', 'info');
+          } catch (e) {
+            // Connection might already be closing
+          }
+        }
+      }
+
+      // Give unsubscribes time to process before closing
+      setTimeout(() => {
+        if (providers.pumpportal.ws) providers.pumpportal.ws.close();
+        if (providers.pumpdev.ws) providers.pumpdev.ws.close();
+      }, 500);
     }
 
     function clearAllLogs() {
