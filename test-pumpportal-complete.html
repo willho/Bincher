@@ -174,7 +174,7 @@
       showEl('pregad-load-status');
 
       try {
-        const res = await fetch('https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=trending&order=desc');
+        const res = await fetch('/api/pumpfun/trending');
         const data = await res.json();
 
         const tokens = data

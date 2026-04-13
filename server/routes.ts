@@ -8472,12 +8472,23 @@ export async function registerRoutes(
     }
   });
 
+  // Pump.fun API proxy for WebSocket tests (CORS-friendly)
+  app.get("/api/pumpfun/trending", async (req, res) => {
+    try {
+      const response = await fetch("https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=trending&order=desc");
+      const data = await response.json();
+      res.json(data);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Restore monitoring on startup if it was active
   restoreMonitoring();
-  
+
   // Start the trade processor to handle pending buys
   startTradeProcessor();
-  
+
   // Start the price monitor to check holdings and trigger reclaims
   startPriceMonitor();
 
