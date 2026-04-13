@@ -221,13 +221,33 @@
 
       pdWs.onopen = () => {
         setBadge('pd', 'streaming', 'STREAMING');
-        setStatus('pd', 'Connected! Auto-streaming events...', 'success');
+        setStatus('pd', 'Connected! Subscribing to events...', 'success');
+
+        // Subscribe to new tokens
+        pdWs.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        addMsg('pd', '↳ Subscribed to new tokens', 'raw');
+
+        // Also subscribe to sample token trades
+        setTimeout(() => {
+          pdWs.send(JSON.stringify({
+            method: 'subscribeTokenTrade',
+            keys: ['DezXAZ8z7PnrnRJjgjG7P5KaufXo7QQXqVmWY8MyPrCR']
+          }));
+          addMsg('pd', '↳ Subscribed to sample token trades', 'raw');
+        }, 500);
       };
 
       pdWs.onmessage = (e) => {
         pdStats.msgs++;
         try {
           const d = JSON.parse(e.data);
+
+          // Skip connection confirmation message
+          if (d.type === 'connected') {
+            addMsg('pd', '✓ Connected to PumpDev', 'raw');
+            return;
+          }
+
           let type = 'raw', msg = '';
 
           const eventType = d.type || d.txType;
@@ -239,7 +259,8 @@
           } else if (eventType === 'buy' || eventType === 'sell') {
             pdStats.trades++;
             type = eventType === 'buy' ? 'trade buy' : 'trade sell';
-            msg = `${eventType === 'buy' ? '📈' : '📉'} ${eventType.toUpperCase()}`;
+            const sol = d.solAmount ? (d.solAmount / 1e9).toFixed(3) : '?';
+            msg = `${eventType === 'buy' ? '📈' : '📉'} ${eventType.toUpperCase()}: ${sol}Ⓢ`;
           } else {
             msg = JSON.stringify(d).substring(0, 150);
           }
@@ -305,7 +326,8 @@
       debugWs = new WebSocket('wss://pumpdev.io/ws');
 
       debugWs.onopen = () => {
-        addMsg('debug', '✓ Connected. Auto-streaming...', 'raw');
+        addMsg('debug', '✓ Connected. Subscribing...', 'raw');
+        debugWs.send(JSON.stringify({ method: 'subscribeNewToken' }));
       };
 
       debugWs.onmessage = (e) => {
