@@ -304,11 +304,13 @@
       document.getElementById(`${abbr}-status`).textContent = status.toUpperCase();
     }
 
-    // Fetch real tokens
+    // Fetch real tokens with CORS proxy
     async function fetchRealTokens() {
+      const corsProxy = 'https://corsproxy.io/?';
+
       try {
         log('pp', 'Fetching trending tokens from pump.fun...', 'info');
-        const res = await fetch('https://frontend-api-v3.pump.fun/coins/trending');
+        const res = await fetch(corsProxy + 'https://frontend-api-v3.pump.fun/coins/trending');
         if (res.ok) {
           const coins = await res.json();
           coins.slice(0, 100).forEach(coin => metrics.realTokens.add(coin.mint));
@@ -320,7 +322,7 @@
 
       try {
         log('pd', 'Fetching tokens from DexScreener...', 'info');
-        const res = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+        const res = await fetch(corsProxy + 'https://api.dexscreener.com/token-boosts/top/v1');
         if (res.ok) {
           const data = await res.json();
           if (data.boosts) {
@@ -334,7 +336,7 @@
         log('pd', `DexScreener fetch failed: ${e.message}`, 'warn');
       }
 
-      log('pp', `Total real tokens collected: ${metrics.realTokens.size}`, 'success');
+      log('pp', `Relying on newToken stream for live discovery...`, 'info');
     }
 
     // Connect WebSocket
@@ -363,15 +365,19 @@
             config.stats.messages++;
 
             if (provider === 'pumpportal') {
-              // Check if it's a new token
-              if (msg.mint && !msg.txType) {
-                config.stats.newTokens++;
+              // Check if it's a new token (has mint field = new token discovery)
+              if (msg.mint) {
+                // Only count as new token if we haven't seen it before
                 if (!metrics.discoveredTokens.has(msg.mint)) {
+                  config.stats.newTokens++;
                   metrics.discoveredTokens.set(msg.mint, {
                     discoveredAt: Date.now(),
                     receivedTrade: false,
                     tradeLatency: null
                   });
+
+                  // SWAP FLOW: Auto-subscribe to trades for this token on PumpDev
+                  sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
                 }
               }
             } else if (provider === 'pumpdev') {
