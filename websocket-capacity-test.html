@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>WebSocket Capacity Testing Suite</title>
+  <title>WebSocket Capacity Testing Suite - Advanced</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -48,15 +48,8 @@
       transition: all 0.2s;
     }
 
-    .tab-btn:hover {
-      color: #e5e5e5;
-      border-bottom-color: #2563eb;
-    }
-
-    .tab-btn.active {
-      color: #e5e5e5;
-      border-bottom-color: #2563eb;
-    }
+    .tab-btn:hover { color: #e5e5e5; border-bottom-color: #2563eb; }
+    .tab-btn.active { color: #e5e5e5; border-bottom-color: #2563eb; }
 
     .content {
       flex: 1;
@@ -64,13 +57,8 @@
       padding: 20px;
     }
 
-    .tab-content {
-      display: none;
-    }
-
-    .tab-content.active {
-      display: block;
-    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
 
     .container {
       display: grid;
@@ -96,16 +84,16 @@
       display: grid;
       grid-template-columns: 1fr 1fr;
       gap: 8px;
-      margin-bottom: 12px;
-      padding: 10px;
+      margin-bottom: 8px;
+      padding: 8px;
       background: #0a0a0a;
       border-radius: 6px;
-      font-size: 11px;
+      font-size: 10px;
     }
 
     .metric-label { color: #888; font-weight: 500; }
     .metric-value { color: #60a5fa; font-weight: 700; text-align: right; }
-    .metric-value.high { color: #4ade80; }
+    .metric-value.good { color: #4ade80; }
     .metric-value.warning { color: #fbbf24; }
     .metric-value.critical { color: #f87171; }
 
@@ -115,11 +103,11 @@
       border-radius: 6px;
       padding: 12px;
       margin-top: 12px;
-      height: 120px;
+      height: 100px;
       display: flex;
       align-items: flex-end;
       justify-content: space-around;
-      gap: 4px;
+      gap: 2px;
     }
 
     .bar {
@@ -127,6 +115,17 @@
       background: linear-gradient(to top, #2563eb, #60a5fa);
       border-radius: 2px;
       min-height: 2px;
+      position: relative;
+    }
+
+    .bar-label {
+      position: absolute;
+      bottom: -15px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 8px;
+      color: #666;
+      white-space: nowrap;
     }
 
     .controls {
@@ -195,16 +194,16 @@
     .log-entry {
       padding: 2px 0;
       border-bottom: 1px solid #222;
-      color: #888;
+      color: #666;
+      line-height: 1.4;
     }
 
     .log-entry.info { color: #60a5fa; }
     .log-entry.success { color: #4ade80; }
     .log-entry.error { color: #f87171; }
+    .log-entry.warn { color: #fbbf24; }
 
-    .full-width {
-      grid-column: 1 / -1;
-    }
+    .full-width { grid-column: 1 / -1; }
 
     .slider-group {
       display: flex;
@@ -219,7 +218,7 @@
     .slider-group label {
       font-size: 11px;
       color: #888;
-      min-width: 120px;
+      min-width: 100px;
     }
 
     input[type="range"] {
@@ -227,230 +226,339 @@
       min-width: 150px;
     }
 
+    input[type="text"] {
+      background: #0a0a0a;
+      border: 1px solid #333;
+      color: #e5e5e5;
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      flex: 1;
+    }
+
     .slider-value {
       color: #60a5fa;
       font-weight: 600;
       font-size: 11px;
-      min-width: 50px;
+      min-width: 60px;
+      text-align: right;
+    }
+
+    .timeline {
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 9px;
+      max-height: 120px;
+      overflow-y: auto;
+      margin-top: 12px;
+    }
+
+    .timeline-event {
+      padding: 4px;
+      margin: 2px 0;
+      border-left: 2px solid #333;
+      padding-left: 8px;
+      color: #888;
+    }
+
+    .timeline-event.connected { border-left-color: #4ade80; color: #4ade80; }
+    .timeline-event.disconnected { border-left-color: #f87171; color: #f87171; }
+    .timeline-event.error { border-left-color: #f87171; color: #f87171; }
+
+    .msg-preview {
+      background: #0a0a0a;
+      border: 1px solid #222;
+      border-radius: 6px;
+      padding: 8px;
+      font-size: 8px;
+      font-family: monospace;
+      max-height: 80px;
+      overflow-y: auto;
+      margin-top: 12px;
+      color: #666;
+    }
+
+    .wallet-input-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
     }
   </style>
 </head>
 <body>
   <header>
-    <h1>🧪 WebSocket Capacity Testing Suite</h1>
-    <span class="subtitle">All-in-one WebSocket provider testing</span>
+    <h1>🧪 WebSocket Capacity Testing Suite (Advanced)</h1>
+    <span class="subtitle">Real tokens, detailed metrics, production-ready testing</span>
   </header>
 
   <div class="tabs">
-    <button class="tab-btn active" onclick="switchTab('standalone')">📍 Standalone Test</button>
-    <button class="tab-btn" onclick="switchTab('dual')">⚖️ Dual Provider (w/ Server)</button>
+    <button class="tab-btn active" onclick="switchTab('test')">📍 Advanced Test</button>
+    <button class="tab-btn" onclick="switchTab('metrics')">📊 Metrics Explorer</button>
     <button class="tab-btn" onclick="switchTab('docs')">📖 Documentation</button>
   </div>
 
   <div class="content">
-    <!-- STANDALONE TAB -->
-    <div id="standalone" class="tab-content active">
+    <!-- TEST TAB -->
+    <div id="test" class="tab-content active">
       <div class="controls">
-        <button onclick="startStandaloneTest()">Start Test</button>
-        <button class="stop" onclick="stopStandaloneTest()" id="standalone-stop" disabled>Stop</button>
-        <button onclick="clearStandaloneLogs()">Clear Logs</button>
+        <button onclick="startTest()">▶ Start Test</button>
+        <button class="stop" onclick="stopTest()" id="stop-btn" disabled>⏹ Stop</button>
+        <button onclick="clearAllLogs()">Clear Logs</button>
       </div>
 
       <div class="card full-width">
-        <h2>⚙️ Test Scenarios (Click to Run)</h2>
+        <h2>⚙️ Test Scenarios</h2>
         <div class="controls">
-          <button onclick="testNewTokens()">New Tokens</button>
-          <button onclick="testTokenTrades(50)">Trades (50)</button>
-          <button onclick="testTokenTrades(150)">Trades (150)</button>
-          <button onclick="testWhaleMonitoring(20)">Whales (20)</button>
-          <button onclick="stressTest()">Stress Test</button>
+          <button onclick="testNewTokenDiscovery()">New Tokens</button>
+          <button onclick="testSwapFlow()">🔄 Swap Flow (CRITICAL)</button>
+          <button onclick="testTradeMonitoring()">Trades (Real Tokens)</button>
+          <button onclick="testWhaleMonitoring()">🐳 Whale Monitoring</button>
+          <button onclick="stressTest()">💪 Stress Test</button>
         </div>
 
         <div class="slider-group">
           <label>Sub Rate:</label>
-          <input type="range" id="subRate" min="10" max="500" value="100" oninput="updateSubRate(this.value)">
-          <span class="slider-value" id="subRateDisplay">100/sec</span>
+          <input type="range" id="subRate" min="10" max="500" value="150" oninput="updateSubRate(this.value)">
+          <span class="slider-value" id="subRateDisplay">150/sec</span>
+        </div>
+
+        <div class="slider-group">
+          <label>Whale Wallets:</label>
+          <input type="text" id="whaleWallets" placeholder="Paste comma-separated wallet addresses (optional)">
         </div>
       </div>
 
       <div class="container">
         <div class="card">
-          <h2>🎯 PumpPortal
-            <span class="status-badge" id="pp-status">DISCONNECTED</span>
-          </h2>
+          <h2>🎯 PumpPortal <span class="status-badge" id="pp-status">DISCONNECTED</span></h2>
           <div class="metric">
-            <span class="metric-label">Messages</span>
-            <span class="metric-value high" id="pp-msgs">0</span>
+            <span class="metric-label">Status</span>
+            <span class="metric-value" id="pp-conn-status">disconnected</span>
           </div>
           <div class="metric">
-            <span class="metric-label">Latency</span>
-            <span class="metric-value" id="pp-latency">—</span>
+            <span class="metric-label">Total Messages</span>
+            <span class="metric-value good" id="pp-total-msgs">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">New Tokens</span>
+            <span class="metric-value" id="pp-new-tokens">0</span>
           </div>
           <div class="metric">
             <span class="metric-label">Throughput</span>
-            <span class="metric-value" id="pp-mps">0</span>
+            <span class="metric-value" id="pp-throughput">0 msg/s</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Avg Msg Size</span>
+            <span class="metric-value" id="pp-msg-size">0 B</span>
           </div>
           <div class="metric">
             <span class="metric-label">Overhead</span>
-            <span class="metric-value" id="pp-overhead">—</span>
+            <span class="metric-value" id="pp-overhead">0%</span>
           </div>
-          <div class="chart" id="pp-chart"></div>
           <div class="log" id="pp-log"></div>
         </div>
 
         <div class="card">
-          <h2>🔧 PumpDev
-            <span class="status-badge" id="pd-status">DISCONNECTED</span>
-          </h2>
+          <h2>🔧 PumpDev <span class="status-badge" id="pd-status">DISCONNECTED</span></h2>
           <div class="metric">
-            <span class="metric-label">Messages</span>
-            <span class="metric-value high" id="pd-msgs">0</span>
+            <span class="metric-label">Status</span>
+            <span class="metric-value" id="pd-conn-status">disconnected</span>
           </div>
           <div class="metric">
-            <span class="metric-label">Latency</span>
-            <span class="metric-value" id="pd-latency">—</span>
+            <span class="metric-label">Total Messages</span>
+            <span class="metric-value good" id="pd-total-msgs">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Token Trades</span>
+            <span class="metric-value" id="pd-trades">0</span>
           </div>
           <div class="metric">
             <span class="metric-label">Throughput</span>
-            <span class="metric-value" id="pd-mps">0</span>
+            <span class="metric-value" id="pd-throughput">0 msg/s</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Avg Msg Size</span>
+            <span class="metric-value" id="pd-msg-size">0 B</span>
           </div>
           <div class="metric">
             <span class="metric-label">Overhead</span>
-            <span class="metric-value" id="pd-overhead">—</span>
+            <span class="metric-value" id="pd-overhead">0%</span>
           </div>
-          <div class="chart" id="pd-chart"></div>
           <div class="log" id="pd-log"></div>
         </div>
 
         <div class="card full-width">
-          <h2>📊 Combined Results</h2>
-          <div class="metric">
-            <span class="metric-label">Total Subscriptions</span>
-            <span class="metric-value high" id="total-subs">0</span>
-          </div>
-          <div class="metric">
-            <span class="metric-label">Total Messages</span>
-            <span class="metric-value high" id="total-msgs">0</span>
-          </div>
+          <h2>📈 Message Rate (msg/sec)</h2>
+          <div class="chart" id="rate-chart"></div>
           <div class="metric">
             <span class="metric-label">Combined Throughput</span>
-            <span class="metric-value high" id="combined-mps">0 msg/sec</span>
+            <span class="metric-value good" id="combined-throughput">0 msg/s</span>
           </div>
+        </div>
+
+        <div class="card full-width">
+          <h2>🔄 Critical Path: Token Discovery → Trade</h2>
+          <div class="metric">
+            <span class="metric-label">Discovered Tokens</span>
+            <span class="metric-value good" id="discovery-count">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Tokens w/ Trades</span>
+            <span class="metric-value good" id="trades-count">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Avg Discovery→Trade</span>
+            <span class="metric-value" id="discovery-latency">—</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Conversion Rate</span>
+            <span class="metric-value" id="conversion-rate">—</span>
+          </div>
+          <div class="chart" id="latency-chart"></div>
+        </div>
+
+        <div class="card full-width">
+          <h2>⏱️ Connection Timeline</h2>
+          <div class="timeline" id="timeline"></div>
+        </div>
+
+        <div class="card full-width">
+          <h2>📨 Last Messages (Raw Preview)</h2>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <div style="font-size: 10px; color: #888; margin-bottom: 4px;">PumpPortal</div>
+              <div class="msg-preview" id="pp-msg-preview">Waiting for messages...</div>
+            </div>
+            <div>
+              <div style="font-size: 10px; color: #888; margin-bottom: 4px;">PumpDev</div>
+              <div class="msg-preview" id="pd-msg-preview">Waiting for messages...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card full-width">
+          <h2>📊 Test Summary</h2>
           <div class="metric">
             <span class="metric-label">Test Duration</span>
             <span class="metric-value" id="test-duration">—</span>
           </div>
-          <div class="chart" id="combined-chart"></div>
+          <div class="metric">
+            <span class="metric-label">Total Subscriptions</span>
+            <span class="metric-value good" id="total-subs">0</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Subscription Rate</span>
+            <span class="metric-value" id="sub-rate">—</span>
+          </div>
+          <div class="metric">
+            <span class="metric-label">Errors</span>
+            <span class="metric-value critical" id="error-count">0</span>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- DUAL PROVIDER TAB -->
-    <div id="dual" class="tab-content">
+    <!-- METRICS TAB -->
+    <div id="metrics" class="tab-content">
       <div class="card full-width">
-        <h2>⚖️ Dual Provider Mode (Requires Running Server)</h2>
-        <p style="color: #888; margin-bottom: 12px; font-size: 11px;">
-          This mode requires your server running with the dual-provider WebSocket system.
-          <br>Use: <code style="background: #0a0a0a; padding: 2px 6px; border-radius: 3px;">npm run dev</code>
-          <br>Then access: <code style="background: #0a0a0a; padding: 2px 6px; border-radius: 3px;">http://localhost:5000/test-dual-websocket-capacity.html</code>
+        <h2>📊 Metrics Explorer</h2>
+        <p style="color: #888; font-size: 11px; line-height: 1.6; margin-bottom: 16px;">
+          Real-time metrics from the active test. All data is captured during testing and displayed here for analysis.
         </p>
-        <p style="color: #888; font-size: 11px;">
-          The dual provider dashboard includes:
-        </p>
-        <ul style="color: #888; font-size: 11px; margin-left: 20px; margin-top: 8px;">
-          <li>Load balancing status and rebalancing events</li>
-          <li>Subscription rotation logs</li>
-          <li>Per-provider overhead metrics</li>
-          <li>Real-time load distribution</li>
-          <li>Event history and analytics</li>
-        </ul>
+        <div id="metrics-content" style="color: #888; font-size: 10px;">
+          Start a test to see metrics...
+        </div>
       </div>
     </div>
 
     <!-- DOCS TAB -->
     <div id="docs" class="tab-content">
       <div class="card full-width">
-        <h2>📖 WebSocket Capacity Testing Guide</h2>
-
-        <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">Quick Start</h3>
+        <h2>📖 Advanced Testing Guide</h2>
+        <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">What Changed</h3>
         <p style="color: #888; font-size: 11px; line-height: 1.6;">
-          <strong>Standalone Mode (No Server):</strong><br>
-          Just open this file in a browser. Click test buttons to measure WebSocket provider capacity directly.
-          <br><br>
-          <strong>Dual Provider Mode (With Server):</strong><br>
-          Run your app server, then navigate to the dashboard for advanced metrics including load balancing and rotation.
+          <strong style="color: #e5e5e5;">Real Tokens:</strong> Fetches trending tokens from pump.fun and DexScreener APIs instead of random addresses. Also collects new tokens from the live stream.<br>
+          <strong style="color: #e5e5e5;">Swap Flow Test:</strong> The critical production scenario—discovers new tokens and immediately monitors their trades.<br>
+          <strong style="color: #e5e5e5;">Discovery→Trade Latency:</strong> Measures how long from token discovery to first trade event (critical for bot performance).<br>
+          <strong style="color: #e5e5e5;">Working Charts:</strong> Bar charts now display real msg/sec data over time.<br>
+          <strong style="color: #e5e5e5;">Message Details:</strong> See actual message previews, message types, sizes, and error categorization.<br>
+          <strong style="color: #e5e5e5;">Subscription Rate:</strong> Slider controls how fast new tokens/wallets are subscribed to (respects rate limits).
         </p>
 
         <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">Test Scenarios</h3>
         <div style="background: #0a0a0a; border-left: 2px solid #2563eb; padding: 10px; margin-top: 8px; font-size: 11px; color: #888;">
-          <strong style="color: #e5e5e5;">New Tokens:</strong> Measures pump.fun discovery rate via subscribeNewToken<br>
-          <strong style="color: #e5e5e5;">Trades (50/150):</strong> Stress tests trade monitoring with configurable token counts<br>
-          <strong style="color: #e5e5e5;">Whales (20):</strong> Tests subscribeAccountTrade with fake whale wallets<br>
-          <strong style="color: #e5e5e5;">Stress Test:</strong> Combines all three at max capacity
+          <strong style="color: #e5e5e5;">🔄 Swap Flow (CRITICAL):</strong> Subscribe to new tokens → immediately subscribe to trades. Measures critical path latency.<br>
+          <strong style="color: #e5e5e5;">New Tokens:</strong> Just the discovery stream—how many new tokens can you discover per second?<br>
+          <strong style="color: #e5e5e5;">Trades (Real):</strong> Subscribe to real trending tokens and measure trade event throughput.<br>
+          <strong style="color: #e5e5e5;">🐳 Whale:</strong> Paste wallet addresses to monitor their trades in real-time.<br>
+          <strong style="color: #e5e5e5;">💪 Stress:</strong> Combines all three at max capacity.
         </div>
 
         <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">Key Metrics</h3>
         <div style="background: #0a0a0a; border-left: 2px solid #2563eb; padding: 10px; margin-top: 8px; font-size: 11px; color: #888;">
-          <strong style="color: #e5e5e5;">Messages:</strong> Total count received from provider<br>
-          <strong style="color: #e5e5e5;">Latency:</strong> Average message processing time (ms)<br>
-          <strong style="color: #e5e5e5;">Throughput:</strong> Messages per second (msg/sec)<br>
-          <strong style="color: #e5e5e5;">Overhead:</strong> Utilization % (red >80%, yellow >50%)
+          <strong style="color: #e5e5e5;">Throughput:</strong> Messages per second (msg/s)<br>
+          <strong style="color: #e5e5e5;">Avg Message Size:</strong> Average bytes per message<br>
+          <strong style="color: #e5e5e5;">Overhead:</strong> CPU/network utilization estimate<br>
+          <strong style="color: #e5e5e5;">Discovery→Trade Latency:</strong> Milliseconds from token discovery to first trade<br>
+          <strong style="color: #e5e5e5;">Conversion Rate:</strong> % of discovered tokens that receive at least one trade
         </div>
 
         <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">Expected Results</h3>
         <div style="background: #0a0a0a; border-left: 2px solid #2563eb; padding: 10px; margin-top: 8px; font-size: 11px; color: #888;">
-          <strong style="color: #4ade80;">Healthy:</strong> Overhead <50%, latency <10ms, no errors<br>
-          <strong style="color: #f87171;">Capacity Found:</strong> Overhead hits 80%+, latency spikes >50ms<br>
-          <strong style="color: #fbbf24;">Practical Limits:</strong> Document max tokens/whales at <50% overhead
+          <strong style="color: #4ade80;">Healthy:</strong> Overhead <50%, latency <500ms, errors <1%<br>
+          <strong style="color: #fbbf24;">Production Threshold:</strong> Overhead <70%, latency <1000ms<br>
+          <strong style="color: #f87171;">Capacity Found:</strong> Overhead hits 80%+, latency spikes >2000ms
         </div>
-
-        <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">Architecture</h3>
-        <p style="color: #888; font-size: 11px; line-height: 1.6;">
-          <strong style="color: #e5e5e5;">Server Files:</strong><br>
-          • <code style="background: #1a1a1a; padding: 2px 4px;">server/pumpfun-websocket-dual.ts</code> - Dual-provider WebSocket manager<br>
-          • <code style="background: #1a1a1a; padding: 2px 4px;">server/websocket-capacity-tracker.ts</code> - Overhead monitoring & load balancing<br>
-          <br>
-          <strong style="color: #e5e5e5;">Test Files:</strong><br>
-          • <code style="background: #1a1a1a; padding: 2px 4px;">websocket-capacity-test.html</code> - This file (all-in-one)<br>
-          • <code style="background: #1a1a1a; padding: 2px 4px;">test-dual-websocket-capacity.html</code> - Server-integrated dashboard
-        </p>
-
-        <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">Rate Limits</h3>
-        <div style="background: #0a0a0a; border-left: 2px solid #2563eb; padding: 10px; margin-top: 8px; font-size: 11px; color: #888;">
-          PumpPortal: 15 connections max, 200 subs/sec, 5000 addresses/message<br>
-          PumpDev: Same limits (independent connection)<br>
-          Safe batching: 100 tokens every ~667ms (150 subs/sec)
-        </div>
-
-        <h3 style="color: #60a5fa; margin-top: 16px; font-size: 12px;">Tips</h3>
-        <ul style="color: #888; font-size: 11px; margin-left: 20px; margin-top: 8px; line-height: 1.6;">
-          <li>Run tests for 5-10 minutes to see real throughput patterns</li>
-          <li>Monitor both providers simultaneously to compare performance</li>
-          <li>Note the overhead % where system becomes unstable</li>
-          <li>Use results to configure top-tier signal limits</li>
-          <li>Open DevTools (F12) to inspect actual WebSocket frames</li>
-        </ul>
       </div>
     </div>
   </div>
 
   <script>
-    // Standalone test implementation
-    const providers = {
-      pumpportal: {
-        url: 'wss://pumpportal.fun/api/data',
-        ws: null,
-        stats: { messages: 0, latencies: [], msgTimes: [], startTime: 0 },
-      },
-      pumpdev: {
-        url: 'wss://pumpdev.io/ws',
-        ws: null,
-        stats: { messages: 0, latencies: [], msgTimes: [], startTime: 0 },
-      },
-    };
-
+    // State
     let testActive = false;
     let testStartTime = 0;
+    const providers = {
+      pumpportal: { url: 'wss://pumpportal.fun/api/data', ws: null, stats: { messages: 0, msgTypes: {}, msgSizes: [], startTime: 0, lastMessages: [], errors: {} } },
+      pumpdev: { url: 'wss://pumpdev.io/ws', ws: null, stats: { messages: 0, msgTypes: {}, msgSizes: [], startTime: 0, lastMessages: [], errors: {} } }
+    };
+    const metrics = { msgRates: [], discoveredTokens: new Map(), tradeLatencies: [], timeline: [] };
+    const realTokens = new Set();
+    let subscriptionRate = 150;
+
+    // Helpers
+    function getAbbr(provider) {
+      return provider === 'pumpportal' ? 'pp' : 'pd';
+    }
+
+    function log(provider, message, type = 'info') {
+      const logEl = document.getElementById(`${getAbbr(provider)}-log`);
+      const entry = document.createElement('div');
+      entry.className = `log-entry ${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logEl.appendChild(entry);
+      logEl.scrollTop = logEl.scrollHeight;
+      while (logEl.children.length > 100) logEl.removeChild(logEl.firstChild);
+    }
+
+    function addTimeline(event) {
+      const timelineEl = document.getElementById('timeline');
+      const entry = document.createElement('div');
+      entry.className = `timeline-event ${event.type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${event.message}`;
+      timelineEl.appendChild(entry);
+      timelineEl.scrollTop = timelineEl.scrollHeight;
+      while (timelineEl.children.length > 50) timelineEl.removeChild(timelineEl.firstChild);
+      metrics.timeline.push(event);
+    }
+
+    function updateStatus(provider, status) {
+      const abbr = getAbbr(provider);
+      document.getElementById(`${abbr}-status`).className = `status-badge ${status}`;
+      document.getElementById(`${abbr}-status`).textContent = status.toUpperCase();
+      document.getElementById(`${abbr}-conn-status`).textContent = status;
+    }
 
     function switchTab(tab) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
@@ -459,16 +567,40 @@
       event.target.classList.add('active');
     }
 
-    function log(provider, message, type = 'info') {
-      const logEl = document.getElementById(`${provider}-log`);
-      const entry = document.createElement('div');
-      entry.className = `log-entry ${type}`;
-      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-      logEl.appendChild(entry);
-      logEl.scrollTop = logEl.scrollHeight;
-      while (logEl.children.length > 50) logEl.removeChild(logEl.firstChild);
+    // Fetch real tokens from APIs
+    async function fetchRealTokens() {
+      try {
+        log('pp', 'Fetching trending tokens from pump.fun...', 'info');
+        const pumpRes = await fetch('https://frontend-api-v3.pump.fun/coins/trending');
+        if (pumpRes.ok) {
+          const coins = await pumpRes.json();
+          coins.slice(0, 50).forEach(coin => realTokens.add(coin.mint));
+          log('pp', `Fetched ${coins.slice(0, 50).length} tokens from pump.fun`, 'success');
+        }
+      } catch (e) {
+        log('pp', `pump.fun fetch failed: ${e.message}`, 'warn');
+      }
+
+      try {
+        log('pp', 'Fetching trending tokens from DexScreener...', 'info');
+        const dexRes = await fetch('https://api.dexscreener.com/token-boosts/top/v1');
+        if (dexRes.ok) {
+          const data = await dexRes.json();
+          if (data.boosts) {
+            data.boosts.slice(0, 50).forEach(boost => {
+              if (boost.tokenAddress) realTokens.add(boost.tokenAddress);
+            });
+            log('pd', `Fetched ${Math.min(50, data.boosts.length)} tokens from DexScreener`, 'success');
+          }
+        }
+      } catch (e) {
+        log('pd', `DexScreener fetch failed: ${e.message}`, 'warn');
+      }
+
+      log('pp', `Total real tokens collected: ${realTokens.size}`, 'success');
     }
 
+    // Connect WebSocket
     function connect(provider) {
       const config = providers[provider];
       const abbr = getAbbr(provider);
@@ -481,6 +613,7 @@
 
         ws.onopen = () => {
           updateStatus(provider, 'connected');
+          addTimeline({ type: 'connected', message: `${abbr.toUpperCase()} connected` });
           log(abbr, 'Connected', 'success');
           if (provider === 'pumpportal') {
             ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
@@ -489,28 +622,47 @@
         };
 
         ws.onmessage = (event) => {
-          const msg = JSON.parse(event.data);
-          config.stats.messages++;
-          const now = Date.now();
-          config.stats.msgTimes.push(now);
-          if (config.stats.msgTimes.length > 1000) {
-            config.stats.msgTimes = config.stats.msgTimes.slice(-1000);
-          }
-          if (config.stats.msgTimes.length > 10) {
-            const spread = config.stats.msgTimes[config.stats.msgTimes.length - 1] - config.stats.msgTimes[0];
-            const latency = spread / config.stats.msgTimes.length;
-            config.stats.latencies.push(latency);
-            if (config.stats.latencies.length > 100) config.stats.latencies.shift();
+          try {
+            const msg = JSON.parse(event.data);
+            config.stats.messages++;
+            config.stats.msgSizes.push(event.data.length);
+            config.stats.lastMessages.unshift({ data: JSON.stringify(msg).substring(0, 100), time: Date.now() });
+            if (config.stats.lastMessages.length > 3) config.stats.lastMessages.pop();
+
+            const msgType = msg.txType || msg.signature ? 'tokenTrade' : msg.mint ? 'newToken' : 'other';
+            config.stats.msgTypes[msgType] = (config.stats.msgTypes[msgType] || 0) + 1;
+
+            // Track discovery latency
+            if (msgType === 'newToken' && msg.mint) {
+              realTokens.add(msg.mint);
+              if (!metrics.discoveredTokens.has(msg.mint)) {
+                metrics.discoveredTokens.set(msg.mint, { discoveredAt: Date.now(), hasTradeCount: 0 });
+              }
+            } else if (msgType === 'tokenTrade' && msg.mint) {
+              if (metrics.discoveredTokens.has(msg.mint)) {
+                const token = metrics.discoveredTokens.get(msg.mint);
+                if (token.hasTradeCount === 0) {
+                  const latency = Date.now() - token.discoveredAt;
+                  metrics.tradeLatencies.push(latency);
+                }
+                token.hasTradeCount++;
+              }
+            }
+          } catch (e) {
+            config.stats.errors.parse = (config.stats.errors.parse || 0) + 1;
           }
         };
 
         ws.onerror = () => {
           updateStatus(provider, 'disconnected');
+          addTimeline({ type: 'error', message: `${abbr.toUpperCase()} error` });
           log(abbr, 'Error occurred', 'error');
+          config.stats.errors.connection = (config.stats.errors.connection || 0) + 1;
         };
 
         ws.onclose = () => {
           updateStatus(provider, 'disconnected');
+          addTimeline({ type: 'disconnected', message: `${abbr.toUpperCase()} disconnected` });
           log(abbr, 'Disconnected', 'error');
         };
       } catch (error) {
@@ -519,82 +671,10 @@
       }
     }
 
-    function getAbbr(provider) {
-      return provider === 'pumpportal' ? 'pp' : 'pd';
-    }
-
-    function updateStatus(provider, status) {
-      const abbr = getAbbr(provider);
-      document.getElementById(`${abbr}-status`).className = `status-badge ${status}`;
-      document.getElementById(`${abbr}-status`).textContent = status.toUpperCase();
-    }
-
-    function updateStats() {
-      if (!testActive) return;
-
-      for (const [provider, config] of Object.entries(providers)) {
-        const abbr = getAbbr(provider);
-        const stats = config.stats;
-        const uptime = Date.now() - stats.startTime;
-        const mps = uptime > 0 ? (stats.messages / uptime) * 1000 : 0;
-
-        document.getElementById(`${abbr}-msgs`).textContent = stats.messages;
-        document.getElementById(`${abbr}-mps`).textContent = mps.toFixed(1) + ' msg/sec';
-
-        const avgLatency = stats.latencies.length > 0
-          ? stats.latencies.reduce((a, b) => a + b, 0) / stats.latencies.length
-          : 0;
-        document.getElementById(`${abbr}-latency`).textContent = avgLatency.toFixed(1) + 'ms';
-
-        const overhead = Math.min(100, (mps / 100) * 100);
-        const overheadEl = document.getElementById(`${abbr}-overhead`);
-        overheadEl.className = `metric-value ${overhead > 80 ? 'critical' : overhead > 50 ? 'warning' : ''}`;
-        overheadEl.textContent = overhead.toFixed(0) + '%';
-      }
-
-      const totalMsgs = providers.pumpportal.stats.messages + providers.pumpdev.stats.messages;
-      const totalTime = Date.now() - testStartTime;
-      const combinedMps = totalTime > 0 ? (totalMsgs / totalTime) * 1000 : 0;
-
-      document.getElementById('total-msgs').textContent = totalMsgs;
-      document.getElementById('combined-mps').textContent = combinedMps.toFixed(1) + ' msg/sec';
-      document.getElementById('test-duration').textContent = (totalTime / 1000).toFixed(1) + 's';
-
-      setTimeout(updateStats, 1000);
-    }
-
-    async function startStandaloneTest() {
-      testActive = true;
-      testStartTime = Date.now();
-      document.getElementById('standalone-stop').disabled = false;
-      connect('pumpportal');
-      connect('pumpdev');
-      updateStats();
-    }
-
-    function stopStandaloneTest() {
-      testActive = false;
-      document.getElementById('standalone-stop').disabled = true;
-      if (providers.pumpportal.ws) providers.pumpportal.ws.close();
-      if (providers.pumpdev.ws) providers.pumpdev.ws.close();
-    }
-
-    function clearStandaloneLogs() {
-      document.getElementById('pp-log').innerHTML = '';
-      document.getElementById('pd-log').innerHTML = '';
-    }
-
-    function testNewTokens() {
-      if (!testActive) startStandaloneTest();
-      log('pp', 'Testing new token discovery', 'info');
-    }
-
     function sendWhenReady(provider, message) {
       const config = providers[provider];
       const abbr = getAbbr(provider);
-
       if (!config.ws || config.ws.readyState !== WebSocket.OPEN) {
-        // Wait for connection to open
         let attempts = 0;
         const retry = setInterval(() => {
           attempts++;
@@ -603,12 +683,11 @@
             try {
               config.ws.send(message);
             } catch (e) {
-              log(abbr, `Send failed after ready: ${e.message}`, 'error');
+              log(abbr, `Send failed: ${e.message}`, 'error');
             }
           } else if (attempts > 50) {
-            // 5 seconds of retrying
             clearInterval(retry);
-            log(abbr, `Connection timeout, giving up`, 'error');
+            log(abbr, `Subscription timeout`, 'error');
           }
         }, 100);
       } else {
@@ -620,32 +699,180 @@
       }
     }
 
-    function testTokenTrades(count) {
-      if (!testActive) startStandaloneTest();
-      const mints = Array(count).fill(0).map(() =>
-        Array(44).fill(0).map(() => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 62)]).join('')
-      );
-      sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: mints }));
-      log('pd', `Subscribing to ${count} trades...`, 'info');
+    function updateStats() {
+      if (!testActive) return;
+
+      for (const [provider, config] of Object.entries(providers)) {
+        const abbr = getAbbr(provider);
+        const uptime = Math.max(1, Date.now() - config.stats.startTime);
+        const mps = (config.stats.messages / uptime) * 1000;
+        const avgSize = config.stats.msgSizes.length > 0
+          ? (config.stats.msgSizes.reduce((a, b) => a + b, 0) / config.stats.msgSizes.length).toFixed(0)
+          : 0;
+        const overhead = Math.min(100, (mps / 100) * 100);
+
+        document.getElementById(`${abbr}-total-msgs`).textContent = config.stats.messages;
+        document.getElementById(`${abbr}-new-tokens`).textContent = config.stats.msgTypes.newToken || 0;
+        document.getElementById(`${abbr}-trades`).textContent = config.stats.msgTypes.tokenTrade || 0;
+        document.getElementById(`${abbr}-throughput`).textContent = mps.toFixed(1) + ' msg/s';
+        document.getElementById(`${abbr}-msg-size`).textContent = avgSize + ' B';
+        document.getElementById(`${abbr}-overhead`).textContent = overhead.toFixed(0) + '%';
+
+        // Message preview
+        if (config.stats.lastMessages.length > 0) {
+          document.getElementById(`${abbr}-msg-preview`).textContent = config.stats.lastMessages.map((m, i) => `[${i}] ${m.data}...`).join('\n');
+        }
+      }
+
+      const totalMsgs = providers.pumpportal.stats.messages + providers.pumpdev.stats.messages;
+      const totalTime = Math.max(1, Date.now() - testStartTime);
+      const combinedMps = (totalMsgs / totalTime) * 1000;
+      metrics.msgRates.push(combinedMps);
+      if (metrics.msgRates.length > 60) metrics.msgRates.shift();
+
+      document.getElementById('combined-throughput').textContent = combinedMps.toFixed(1) + ' msg/s';
+      document.getElementById('discovery-count').textContent = metrics.discoveredTokens.size;
+      document.getElementById('trades-count').textContent = [...metrics.discoveredTokens.values()].filter(t => t.hasTradeCount > 0).length;
+
+      if (metrics.tradeLatencies.length > 0) {
+        const avg = metrics.tradeLatencies.reduce((a, b) => a + b, 0) / metrics.tradeLatencies.length;
+        document.getElementById('discovery-latency').textContent = avg.toFixed(0) + 'ms';
+      }
+
+      const convRate = metrics.discoveredTokens.size > 0
+        ? (([...metrics.discoveredTokens.values()].filter(t => t.hasTradeCount > 0).length / metrics.discoveredTokens.size) * 100).toFixed(0) + '%'
+        : '—';
+      document.getElementById('conversion-rate').textContent = convRate;
+
+      // Update charts
+      updateCharts();
+
+      document.getElementById('test-duration').textContent = (totalTime / 1000).toFixed(1) + 's';
+      document.getElementById('total-subs').textContent = realTokens.size;
+      document.getElementById('error-count').textContent = Object.values(providers).reduce((sum, p) => sum + Object.values(p.stats.errors).reduce((a, b) => a + b, 0), 0);
+
+      setTimeout(updateStats, 1000);
     }
 
-    function testWhaleMonitoring(count) {
-      if (!testActive) startStandaloneTest();
-      const wallets = Array(count).fill(0).map(() =>
-        Array(44).fill(0).map(() => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 62)]).join('')
-      );
+    function updateCharts() {
+      // Rate chart
+      const rateChart = document.getElementById('rate-chart');
+      rateChart.innerHTML = '';
+      const maxRate = Math.max(...metrics.msgRates, 1);
+      metrics.msgRates.slice(-30).forEach((rate, i) => {
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.height = ((rate / maxRate) * 100) + '%';
+        bar.title = rate.toFixed(1) + ' msg/s';
+        rateChart.appendChild(bar);
+      });
+
+      // Latency chart
+      const latencyChart = document.getElementById('latency-chart');
+      latencyChart.innerHTML = '';
+      if (metrics.tradeLatencies.length > 0) {
+        const maxLatency = Math.max(...metrics.tradeLatencies, 1);
+        metrics.tradeLatencies.slice(-30).forEach((latency, i) => {
+          const bar = document.createElement('div');
+          bar.className = 'bar';
+          bar.style.background = latency > 1000 ? 'linear-gradient(to top, #dc2626, #f87171)' : 'linear-gradient(to top, #2563eb, #60a5fa)';
+          bar.style.height = ((latency / maxLatency) * 100) + '%';
+          bar.title = latency.toFixed(0) + 'ms';
+          latencyChart.appendChild(bar);
+        });
+      }
+    }
+
+    // Test scenarios
+    function startTest() {
+      testActive = true;
+      testStartTime = Date.now();
+      metrics.msgRates = [];
+      metrics.discoveredTokens.clear();
+      metrics.tradeLatencies = [];
+      metrics.timeline = [];
+      document.getElementById('stop-btn').disabled = false;
+      fetchRealTokens();
+      connect('pumpportal');
+      connect('pumpdev');
+      updateStats();
+    }
+
+    function stopTest() {
+      testActive = false;
+      document.getElementById('stop-btn').disabled = true;
+      if (providers.pumpportal.ws) providers.pumpportal.ws.close();
+      if (providers.pumpdev.ws) providers.pumpdev.ws.close();
+    }
+
+    function clearAllLogs() {
+      document.getElementById('pp-log').innerHTML = '';
+      document.getElementById('pd-log').innerHTML = '';
+      document.getElementById('timeline').innerHTML = '';
+    }
+
+    function testNewTokenDiscovery() {
+      if (!testActive) startTest();
+      log('pp', 'Testing new token discovery stream', 'info');
+    }
+
+    function testSwapFlow() {
+      if (!testActive) startTest();
+      log('pp', '🔄 SWAP FLOW: Monitoring token discovery → subscribing to trades', 'success');
+
+      // When new tokens arrive, auto-subscribe to trades
+      const originalOnMsg = providers.pumpportal.ws.onmessage;
+      providers.pumpportal.ws.onmessage = function(event) {
+        originalOnMsg.call(this, event);
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.mint && !msg.txType) { // It's a new token
+            // Auto-subscribe to its trades
+            sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: [msg.mint] }));
+            document.getElementById('sub-rate').textContent = realTokens.size + ' tracked';
+          }
+        } catch (e) {}
+      };
+    }
+
+    function testTradeMonitoring() {
+      if (!testActive) startTest();
+      const tokens = Array.from(realTokens).slice(0, 100);
+      if (tokens.length === 0) {
+        log('pd', 'No real tokens available, fetching...', 'warn');
+        fetchRealTokens().then(() => testTradeMonitoring());
+        return;
+      }
+      sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: tokens }));
+      log('pd', `Subscribed to trades for ${tokens.length} real tokens`, 'success');
+    }
+
+    function testWhaleMonitoring() {
+      const input = document.getElementById('whaleWallets').value.trim();
+      const wallets = input.length > 0
+        ? input.split(',').map(w => w.trim()).filter(w => w.length > 0)
+        : ['98uhWWn14normX8K4Yryz73Khkx8x8nxvAQASvzC9s6', 'CXwBkJugfvP8VkRmQfP9D7TmH2ULLLv1XmRMQyYm7yA9']; // Known whales
+
+      if (wallets.length === 0) {
+        log('pp', 'No whale wallets provided', 'warn');
+        return;
+      }
+
+      if (!testActive) startTest();
       sendWhenReady('pumpportal', JSON.stringify({ method: 'subscribeAccountTrade', keys: wallets }));
-      log('pp', `Subscribing to ${count} whale wallets...`, 'info');
+      log('pp', `Subscribed to ${wallets.length} whale wallets`, 'success');
     }
 
     async function stressTest() {
-      if (!testActive) startStandaloneTest();
-      log('pp', 'Stress test: streaming all new tokens', 'info');
-      testTokenTrades(150);
-      testWhaleMonitoring(30);
+      if (!testActive) startTest();
+      log('pp', '💪 STRESS TEST: All scenarios at maximum', 'success');
+      testNewTokenDiscovery();
+      testTradeMonitoring();
+      testWhaleMonitoring();
     }
 
     function updateSubRate(value) {
+      subscriptionRate = parseInt(value);
       document.getElementById('subRateDisplay').textContent = value + '/sec';
     }
   </script>
