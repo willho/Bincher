@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Complete WebSocket Test Suite</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e5e5e5; padding: 20px; }
+    h1 { margin-bottom: 4px; font-size: 22px; font-weight: 700; }
+    .subtitle { color: #888; font-size: 12px; margin-bottom: 24px; }
+    .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #333; flex-wrap: wrap; }
+    .tab-btn { background: none; border: none; color: #888; padding: 10px 14px; cursor: pointer; border-bottom: 2px solid transparent; font-size: 12px; font-weight: 600; transition: all 0.2s; }
+    .tab-btn.active { color: #e5e5e5; border-bottom-color: #2563eb; }
+    .tab-btn:hover { color: #b0b0b0; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .card { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+    .card h2 { font-size: 14px; margin-bottom: 8px; color: #fff; font-weight: 600; }
+    .card p { font-size: 11px; color: #888; margin-bottom: 10px; line-height: 1.4; }
+    .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    button { background: #2563eb; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 11px; cursor: pointer; font-weight: 600; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #333; color: #666; cursor: not-allowed; }
+    button.stop { background: #dc2626; }
+    button.stop:hover { background: #b91c1c; }
+    .status { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; }
+    .status.connecting { background: #1e3a5f; color: #60a5fa; animation: pulse 1s infinite; }
+    .status.success { background: #14532d; color: #4ade80; }
+    .status.error { background: #450a0a; color: #f87171; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .status-row { padding: 10px; border-radius: 6px; background: #111; margin-bottom: 8px; font-size: 11px; color: #888; }
+    .status-row.success { color: #4ade80; }
+    .status-row.error { color: #f87171; }
+    .tokens-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 10px; }
+    .token-btn { background: #111; border: 1px solid #333; padding: 8px; border-radius: 6px; cursor: pointer; font-size: 9px; text-align: left; transition: all 0.2s; }
+    .token-btn:hover { border-color: #2563eb; background: #1a2a3a; }
+    .token-btn.active { border-color: #4ade80; background: #1a3a1a; }
+    .token-btn .symbol { font-weight: 600; color: #e5e5e5; font-size: 10px; }
+    .token-btn .info { font-size: 8px; color: #888; margin-top: 2px; }
+    .messages { background: #0a0a0a; border: 1px solid #222; border-radius: 6px; padding: 8px; max-height: 350px; overflow-y: auto; font-family: monospace; font-size: 9px; }
+    .msg { padding: 3px; border-bottom: 1px solid #222; color: #888; }
+    .msg.token { color: #93c5fd; border-left: 2px solid #60a5fa; padding-left: 6px; }
+    .msg.buy { color: #4ade80; border-left: 2px solid #22c55e; padding-left: 6px; }
+    .msg.sell { color: #f87171; border-left: 2px solid #ef4444; padding-left: 6px; }
+    .msg.info { color: #60a5fa; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 8px; margin-top: 10px; }
+    .stat { background: #111; border: 1px solid #333; border-radius: 6px; padding: 8px; text-align: center; font-size: 9px; }
+    .stat .val { font-size: 16px; font-weight: 700; color: #60a5fa; margin-bottom: 2px; }
+    .stat .lbl { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Complete WebSocket Test Suite</h1>
+  <p class="subtitle">Test all scenarios: new tokens, pre-grad trades, graduated token trades. PumpPortal vs PumpDev.</p>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="switchTab('new-tokens')">🆕 New Token Stream</button>
+    <button class="tab-btn" onclick="switchTab('pregrad-trades')">📊 Pre-Grad Trades</button>
+    <button class="tab-btn" onclick="switchTab('grad-trades')">💰 Graduated Trades</button>
+  </div>
+
+  <!-- TAB 1: NEW TOKENS -->
+  <div id="new-tokens" class="tab-content active">
+    <div class="card">
+      <h2>New Token Stream Test</h2>
+      <p>Listen for brand new pump.fun token launches in real-time. Tests subscribeNewToken.</p>
+      <div class="buttons">
+        <button onclick="startNewTokensPP()">PumpPortal</button>
+        <button onclick="startNewTokensPD()">PumpDev</button>
+        <button class="stop" onclick="stopNewTokens()" id="nt-stop" disabled>Stop All</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <div class="status-row" id="nt-detail">Click start to listen for new tokens...</div>
+      <div id="nt-stats" class="stats"></div>
+    </div>
+
+    <div class="card">
+      <h2>New Tokens Detected</h2>
+      <div class="messages" id="nt-msgs" style="display:none;"></div>
+    </div>
+  </div>
+
+  <!-- TAB 2: PRE-GRAD TRADES -->
+  <div id="pregrad-trades" class="tab-content">
+    <div class="card">
+      <h2>Pre-Graduation Trade Stream</h2>
+      <p>Load trending pump.fun bonding curve tokens, subscribe to their real-time trades.</p>
+      <div class="buttons">
+        <button onclick="loadPreGradTokensPP()">Load Tokens (PumpPortal)</button>
+        <button onclick="loadPreGradTokensPD()">Load Tokens (PumpDev)</button>
+        <button class="stop" onclick="stopPreGrad()" id="pg-stop" disabled>Stop All</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <div class="status-row" id="pg-detail">Click to load trending pump.fun tokens...</div>
+    </div>
+
+    <div class="card" id="pg-tokens-card" style="display:none;">
+      <h2>Trending Pre-Grad Tokens</h2>
+      <p>Click to subscribe to trades on bonding curve.</p>
+      <div class="tokens-grid" id="pg-tokens"></div>
+    </div>
+
+    <div class="card" id="pg-trades-card" style="display:none;">
+      <h2>Live Trades</h2>
+      <div id="pg-stats" class="stats"></div>
+      <div class="messages" id="pg-msgs"></div>
+    </div>
+  </div>
+
+  <!-- TAB 3: GRADUATED TRADES -->
+  <div id="grad-trades" class="tab-content">
+    <div class="card">
+      <h2>Graduated Token Trade Stream</h2>
+      <p>Load trending Raydium tokens (DexScreener), subscribe to their real-time trades.</p>
+      <div class="buttons">
+        <button onclick="loadGradTokensPP()">Load Tokens (PumpPortal)</button>
+        <button onclick="loadGradTokensPD()">Load Tokens (PumpDev)</button>
+        <button class="stop" onclick="stopGrad()" id="gd-stop" disabled>Stop All</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <div class="status-row" id="gd-detail">Click to load trending Raydium tokens...</div>
+    </div>
+
+    <div class="card" id="gd-tokens-card" style="display:none;">
+      <h2>Trending Graduated Tokens (Raydium)</h2>
+      <p>Click to subscribe to trades.</p>
+      <div class="tokens-grid" id="gd-tokens"></div>
+    </div>
+
+    <div class="card" id="gd-trades-card" style="display:none;">
+      <h2>Live Trades</h2>
+      <div id="gd-stats" class="stats"></div>
+      <div class="messages" id="gd-msgs"></div>
+    </div>
+  </div>
+
+  <script>
+    let ppWs = null, pdWs = null;
+    let ntStats = { pp: { tokens: 0 }, pd: { tokens: 0 } };
+    let pgStats = { pp: { trades: 0, buys: 0, sells: 0 }, pd: { trades: 0, buys: 0, sells: 0 } };
+    let gdStats = { pp: { trades: 0, buys: 0, sells: 0 }, pd: { trades: 0, buys: 0, sells: 0 } };
+    let pgSubscribed = new Set(), gdSubscribed = new Set();
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById(tab).classList.add('active');
+      document.querySelector(`[onclick="switchTab('${tab}')"]`).classList.add('active');
+    }
+
+    // ===== TAB 1: NEW TOKENS =====
+    function startNewTokens(provider) {
+      const wsUrl = provider === 'pp' ? 'wss://pumpportal.fun/api/data' : 'wss://pumpdev.io/ws';
+
+      document.getElementById('nt-stop').disabled = false;
+      ntStats[provider] = { tokens: 0 };
+
+      setDetail('nt', `${provider === 'pp' ? 'PumpPortal' : 'PumpDev'} listening for new tokens...`);
+      showEl('nt-msgs');
+
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+        addMsg('nt', `✓ Subscribed to new tokens via ${provider === 'pp' ? 'PumpPortal' : 'PumpDev'}`, 'info');
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.type === 'connected' || d.message?.includes('subscribed')) {
+            addMsg('nt', `✓ ${d.message || 'Connected'}`, 'info');
+            return;
+          }
+
+          if (d.name && !d.txType) {
+            ntStats[provider].tokens++;
+            addMsg('nt', `🆕 ${d.symbol}: ${d.name}`, 'token');
+            updateNTStats();
+          }
+        } catch (err) {
+          // Ignore
+        }
+      };
+
+      ws.onerror = () => addMsg('nt', `✗ ${provider} error`, 'info');
+      ws.onclose = () => {
+        if (provider === 'pp') ppWs = null; else pdWs = null;
+      };
+
+      if (provider === 'pp') ppWs = ws; else pdWs = ws;
+
+      setTimeout(() => {
+        if (provider === 'pp' && ppWs) { ppWs.close(); ppWs = null; }
+        if (provider === 'pd' && pdWs) { pdWs.close(); pdWs = null; }
+      }, 60000);
+    }
+
+    function updateNTStats() {
+      const html = `
+        <div class="stat">
+          <div class="lbl">PumpPortal</div>
+          <div class="val">${ntStats.pp.tokens}</div>
+        </div>
+        <div class="stat">
+          <div class="lbl">PumpDev</div>
+          <div class="val">${ntStats.pd.tokens}</div>
+        </div>
+      `;
+      document.getElementById('nt-stats').innerHTML = html;
+    }
+
+    // ===== TAB 2: PRE-GRAD TRADES =====
+    async function loadPreGradTokens(provider) {
+      const prefix = 'pg';
+      setDetail(prefix, `Loading trending pump.fun tokens for ${provider === 'pp' ? 'PumpPortal' : 'PumpDev'}...`);
+
+      try {
+        const res = await fetch('https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=trending&order=desc');
+        const data = await res.json();
+
+        const tokens = data
+          .filter(t => t.usd_market_cap > 10000 && t.reply_count > 5)
+          .slice(0, 6)
+          .map(t => ({
+            mint: t.mint,
+            symbol: t.symbol,
+            name: t.name,
+            mcap: (t.usd_market_cap / 1000).toFixed(0),
+            progress: t.bonding_curve_progress || 0,
+          }));
+
+        if (tokens.length === 0) throw new Error('No active tokens');
+
+        renderTokens('pg', tokens, provider);
+        connectWS('pg', provider);
+        setDetail(prefix, `Connected. Click tokens to subscribe to trades.`);
+
+      } catch (e) {
+        setDetail(prefix, `Error: ${e.message}`);
+      }
+    }
+
+    // ===== TAB 3: GRADUATED TRADES =====
+    async function loadGradTokens(provider) {
+      const prefix = 'gd';
+      setDetail(prefix, `Loading trending Raydium tokens for ${provider === 'pp' ? 'PumpPortal' : 'PumpDev'}...`);
+
+      try {
+        const res = await fetch('https://api.dexscreener.com/latest/dex/tokens?order=desc&orderBy=h24Trading');
+        const data = await res.json();
+
+        const tokens = data.pairs
+          .filter(p => p.chainId === 'solana' && p.volume?.h24 > 50000)
+          .slice(0, 6)
+          .map(p => ({
+            mint: p.baseToken.address,
+            symbol: p.baseToken.symbol,
+            volume: (p.volume?.h24 / 1000).toFixed(0),
+            change: (p.priceChange?.h24 || 0).toFixed(1),
+          }));
+
+        if (tokens.length === 0) throw new Error('No tokens found');
+
+        renderTokens('gd', tokens, provider);
+        connectWS('gd', provider);
+        setDetail(prefix, `Connected. Click tokens to subscribe to trades.`);
+
+      } catch (e) {
+        setDetail(prefix, `Error: ${e.message}`);
+      }
+    }
+
+    function renderTokens(tab, tokens, provider) {
+      const html = tokens.map((t, i) => `
+        <div class="token-btn" onclick="subscribeToken('${tab}', '${t.mint}', '${t.symbol}', '${provider}')">
+          <div class="symbol">${t.symbol}</div>
+          <div class="info">${t.mcap ? `$${t.mcap}k` : `$${t.volume}k`}</div>
+        </div>
+      `).join('');
+
+      document.getElementById(`${tab}-tokens-card`).style.display = 'block';
+      document.getElementById(`${tab}-tokens`).innerHTML = html;
+    }
+
+    function connectWS(tab, provider) {
+      const url = provider === 'pp' ? 'wss://pumpportal.fun/api/data' : 'wss://pumpdev.io/ws';
+      const ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        if (tab === 'pg') { ppWs = ws; } else { pdWs = ws; }
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.type === 'connected' || d.message) return;
+          handleTrade(tab, d);
+        } catch (err) {
+          // Ignore
+        }
+      };
+
+      ws.onerror = () => {};
+      ws.onclose = () => {
+        if (tab === 'pg') ppWs = null; else pdWs = null;
+      };
+    }
+
+    function subscribeToken(tab, mint, symbol, provider) {
+      const url = provider === 'pp' ? 'wss://pumpportal.fun/api/data' : 'wss://pumpdev.io/ws';
+      const ws = new WebSocket(url);
+      const subscribed = tab === 'pg' ? pgSubscribed : gdSubscribed;
+
+      if (subscribed.has(mint)) return;
+      subscribed.add(mint);
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ method: 'subscribeTokenTrade', keys: [mint] }));
+        if (tab === 'pg') ppWs = ws; else pdWs = ws;
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const d = JSON.parse(e.data);
+          if (d.type === 'connected' || d.message) return;
+          if (d.mint !== mint) return;
+
+          const isBuy = (d.txType === 'buy' || d.type === 'buy');
+          const stats = tab === 'pg' ? pgStats[provider] : gdStats[provider];
+
+          stats.trades++;
+          if (isBuy) stats.buys++; else stats.sells++;
+
+          const sol = d.solAmount ? (d.solAmount / 1e9).toFixed(3) : '?';
+          const msg = `${symbol} ${isBuy ? '📈 BUY' : '📉 SELL'} ${sol}Ⓢ`;
+          addMsg(tab, msg, isBuy ? 'buy' : 'sell');
+          updateStats(tab, provider);
+        } catch (err) {}
+      };
+
+      document.getElementById(`${tab}-trades-card`).style.display = 'block';
+      addMsg(tab, `✓ Subscribed to ${symbol}`, 'info');
+    }
+
+    function handleTrade(tab, data) {
+      const subscribed = tab === 'pg' ? pgSubscribed : gdSubscribed;
+      if (!data.mint || !subscribed.has(data.mint)) return;
+      if (data.solAmount === undefined) return;
+
+      // Handled in subscribeToken - this is for streaming
+    }
+
+    function updateStats(tab, provider) {
+      const stats = tab === 'pg' ? pgStats[provider] : gdStats[provider];
+      const el = document.getElementById(`${tab}-stats`);
+      if (el) {
+        el.innerHTML = `
+          <div class="stat">
+            <div class="val">${stats.trades}</div>
+            <div class="lbl">Trades</div>
+          </div>
+          <div class="stat">
+            <div class="val" style="color: #4ade80;">${stats.buys}</div>
+            <div class="lbl">Buys</div>
+          </div>
+          <div class="stat">
+            <div class="val" style="color: #f87171;">${stats.sells}</div>
+            <div class="lbl">Sells</div>
+          </div>
+        `;
+      }
+    }
+
+    function addMsg(tab, text, cls) {
+      const el = document.getElementById(`${tab}-msgs`);
+      if (el) {
+        const div = document.createElement('div');
+        div.className = `msg ${cls}`;
+        div.textContent = text;
+        el.appendChild(div);
+        el.scrollTop = el.scrollHeight;
+        while (el.children.length > 200) el.removeChild(el.firstChild);
+      }
+    }
+
+    function setDetail(tab, text) {
+      document.getElementById(`${tab}-detail`).textContent = text;
+    }
+
+    function showEl(id) {
+      document.getElementById(id).style.display = '';
+    }
+
+    // Button handlers
+    function startNewTokensPP() { startNewTokens('pp'); }
+    function startNewTokensPD() { startNewTokens('pd'); }
+    function stopNewTokens() { if (ppWs) ppWs.close(); if (pdWs) pdWs.close(); ppWs = null; pdWs = null; document.getElementById('nt-stop').disabled = true; }
+
+    function loadPreGradTokensPP() { loadPreGradTokens('pp'); document.getElementById('pg-stop').disabled = false; }
+    function loadPreGradTokensPD() { loadPreGradTokens('pd'); document.getElementById('pg-stop').disabled = false; }
+    function stopPreGrad() { if (ppWs) ppWs.close(); if (pdWs) pdWs.close(); ppWs = null; pdWs = null; document.getElementById('pg-stop').disabled = true; pgSubscribed.clear(); }
+
+    function loadGradTokensPP() { loadGradTokens('pp'); document.getElementById('gd-stop').disabled = false; }
+    function loadGradTokensPD() { loadGradTokens('pd'); document.getElementById('gd-stop').disabled = false; }
+    function stopGrad() { if (ppWs) ppWs.close(); if (pdWs) pdWs.close(); ppWs = null; pdWs = null; document.getElementById('gd-stop').disabled = true; gdSubscribed.clear(); }
+  </script>
+</body>
+</html>
