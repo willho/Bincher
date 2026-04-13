@@ -398,28 +398,28 @@
       while (logEl.children.length > 50) logEl.removeChild(logEl.firstChild);
     }
 
-    // Generate synthetic wallet addresses for capacity testing
-    function generateSyntheticWallets(count) {
-      const wallets = new Set();
-      while (wallets.size < count) {
-        // Generate random Solana-like addresses (base58, 44 chars)
-        const chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-        let addr = '';
-        for (let i = 0; i < 44; i++) {
-          addr += chars[Math.floor(Math.random() * chars.length)];
-        }
-        wallets.add(addr);
-      }
-      return Array.from(wallets);
-    }
-
-    // Subscribe to wallets in batches (respecting 5000 address limit per message)
-    function subscribeToWalletBatch(provider, wallets, batchSize = 100) {
+    // Subscribe to discovered wallets in batches (respecting 5000 address limit per message)
+    function subscribeToDiscoveredWallets(provider, walletCount = 1000) {
       const abbr = getAbbr(provider);
+
+      // Get top wallets by activity count
+      const topWallets = Array.from(metrics.activeSenders.entries())
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, walletCount)
+        .map(entry => entry[0]);
+
+      if (topWallets.length === 0) {
+        logWhale(`No discovered wallets yet. Wait for trades to be detected.`, 'warn');
+        return;
+      }
+
+      logWhale(`Found ${topWallets.length} discovered wallets, subscribing in batches...`, 'success');
+
+      const batchSize = 100;
       let subscribed = 0;
 
-      for (let i = 0; i < wallets.length; i += batchSize) {
-        const batch = wallets.slice(i, Math.min(i + batchSize, wallets.length));
+      for (let i = 0; i < topWallets.length; i += batchSize) {
+        const batch = topWallets.slice(i, Math.min(i + batchSize, topWallets.length));
         const subscriptionTime = Date.now();
 
         batch.forEach(wallet => {
@@ -433,8 +433,26 @@
             keys: batch
           }));
           subscribed += batch.length;
-          logWhale(`Subscribed to ${subscribed}/${wallets.length} wallets on ${abbr}`, 'success');
-        }, i * 50); // Stagger batch submissions to avoid overwhelming
+          logWhale(`Subscribed to ${subscribed}/${topWallets.length} discovered wallets on ${abbr}`, 'success');
+        }, i * 50); // Stagger batch submissions
+      }
+    }
+
+    // Monitor discovered wallets and subscribe when threshold reached
+    function checkAndSubscribeToWallets() {
+      if (testMode === 'wallets1k' && testActive) {
+        const discoveredCount = metrics.activeSenders.size;
+
+        if (discoveredCount >= targetWalletCount && subscribedWallets.size === 0) {
+          logWhale(`Discovered ${discoveredCount} wallets, starting subscriptions...`, 'success');
+          subscribeToDiscoveredWallets('pumpportal', targetWalletCount);
+
+          setTimeout(() => {
+            subscribeToDiscoveredWallets('pumpdev', targetWalletCount);
+          }, 2000);
+        } else if (discoveredCount < targetWalletCount) {
+          logWhale(`Waiting for wallets: ${discoveredCount}/${targetWalletCount}`, 'info');
+        }
       }
     }
 
@@ -745,12 +763,25 @@
       if (testMode === 'wallets1k') {
         document.getElementById('wallet-capacity-card').style.display = 'block';
 
+        // Show discovery progress first
+        const discoveredWallets = metrics.activeSenders.size;
+        const statusEl = document.getElementById('wallet-subscription-status');
+
+        if (subscribedWallets.size === 0) {
+          // Still discovering wallets
+          if (statusEl) statusEl.textContent = `Discovering wallets: ${discoveredWallets}/${targetWalletCount}`;
+        } else {
+          // Show subscription results
+          const walletsWithData = Array.from(metrics.subscriptionLags.values())
+            .filter(lag => lag.firstMessage !== null).length;
+          if (statusEl) statusEl.textContent = `${walletsWithData}/${subscribedWallets.size} subscribed wallets receiving data`;
+        }
+
         // Message latency metrics
         if (metrics.messageLatencies.length > 0) {
           const sorted = [...metrics.messageLatencies].sort((a, b) => a - b);
           const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
           const p95 = sorted[Math.floor(sorted.length * 0.95)];
-          const p99 = sorted[Math.floor(sorted.length * 0.99)];
           const ppLatency = document.getElementById('pp-latency');
           if (ppLatency) ppLatency.textContent = avg.toFixed(1) + 'ms (p95: ' + (p95 || 0).toFixed(1) + 'ms)';
         }
@@ -765,12 +796,6 @@
           const pdLatency = document.getElementById('pd-latency');
           if (pdLatency) pdLatency.textContent = avgLag.toFixed(0) + 'ms avg response time';
         }
-
-        // Wallet subscription status
-        const walletsWithData = Array.from(metrics.subscriptionLags.values())
-          .filter(lag => lag.firstMessage !== null).length;
-        const walletStatus = document.getElementById('wallet-subscription-status');
-        if (walletStatus) walletStatus.textContent = walletsWithData + '/' + targetWalletCount + ' wallets receiving data';
       } else {
         document.getElementById('wallet-capacity-card').style.display = 'none';
       }
@@ -801,9 +826,14 @@
         document.getElementById('graduated-comparison').style.display = 'none';
       }
 
-      // Periodically subscribe to top wallets
-      if (testTime % 5000 < 1000) {
+      // Periodically subscribe to top wallets (for non-wallets1k modes)
+      if (testMode !== 'wallets1k' && testTime % 5000 < 1000) {
         subscribeToTopWallets();
+      }
+
+      // Check if we should subscribe to discovered wallets (for wallets1k mode)
+      if (testMode === 'wallets1k') {
+        checkAndSubscribeToWallets();
       }
 
       setTimeout(updateStats, 1000);
@@ -840,21 +870,16 @@
 
       // Handle 1k wallet test
       if (testMode === 'wallets1k') {
+        targetWalletCount = 1000;
+        logWhale(`Wallet capacity test: waiting to discover ${targetWalletCount} wallets from trade stream...`, 'info');
         connect('pumpportal');
         connect('pumpdev');
 
-        setTimeout(() => {
-          targetWalletCount = 1000;
-          const wallets = generateSyntheticWallets(1000);
-          logWhale(`Generated 1000 synthetic wallets for capacity testing`, 'success');
-
-          // Subscribe on both providers
-          subscribeToWalletBatch('pumpportal', wallets, 100);
-
-          setTimeout(() => {
-            subscribeToWalletBatch('pumpdev', wallets, 100);
-          }, 2000);
-        }, 1500);
+        // Subscribe to all tokens to discover wallets from trades
+        fetchRealTokens().then(() => {
+          subscribeToRealTokens();
+          logWhale(`Subscribed to trending tokens to discover wallets`, 'success');
+        });
       } else if (testMode !== 'newTokensOnly' && testMode !== 'graduated') {
         // Fetch tokens for all other modes
         fetchRealTokens().then(() => {
