@@ -150,6 +150,20 @@
       <button onclick="clearAllLogs()">Clear Logs</button>
     </div>
 
+    <div class="card" style="margin: 0 20px 20px 20px;">
+      <h2>🧪 Test Mode</h2>
+      <div class="controls">
+        <button onclick="setTestMode('newTokensOnly')">New Tokens Only</button>
+        <button onclick="setTestMode('tradesOnly')">Trades Only</button>
+        <button onclick="setTestMode('both')">Both (Same Conn)</button>
+        <button onclick="setTestMode('whales')">🐳 Whales</button>
+        <button onclick="setTestMode('stress')">💪 Stress</button>
+      </div>
+      <div style="padding: 8px; background: #0a0a0a; border-radius: 4px; font-size: 9px; color: #888; margin-top: 8px;">
+        <strong style="color: #e5e5e5;">Test Goal:</strong> Can subscribeNewToken + subscribeTokenTrade coexist on same connection?
+      </div>
+    </div>
+
     <div class="container">
       <!-- PumpPortal Card -->
       <div class="card">
@@ -282,6 +296,7 @@
     // State
     let testActive = false;
     let testStartTime = 0;
+    let testMode = 'both'; // 'newTokensOnly', 'tradesOnly', 'both', 'whales', 'stress'
     const providers = {
       pumpportal: { url: 'wss://pumpportal.fun/api/data', ws: null, stats: { messages: 0, newTokens: 0, startTime: 0, errors: 0, subscriptionMsgs: 0 } },
       pumpdev: { url: 'wss://pumpdev.io/ws', ws: null, stats: { messages: 0, trades: 0, startTime: 0, errors: 0, subscriptionMsgs: 0 } }
@@ -377,9 +392,17 @@
           updateStatus(provider, 'connected');
           metrics.activeConnections++;
           log(abbr, 'Connected', 'success');
+
           if (provider === 'pumpportal') {
-            ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
-            log(abbr, 'Subscribed to subscribeNewToken', 'info');
+            // PumpPortal subscriptions based on test mode
+            if (testMode === 'newTokensOnly' || testMode === 'both' || testMode === 'stress') {
+              ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+              log(abbr, 'Subscribed to subscribeNewToken', 'info');
+            }
+            if (testMode === 'tradesOnly' || testMode === 'both') {
+              // Will subscribe to specific tokens after they're fetched
+              log(abbr, 'Ready to subscribe to tokenTrade', 'info');
+            }
           }
         };
 
@@ -507,8 +530,18 @@
     function subscribeToRealTokens() {
       if (metrics.realTokens.size === 0) return;
       const tokens = Array.from(metrics.realTokens).slice(0, 150);
-      sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: tokens }));
-      log('pd', `Subscribed to ${tokens.length} real tokens for trades`, 'success');
+
+      // Subscribe based on test mode
+      if (testMode === 'tradesOnly' || testMode === 'both' || testMode === 'stress') {
+        sendWhenReady('pumpdev', JSON.stringify({ method: 'subscribeTokenTrade', keys: tokens }));
+        log('pd', `Subscribed to ${tokens.length} real tokens for trades`, 'success');
+      }
+
+      if (testMode === 'both' || testMode === 'tradesOnly') {
+        // Also try subscribing on PumpPortal to test coexistence
+        sendWhenReady('pumpportal', JSON.stringify({ method: 'subscribeTokenTrade', keys: tokens }));
+        log('pp', `Subscribed to ${tokens.length} tokens for trades (TESTING COEXISTENCE)`, 'warn');
+      }
     }
 
     function updateStats() {
@@ -584,6 +617,14 @@
       setTimeout(updateStats, 1000);
     }
 
+    // Test mode control
+    function setTestMode(mode) {
+      testMode = mode;
+      document.querySelectorAll('.card > .controls button').forEach(btn => btn.style.opacity = '0.5');
+      event.target.style.opacity = '1';
+      log('pp', `Test mode set to: ${mode}`, 'info');
+    }
+
     // Test control
     function startTest() {
       testActive = true;
@@ -596,12 +637,26 @@
       metrics.subscriptionHistory = [];
       document.getElementById('stop-btn').disabled = false;
 
-      fetchRealTokens().then(() => {
-        subscribeToRealTokens();
-      });
+      log('pp', `Starting test mode: ${testMode}`, 'info');
 
-      connect('pumpportal');
-      connect('pumpdev');
+      // Fetch tokens for all modes except newTokensOnly
+      if (testMode !== 'newTokensOnly') {
+        fetchRealTokens().then(() => {
+          subscribeToRealTokens();
+        });
+      }
+
+      // Connect based on test mode
+      if (testMode === 'newTokensOnly') {
+        connect('pumpportal');
+      } else if (testMode === 'tradesOnly') {
+        connect('pumpdev');
+      } else {
+        // both, whales, stress - connect to both
+        connect('pumpportal');
+        connect('pumpdev');
+      }
+
       updateStats();
     }
 
