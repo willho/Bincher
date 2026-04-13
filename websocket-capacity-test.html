@@ -471,6 +471,7 @@
 
     function connect(provider) {
       const config = providers[provider];
+      const abbr = getAbbr(provider);
       if (config.ws) config.ws.close();
 
       try {
@@ -480,10 +481,10 @@
 
         ws.onopen = () => {
           updateStatus(provider, 'connected');
-          log(provider, 'Connected', 'success');
+          log(abbr, 'Connected', 'success');
           if (provider === 'pumpportal') {
             ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
-            log(provider, 'Subscribed to newToken', 'info');
+            log(abbr, 'Subscribed to newToken', 'info');
           }
         };
 
@@ -505,21 +506,25 @@
 
         ws.onerror = () => {
           updateStatus(provider, 'disconnected');
-          log(provider, 'Error occurred', 'error');
+          log(abbr, 'Error occurred', 'error');
         };
 
         ws.onclose = () => {
           updateStatus(provider, 'disconnected');
-          log(provider, 'Disconnected', 'error');
+          log(abbr, 'Disconnected', 'error');
         };
       } catch (error) {
-        log(provider, `Connection failed: ${error.message}`, 'error');
+        log(abbr, `Connection failed: ${error.message}`, 'error');
         updateStatus(provider, 'disconnected');
       }
     }
 
+    function getAbbr(provider) {
+      return provider === 'pumpportal' ? 'pp' : 'pd';
+    }
+
     function updateStatus(provider, status) {
-      const abbr = provider.substring(0, 2);
+      const abbr = getAbbr(provider);
       document.getElementById(`${abbr}-status`).className = `status-badge ${status}`;
       document.getElementById(`${abbr}-status`).textContent = status.toUpperCase();
     }
@@ -528,7 +533,7 @@
       if (!testActive) return;
 
       for (const [provider, config] of Object.entries(providers)) {
-        const abbr = provider.substring(0, 2);
+        const abbr = getAbbr(provider);
         const stats = config.stats;
         const uptime = Date.now() - stats.startTime;
         const mps = uptime > 0 ? (stats.messages / uptime) * 1000 : 0;
