@@ -9,11 +9,12 @@ import {
 } from "@shared/schema";
 import { fetchTokenWithFallback, getTokenData } from "./data-pool";
 import { openPaperPosition } from "./paper-trading";
-import {
-  discoverOutcomeClusters,
-  matchTokenToClusters,
-  getCreatorHistoryPumpPortal,
-} from "./retrolearner-v2";
+// TODO: These exports need to be implemented in retrolearner-v2.ts
+// import {
+//   discoverOutcomeClusters,
+//   matchTokenToClusters,
+//   getCreatorHistoryPumpPortal,
+// } from "./retrolearner-v2";
 import { getExitStrategy } from "./exit-strategies";
 
 // =====================
