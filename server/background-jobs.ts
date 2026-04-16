@@ -4,6 +4,7 @@ import { discoverSocialSourcesFromWinners } from "./social-discovery";
 import { runDailyAggregation, runWeeklyReview } from "./timeframe-analysis";
 import { runBestTheoryValidationCycle } from "./paper-experiments";
 import { runFundingRelationshipDetection } from "./funding-relationship-detector";
+import { mergeFundingLinksIntoClusters } from "./cluster-detection";
 import { db } from "./db";
 import { monitoredWallets, userTokenViews } from "@shared/schema";
 import { eq, and, lt } from "drizzle-orm";
@@ -156,6 +157,7 @@ export async function runDailyJobs(): Promise<{
   dailyAggregation: any;
   socialDiscovery: any;
   fundingRelationshipDetection: any;
+  fundingClusterMerge?: any;
 }> {
   console.log("[BackgroundJobs] Starting daily jobs...");
 
@@ -165,10 +167,14 @@ export async function runDailyJobs(): Promise<{
     runJobWithTracking("fundingRelationshipDetection", runFundingRelationshipDetection),
   ]);
 
+  // After funding detection, merge verified links into clusters
+  const mergeResult = await runJobWithTracking("fundingClusterMerge", mergeFundingLinksIntoClusters);
+
   return {
     dailyAggregation: dailyResult,
     socialDiscovery: socialResult,
     fundingRelationshipDetection: fundingResult,
+    fundingClusterMerge: mergeResult,
   };
 }
 
@@ -277,6 +283,8 @@ export async function runJobManually(jobName: string): Promise<any> {
       return runJobWithTracking("theoryValidation", runBestTheoryValidationCycle);
     case "fundingRelationshipDetection":
       return runJobWithTracking("fundingRelationshipDetection", runFundingRelationshipDetection);
+    case "fundingClusterMerge":
+      return runJobWithTracking("fundingClusterMerge", mergeFundingLinksIntoClusters);
     case "viewCleanup":
       return runJobWithTracking("viewCleanup", runViewCleanup);
     default:

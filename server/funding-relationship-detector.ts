@@ -306,6 +306,48 @@ export async function getVerifiedFundingLinks(): Promise<(typeof walletFundingLi
 }
 
 /**
+ * Check if a wallet has a verified funding link and return funder info for signal inheritance
+ */
+export async function getInheritedSignalFromFundingLink(
+  recipientWallet: string
+): Promise<{
+  funderWallet: string;
+  funderSuccessRate: number;
+  linkId: number;
+} | null> {
+  try {
+    const link = await db
+      .select()
+      .from(walletFundingLinks)
+      .where(
+        and(
+          eq(walletFundingLinks.recipientWallet, recipientWallet),
+          eq(walletFundingLinks.isVerified, true),
+          eq(walletFundingLinks.recipientStatus, "position_wallet")
+        )
+      )
+      .limit(1);
+
+    if (link.length === 0) {
+      return null;
+    }
+
+    const fundingLink = link[0];
+    return {
+      funderWallet: fundingLink.funderWallet,
+      funderSuccessRate: fundingLink.funderSuccessRate || 0.6,
+      linkId: fundingLink.id,
+    };
+  } catch (error) {
+    console.error(
+      `[FundingDetector] Error checking inherited signal for ${recipientWallet}:`,
+      error
+    );
+    return null;
+  }
+}
+
+/**
  * Main daily job - detect and classify funding relationships
  */
 export async function runFundingRelationshipDetection(): Promise<{

@@ -101,10 +101,44 @@ export class DatabaseStorage implements IStorage {
       notificationSent: false,
       toTokenMetadata: swap.toTokenMetadata ?? null,
     }).returning();
-    
+
     const count = await db.select().from(swaps);
     await this.updateMonitoringStatus({ totalSwapsDetected: count.length });
-    
+
+    // Check if this swap is from a linked wallet and emit inherited signal
+    // Use dynamic import to avoid circular dependencies
+    try {
+      const { getInheritedSignalFromFundingLink } = await import("./funding-relationship-detector");
+      const { emit } = await import("./discovery-event-bus");
+
+      const inheritedSignal = await getInheritedSignalFromFundingLink(swap.source);
+      if (inheritedSignal) {
+        await emit({
+          type: "signal_buy",
+          tokenMint: swap.toToken,
+          tokenSymbol: swap.toTokenSymbol || undefined,
+          source: `funding_link:${inheritedSignal.funderWallet}`,
+          data: {
+            sourceType: "funding_link_inherited",
+            funderWallet: inheritedSignal.funderWallet,
+            linkedWallet: swap.source,
+            fundingLinkId: inheritedSignal.linkId,
+            funderSuccessRate: inheritedSignal.funderSuccessRate,
+            swapSignature: swap.signature,
+          },
+          timestamp: swap.timestamp,
+          urgency: Math.round(inheritedSignal.funderSuccessRate * 100), // Scale to 0-100
+        });
+
+        console.log(
+          `[Storage] Emitted inherited signal for ${swap.source} (funded by ${inheritedSignal.funderWallet}, success rate: ${(inheritedSignal.funderSuccessRate * 100).toFixed(0)}%) trading ${swap.toTokenSymbol || swap.toToken.slice(0, 8)}`
+        );
+      }
+    } catch (error) {
+      console.error("[Storage] Error checking inherited funding signal:", error);
+      // Don't fail swap insertion if signal emission fails
+    }
+
     return {
       id: String(row.id),
       signature: row.signature,

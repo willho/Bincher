@@ -1029,3 +1029,65 @@ export function getWalletBehaviorCache(): Map<string, WalletBehavior> {
 export function clearWalletBehaviorCache(): void {
   WALLET_BEHAVIOR_CACHE.clear();
 }
+
+/**
+ * Merge verified funding links into wallet clusters
+ * Called daily after funding relationship detection runs
+ */
+export async function mergeFundingLinksIntoClusters(): Promise<{ merged: number }> {
+  try {
+    const { getVerifiedFundingLinks } = await import("./funding-relationship-detector");
+    const { walletClusterMembers } = await import("@shared/schema");
+
+    const verifiedLinks = await getVerifiedFundingLinks();
+    let mergedCount = 0;
+
+    for (const link of verifiedLinks) {
+      try {
+        // Get or create funder's cluster
+        const funderCluster = await getClusterForWallet(link.funderWallet);
+
+        // Check if recipient is already in cluster
+        if (!funderCluster.members.includes(link.recipientWallet)) {
+          // Add recipient to cluster
+          funderCluster.members.push(link.recipientWallet);
+          funderCluster.detectedVia = "funding"; // Mark as funding-detected
+          funderCluster.lastSeen = Math.floor(Date.now() / 1000);
+
+          // Update cluster success rate if available
+          if (link.funderSuccessRate) {
+            funderCluster.successRate = link.funderSuccessRate;
+          }
+
+          // Persist updated cluster
+          await persistClusterToDb(funderCluster);
+
+          // Record how this member joined (for provenance)
+          await db
+            .update(walletClusterMembers)
+            .set({
+              joinedVia: "funding_direct",
+              fundingLinkId: link.id,
+            })
+            .where(eq(walletClusterMembers.walletAddress, link.recipientWallet));
+
+          mergedCount++;
+          console.log(
+            `[ClusterMerge] Merged ${link.recipientWallet} into cluster (funded by ${link.funderWallet})`
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[ClusterMerge] Failed to merge link ${link.id}:`,
+          error
+        );
+      }
+    }
+
+    console.log(`[ClusterMerge] Merged ${mergedCount} funding-linked wallets into clusters`);
+    return { merged: mergedCount };
+  } catch (error) {
+    console.error("[ClusterMerge] Error merging funding links:", error);
+    throw error;
+  }
+}
