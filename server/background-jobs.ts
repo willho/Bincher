@@ -3,6 +3,7 @@ import { runWhaleReputationScan } from "./whale-reputation";
 import { discoverSocialSourcesFromWinners } from "./social-discovery";
 import { runDailyAggregation, runWeeklyReview } from "./timeframe-analysis";
 import { runBestTheoryValidationCycle } from "./paper-experiments";
+import { runFundingRelationshipDetection } from "./funding-relationship-detector";
 import { db } from "./db";
 import { monitoredWallets, userTokenViews } from "@shared/schema";
 import { eq, and, lt } from "drizzle-orm";
@@ -26,6 +27,7 @@ const JOB_INTERVALS = {
   weeklyReview: 7 * 24 * 3600 * 1000,
   theoryValidation: 8 * 3600 * 1000,
   vectorAggregation: 8 * 3600 * 1000,
+  fundingRelationshipDetection: 24 * 3600 * 1000, // Daily
   viewCleanup: 10 * 60 * 1000, // 10 minutes
 };
 
@@ -153,17 +155,20 @@ export async function runHourlyJobs(): Promise<{
 export async function runDailyJobs(): Promise<{
   dailyAggregation: any;
   socialDiscovery: any;
+  fundingRelationshipDetection: any;
 }> {
   console.log("[BackgroundJobs] Starting daily jobs...");
-  
-  const [dailyResult, socialResult] = await Promise.all([
+
+  const [dailyResult, socialResult, fundingResult] = await Promise.all([
     runJobWithTracking("dailyAggregation", runDailyAggregation),
     runJobWithTracking("socialDiscovery", () => discoverSocialSourcesFromWinners(72, 20)),
+    runJobWithTracking("fundingRelationshipDetection", runFundingRelationshipDetection),
   ]);
-  
+
   return {
     dailyAggregation: dailyResult,
     socialDiscovery: socialResult,
+    fundingRelationshipDetection: fundingResult,
   };
 }
 
@@ -270,6 +275,8 @@ export async function runJobManually(jobName: string): Promise<any> {
       return runJobWithTracking("weeklyReview", runWeeklyReview);
     case "theoryValidation":
       return runJobWithTracking("theoryValidation", runBestTheoryValidationCycle);
+    case "fundingRelationshipDetection":
+      return runJobWithTracking("fundingRelationshipDetection", runFundingRelationshipDetection);
     case "viewCleanup":
       return runJobWithTracking("viewCleanup", runViewCleanup);
     default:

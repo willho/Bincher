@@ -4149,3 +4149,47 @@ export const exitStrategyLearnings = pgTable("exit_strategy_learnings", {
 export const insertExitStrategyLearningSchema = createInsertSchema(exitStrategyLearnings).omit({ id: true, createdAt: true });
 export type ExitStrategyLearning = typeof exitStrategyLearnings.$inferSelect;
 export type InsertExitStrategyLearning = z.infer<typeof insertExitStrategyLearningSchema>;
+
+// Wallet funding relationships - tracks SOL transfers to fresh wallets
+export const walletFundingLinks = pgTable("wallet_funding_links", {
+  id: serial("id").primaryKey(),
+
+  // Funding parties
+  funderWallet: text("funder_wallet").notNull(), // Top-ranked whale
+  recipientWallet: text("recipient_wallet").notNull(), // Fresh address receiving SOL
+
+  // Transfer details
+  solAmount: real("sol_amount").notNull(), // SOL transferred
+  transferredAt: integer("transferred_at").notNull(), // When SOL was sent
+  discoveredAt: integer("discovered_at").notNull(), // When we detected it
+
+  // Recipient state machine
+  recipientStatus: text("recipient_status").notNull().default("pending"), // pending | exchange_deposit | position_wallet | obfuscation_chain
+  recipientFirstActionAt: integer("recipient_first_action_at"), // When recipient made first trade
+  recipientFirstActionType: text("recipient_first_action_type"), // sweep | token_buy | sol_transfer
+
+  // Obfuscation chain tracking (max 1 hop)
+  nextHopWallet: text("next_hop_wallet"), // If recipient transferred SOL to another fresh wallet
+  chainDepth: integer("chain_depth").notNull().default(0), // 0 = direct, 1 = one obfuscation hop
+
+  // Signal inheritance
+  signalStrength: real("signal_strength").notNull().default(1.0), // Multiplier for inherited signal
+  funderSuccessRate: real("funder_success_rate"), // Snapshot of funder's success rate at time of funding
+
+  // Verification and tracking
+  isVerified: boolean("is_verified").notNull().default(false), // True when recipient has taken action
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => ({
+  // Unique constraint on funding transfer
+  fundingUnique: unique("idx_funding_unique").on(table.funderWallet, table.recipientWallet, table.transferredAt),
+  // Indexes for fast queries
+  funderIdx: index("idx_funding_funder").on(table.funderWallet),
+  recipientIdx: index("idx_funding_recipient").on(table.recipientWallet),
+  statusIdx: index("idx_funding_status").on(table.recipientStatus),
+  verifiedIdx: index("idx_funding_verified").on(table.isVerified),
+}));
+
+export const insertWalletFundingLinksSchema = createInsertSchema(walletFundingLinks).omit({ id: true, createdAt: true, updatedAt: true });
+export type WalletFundingLink = typeof walletFundingLinks.$inferSelect;
+export type InsertWalletFundingLink = z.infer<typeof insertWalletFundingLinksSchema>;
