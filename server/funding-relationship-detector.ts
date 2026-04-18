@@ -2,6 +2,7 @@ import { db } from "./db";
 import { eq, and, gte, lte, inArray, desc, asc } from "drizzle-orm";
 import { swaps, walletFundingLinks, monitoredWallets } from "@shared/schema";
 import { getTopFamiliarWhales } from "./familiar-whales";
+import { getSignaturesForAddress } from "./rpc-selector";
 import { checkApiQuota } from "./api-budget-enforcer";
 
 // Constants
