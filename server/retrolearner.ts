@@ -12,6 +12,8 @@ import {
   InsertTokenFingerprint,
 } from "@shared/schema";
 import axios from "axios";
+import { trainANNModel } from "./token-success-ann";
+import { detectSlowGrowerPatterns, filterHighConfidencePatterns, storeSlowGrowerPatterns } from "./slow-grower-detector";
 
 // =====================
 // TYPE DEFINITIONS
@@ -60,8 +62,8 @@ interface LatencyStats {
 // =====================
 
 const RETROLEARNER_CONFIG = {
-  // Run 2x per day
-  pollIntervalMs: 12 * 60 * 60 * 1000, // 12 hours
+  // Run every 4 hours (Solana moves fast)
+  pollIntervalMs: 4 * 60 * 60 * 1000, // 4 hours
   // Learnable baselines - system adjusts these per cluster
   minEarlyBuyerWinRate: 0.60, // Token "performed well" if 60%+ early buyers profited
   minMedianMultiplier: 2.0, // And median multiplier >= 2x
@@ -470,12 +472,7 @@ async function processTokenForLearning(perfData: TokenPerformanceData): Promise<
     // In full implementation, would separate by graduation status from graduationEvents table
     await learnFingerprintFromToken(mint, perfData, simulations, "postgrad_raydium");
 
-    // Mark token as analyzed
-    const now = Math.floor(Date.now() / 1000);
-    await db
-      .update(tokenDataPool)
-      .set({ lastAnalyzedAt: now })
-      .where(eq(tokenDataPool.tokenMint, mint));
+    // Token analysis complete (no explicit mark needed, timestamps tracked in analysis tables)
   } catch (error) {
     console.error(`[Retrolearner] Error processing token ${mint.slice(0, 8)}:`, error);
   }
@@ -531,10 +528,28 @@ async function performRetrolearningCycle(): Promise<void> {
   try {
     console.log("[Retrolearner] Starting retrolearning cycle...");
 
-    // Sample Jupiter latency once per cycle
+    // Step 1: Train ANN on historical token outcomes
+    console.log("[Retrolearner] Training Token Success ANN...");
+    const annMetrics = await trainANNModel(100); // Require 100+ tokens
+    if (annMetrics.samplesUsed > 0) {
+      console.log(`[Retrolearner] ANN trained: ${annMetrics.samplesUsed} samples, accuracy=${annMetrics.accuracy.toFixed(3)}`);
+    } else {
+      console.warn("[Retrolearner] Insufficient data for ANN training");
+    }
+
+    // Step 2: Detect slow-grower patterns (wallet wins on missed tokens)
+    console.log("[Retrolearner] Detecting slow-grower patterns...");
+    const allPatterns = await detectSlowGrowerPatterns();
+    const highConfidencePatterns = filterHighConfidencePatterns(allPatterns);
+    if (highConfidencePatterns.length > 0) {
+      await storeSlowGrowerPatterns(highConfidencePatterns);
+      console.log(`[Retrolearner] Found ${highConfidencePatterns.length} high-confidence slow-grower patterns`);
+    }
+
+    // Step 3: Sample Jupiter latency once per cycle
     await sampleJupiterLatency();
 
-    // Identify well-performing tokens
+    // Step 4: Identify well-performing tokens
     const wellPerformingTokens = await findWellPerformingTokens();
 
     if (wellPerformingTokens.length === 0) {
@@ -543,7 +558,7 @@ async function performRetrolearningCycle(): Promise<void> {
       return;
     }
 
-    // Process each token for learning
+    // Step 5: Process each token for learning
     for (const token of wellPerformingTokens) {
       await processTokenForLearning(token);
     }
