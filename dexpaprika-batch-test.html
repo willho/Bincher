@@ -275,61 +275,50 @@
             }
         }
 
-        // Subscribe to PumpPortal newtoken stream and collect mints with volume
-        let pumpPortalWs = null;
-        async function collectMintsFromStream(timeoutMs = 30000) {
+        // Collect mints from DexScreener via CORS proxy (HTTP-based, works from file://)
+        async function collectMintsViaCorsProxy(proxyUrl) {
             return new Promise((resolve) => {
                 const timeout = setTimeout(() => {
-                    log(`⏱️ Mint collection timeout (${timeoutMs}ms). Starting test with ${mintsBuffer.length} mints.`, 'warning');
-                    if (pumpPortalWs) pumpPortalWs.close();
+                    log(`⏱️ Mint collection timeout. Starting test with ${mintsBuffer.length} mints.`, 'warning');
                     resolve();
-                }, timeoutMs);
+                }, 15000);
 
                 try {
-                    pumpPortalWs = new WebSocket(PUMPPORTAL_PROXY);
+                    log('📡 Fetching recent tokens via CORS proxy...', 'info');
+                    updateStatus('pumpPortalStatus', 'pending', 'pumpPortalText', 'Collecting...');
 
-                    pumpPortalWs.onopen = () => {
-                        log('📡 Connected to PumpPortal, listening for new tokens...', 'info');
-                        updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Collecting...');
+                    // Use DexScreener trending API proxied through CORS service
+                    const dexscreenerUrl = 'https://api.dexscreener.com/latest/dex/tokens';
+                    const proxiedUrl = `${proxyUrl}${dexscreenerUrl}`;
 
-                        // Subscribe to newtoken events
-                        pumpPortalWs.send(JSON.stringify({
-                            method: 'subscribeNewToken'
-                        }));
-                    };
+                    fetch(proxiedUrl, {
+                        method: 'GET',
+                        headers: { 'Accept': 'application/json' }
+                    })
+                        .then(r => r.json())
+                        .then(data => {
+                            if (data.tokens && Array.isArray(data.tokens)) {
+                                const solanaTokens = data.tokens
+                                    .filter(t => t.chainId === 'solana' && t.baseToken && t.baseToken.address)
+                                    .slice(0, 100)
+                                    .map(t => t.baseToken.address);
 
-                    pumpPortalWs.onmessage = (event) => {
-                        try {
-                            const data = JSON.parse(event.data);
-
-                            // Check if this is a new token event with volume activity
-                            if (data.mint && typeof data.mint === 'string') {
-                                mintsBuffer.push(data.mint);
-                                log(`✓ Collected mint: ${data.mint.slice(0, 8)}...`, 'success');
-
-                                // Stop when we have enough mints
-                                if (mintsBuffer.length >= 500) {
-                                    clearTimeout(timeout);
-                                    log(`✓ Collected ${mintsBuffer.length} mints from PumpPortal stream`, 'success');
-                                    if (pumpPortalWs) pumpPortalWs.close();
-                                    resolve();
-                                }
+                                mintsBuffer = solanaTokens;
+                                log(`✓ Collected ${solanaTokens.length} trending Solana tokens from DexScreener`, 'success');
+                                updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
+                            } else {
+                                log('⚠️ No tokens in DexScreener response', 'warning');
                             }
-                        } catch (e) {
-                            // Ignore parse errors, continue collecting
-                        }
-                    };
-
-                    pumpPortalWs.onerror = (error) => {
-                        log(`⚠️ WebSocket error: ${error.message || 'Connection failed'}`, 'warning');
-                    };
-
-                    pumpPortalWs.onclose = () => {
-                        clearTimeout(timeout);
-                        resolve();
-                    };
+                            clearTimeout(timeout);
+                            resolve();
+                        })
+                        .catch(err => {
+                            log(`⚠️ Failed to fetch via proxy: ${err.message}`, 'warning');
+                            clearTimeout(timeout);
+                            resolve();
+                        });
                 } catch (error) {
-                    log(`Error connecting to PumpPortal: ${error.message}`, 'error');
+                    log(`Error: ${error.message}`, 'error');
                     clearTimeout(timeout);
                     resolve();
                 }
@@ -363,20 +352,23 @@
                 log(`✓ Using ${manualMints.length} manually provided mints`, 'success');
                 mintsBuffer = manualMints;
             } else {
-                // Auto-collect mints from PumpPortal newtoken stream
-                log('Subscribing to PumpPortal newtoken stream...', 'info');
-                updateStatus('pumpPortalStatus', 'pending', 'pumpPortalText', 'Collecting...');
-
-                await collectMintsFromStream(30000); // 30 second timeout
-
-                if (mintsBuffer.length === 0) {
-                    log('⚠️ No mints collected from stream. Please enter mints manually or check connection.', 'warning');
-                    updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'No data');
+                // Auto-collect mints via CORS proxy from DexScreener
+                const proxyUrl = document.getElementById('proxyUrl').value.trim();
+                if (!proxyUrl) {
+                    log('⚠️ No proxy configured and no manual mints provided.', 'warning');
+                    updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'No proxy');
                     testRunning = false;
                     return;
                 }
 
-                updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
+                await collectMintsViaCorsProxy(proxyUrl);
+
+                if (mintsBuffer.length === 0) {
+                    log('⚠️ No mints collected. Check proxy or enter mints manually.', 'warning');
+                    updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'No data');
+                    testRunning = false;
+                    return;
+                }
             }
 
             log(`Starting batch tests with ${mintsBuffer.length} collected mints`, 'info');
@@ -401,9 +393,6 @@
 
         function stopTest() {
             testRunning = false;
-            if (pumpPortalWs) {
-                pumpPortalWs.close();
-            }
             log('Test stopped by user', 'warning');
         }
 
