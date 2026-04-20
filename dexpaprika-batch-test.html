@@ -108,12 +108,11 @@
         </div>
 
         <div class="panel">
-            <h3>Data Source Status</h3>
-            <p>
-                <span class="status-indicator" id="pumpPortalStatus"></span>
-                <strong>Pumpdev API:</strong> <span id="pumpPortalText">Ready</span>
-            </p>
-            <p style="font-size: 11px; color: #8b949e; margin: 5px 0;">Fetches recent pump.fun token launches for testing</p>
+            <h3>Testing Instructions</h3>
+            <p style="font-size: 12px; color: #79c0ff;">1️⃣ Copy token mints from pump.fun</p>
+            <p style="font-size: 12px; color: #79c0ff;">2️⃣ Paste into input field (comma-separated)</p>
+            <p style="font-size: 12px; color: #79c0ff;">3️⃣ Click "Start Test"</p>
+            <p style="font-size: 11px; color: #8b949e; margin-top: 10px;">DexPaprika batches: 2 → 10 → 20 → 50 → 100 → 200 → 500</p>
         </div>
 
         <div class="panel">
@@ -157,8 +156,6 @@
     <script>
         // Configuration
         const BATCH_SIZES = [2, 10, 20, 50, 100, 200, 500];
-        // pumpdev API for fetching new token launches
-        const PUMPDEV_API = 'https://pumpdev-api.vercel.app/api/new-tokens';
 
         // State
         let testRunning = false;
@@ -192,51 +189,6 @@
             updateMetrics();
         }
 
-        // Fetch new tokens from pumpdev API
-        async function fetchNewTokensFromPumpdev() {
-            try {
-                log('Fetching new tokens from pumpdev...', 'info');
-                updateStatus('pumpPortalStatus', 'pending', 'pumpPortalText', 'Fetching...');
-
-                const response = await fetch(PUMPDEV_API, {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' }
-                });
-
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-
-                const data = await response.json();
-
-                // Handle different response formats from pumpdev
-                let tokens = [];
-                if (Array.isArray(data)) {
-                    tokens = data; // Direct array of tokens
-                } else if (data.tokens && Array.isArray(data.tokens)) {
-                    tokens = data.tokens; // {tokens: [...]}
-                } else if (data.data && Array.isArray(data.data)) {
-                    tokens = data.data; // {data: [...]}
-                } else {
-                    log('Unexpected response format: ' + JSON.stringify(data).substring(0, 50), 'warning');
-                    return [];
-                }
-
-                // Extract mint addresses
-                const mints = tokens
-                    .map(t => t.mint || t.address || t.tokenAddress || t.id)
-                    .filter(m => m && typeof m === 'string' && m.length > 20);
-
-                log(`✓ Fetched ${mints.length} new tokens from pumpdev`, 'success');
-                updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
-
-                return mints;
-            } catch (error) {
-                log(`Error fetching from pumpdev: ${error.message}`, 'error');
-                updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'Error');
-                return [];
-            }
-        }
 
         // DexPaprika batch test
         async function testBatchSize(batchSize) {
@@ -337,17 +289,9 @@
                 log(`✓ Using ${manualMints.length} manually provided mints`, 'success');
                 mintsBuffer = manualMints;
             } else {
-                // Fetch new tokens from pumpdev API
-                log('Attempting to fetch new tokens from pumpdev...', 'info');
-                const fetchedMints = await fetchNewTokensFromPumpdev();
-
-                if (fetchedMints.length === 0) {
-                    log('⚠️ No tokens fetched from pumpdev. Please enter mints manually in the input field.', 'warning');
-                    testRunning = false;
-                    return;
-                }
-
-                mintsBuffer = fetchedMints;
+                log('⚠️ Please enter token mints in the input field above to start testing.', 'warning');
+                testRunning = false;
+                return;
             }
 
             log(`Starting batch tests with ${mintsBuffer.length} collected mints`, 'info');
