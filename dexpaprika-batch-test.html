@@ -108,15 +108,12 @@
         </div>
 
         <div class="panel">
-            <h3>Connection Status</h3>
+            <h3>Data Source Status</h3>
             <p>
                 <span class="status-indicator" id="pumpPortalStatus"></span>
-                <strong>PumpPortal:</strong> <span id="pumpPortalText">Disconnected</span>
+                <strong>Pumpdev API:</strong> <span id="pumpPortalText">Ready</span>
             </p>
-            <p>
-                <span class="status-indicator" id="dexPaprikaStatus"></span>
-                <strong>DexPaprika:</strong> <span id="dexPaprikaText">Disconnected</span>
-            </p>
+            <p style="font-size: 11px; color: #8b949e; margin: 5px 0;">Fetches recent pump.fun token launches for testing</p>
         </div>
 
         <div class="panel">
@@ -160,7 +157,8 @@
     <script>
         // Configuration
         const BATCH_SIZES = [2, 10, 20, 50, 100, 200, 500];
-        const PUMPPORTAL_URL = 'wss://pumpportal.fun/api/data';
+        // pumpdev API for fetching new token launches
+        const PUMPDEV_API = 'https://pumpdev-api.vercel.app/api/new-tokens';
 
         // State
         let testRunning = false;
@@ -194,64 +192,50 @@
             updateMetrics();
         }
 
-        // PumpPortal connection
-        function connectPumpPortal() {
-            log('Connecting to PumpPortal...', 'info');
+        // Fetch new tokens from pumpdev API
+        async function fetchNewTokensFromPumpdev() {
+            try {
+                log('Fetching new tokens from pumpdev...', 'info');
+                updateStatus('pumpPortalStatus', 'pending', 'pumpPortalText', 'Fetching...');
 
-            const ws = new WebSocket(PUMPPORTAL_URL);
+                const response = await fetch(PUMPDEV_API, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                });
 
-            ws.onopen = () => {
-                log('PumpPortal connected', 'success');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                // Handle different response formats from pumpdev
+                let tokens = [];
+                if (Array.isArray(data)) {
+                    tokens = data; // Direct array of tokens
+                } else if (data.tokens && Array.isArray(data.tokens)) {
+                    tokens = data.tokens; // {tokens: [...]}
+                } else if (data.data && Array.isArray(data.data)) {
+                    tokens = data.data; // {data: [...]}
+                } else {
+                    log('Unexpected response format: ' + JSON.stringify(data).substring(0, 50), 'warning');
+                    return [];
+                }
+
+                // Extract mint addresses
+                const mints = tokens
+                    .map(t => t.mint || t.address || t.tokenAddress || t.id)
+                    .filter(m => m && typeof m === 'string' && m.length > 20);
+
+                log(`✓ Fetched ${mints.length} new tokens from pumpdev`, 'success');
                 updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
 
-                // Subscribe to pump.fun new token creations
-                // Format: subscribe to tokenCreate events from pump.fun program
-                const subscriptionMsg = {
-                    method: 'subscribeNewToken',
-                };
-
-                log('Sending subscription: ' + JSON.stringify(subscriptionMsg), 'info');
-                ws.send(JSON.stringify(subscriptionMsg));
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    // Log raw message for debugging
-                    log('Raw message received: ' + event.data.substring(0, 100), 'info');
-
-                    const data = JSON.parse(event.data);
-
-                    // Handle different PumpPortal message formats
-                    const mint = data.mint || data.tokenAddress || data.token || data.signature;
-
-                    // Filter out non-mint responses (like subscription confirmation)
-                    if (mint && mint.length > 20 && !mintsBuffer.includes(mint)) {
-                        mintsBuffer.push(mint);
-                        log(`✓ Collected mint: ${mint.substring(0, 8)}...`, 'success');
-                        updateMetrics();
-                    } else if (data.method || data.result) {
-                        // Likely a response message
-                        log(`Message: ${JSON.stringify(data).substring(0, 50)}...`, 'info');
-                    }
-                } catch (e) {
-                    // Log parse errors for debugging
-                    if (event.data && event.data.length > 0) {
-                        log('Parse error on: ' + event.data.substring(0, 50), 'warning');
-                    }
-                }
-            };
-
-            ws.onerror = (error) => {
-                log('PumpPortal error: ' + error, 'error');
+                return mints;
+            } catch (error) {
+                log(`Error fetching from pumpdev: ${error.message}`, 'error');
                 updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'Error');
-            };
-
-            ws.onclose = () => {
-                log('PumpPortal disconnected', 'warning');
-                updateStatus('pumpPortalStatus', 'pending', 'pumpPortalText', 'Disconnected');
-            };
-
-            return ws;
+                return [];
+            }
         }
 
         // DexPaprika batch test
@@ -350,29 +334,20 @@
                 .filter(m => m.length > 0);
 
             if (manualMints.length > 0) {
-                log(`Using ${manualMints.length} manually provided mints`, 'success');
+                log(`✓ Using ${manualMints.length} manually provided mints`, 'success');
                 mintsBuffer = manualMints;
             } else {
-                // Connect to PumpPortal to collect mints
-                log('Attempting to collect mints from PumpPortal...', 'info');
-                let wsInstance = connectPumpPortal();
+                // Fetch new tokens from pumpdev API
+                log('Attempting to fetch new tokens from pumpdev...', 'info');
+                const fetchedMints = await fetchNewTokensFromPumpdev();
 
-                // Wait for some mints to be collected (max 45 seconds)
-                for (let i = 0; i < 45; i++) {
-                    if (mintsBuffer.length >= 500) break; // Need 500 for batch of 500
-                    await new Promise(r => setTimeout(r, 1000));
-                    if (i % 5 === 0) {
-                        log(`Waiting for mints... (${mintsBuffer.length}/500)`, 'info');
-                    }
-                }
-
-                wsInstance.close();
-
-                if (mintsBuffer.length === 0) {
-                    log('⚠️ No mints collected from PumpPortal. Please enter mints manually or check WebSocket connection.', 'warning');
+                if (fetchedMints.length === 0) {
+                    log('⚠️ No tokens fetched from pumpdev. Please enter mints manually in the input field.', 'warning');
                     testRunning = false;
                     return;
                 }
+
+                mintsBuffer = fetchedMints;
             }
 
             log(`Starting batch tests with ${mintsBuffer.length} collected mints`, 'info');
