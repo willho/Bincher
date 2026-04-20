@@ -98,6 +98,15 @@
 
     <div class="container">
         <div class="panel">
+            <h3>Configuration</h3>
+            <label>Test Mints (comma-separated, or leave empty to auto-collect from PumpPortal):</label>
+            <input type="text" id="testMints" placeholder="EPjFWaLb3odcccccccccccccccccccccccccccccc, ..." style="width: 100%; box-sizing: border-box; margin: 5px 0; padding: 8px; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; font-family: monospace;">
+            <button onclick="startTest()">Start Test</button>
+            <button onclick="stopTest()">Stop Test</button>
+            <button onclick="clearLogs()">Clear Logs</button>
+        </div>
+
+        <div class="panel">
             <h3>Connection Status</h3>
             <p>
                 <span class="status-indicator" id="pumpPortalStatus"></span>
@@ -107,9 +116,6 @@
                 <span class="status-indicator" id="dexPaprikaStatus"></span>
                 <strong>DexPaprika:</strong> <span id="dexPaprikaText">Disconnected</span>
             </p>
-            <button onclick="startTest()">Start Test</button>
-            <button onclick="stopTest()">Stop Test</button>
-            <button onclick="clearLogs()">Clear Logs</button>
         </div>
 
         <div class="panel">
@@ -153,7 +159,7 @@
     <script>
         // Configuration
         const BATCH_SIZES = [10, 50, 100, 200, 500];
-        const PUMPPORTAL_URL = 'https://pumpportal.fun/api/trade-stream';
+        const PUMPPORTAL_URL = 'wss://pumpportal.fun/api/data';
 
         // State
         let testRunning = false;
@@ -197,19 +203,20 @@
                 log('PumpPortal connected', 'success');
                 updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
 
-                // Subscribe to all trades
+                // Subscribe to pump.fun launches (all new tokens)
                 ws.send(JSON.stringify({
-                    method: 'subscribeToken',
-                    keys: ['pumFun2afXtNvCKtTf1AxVjnnyGap5MZbktjZJ8']
+                    method: 'subscribeNewToken',
                 }));
             };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    if (data.mint && !mintsBuffer.includes(data.mint)) {
-                        mintsBuffer.push(data.mint);
-                        log(`Collected mint: ${data.mint.substring(0, 8)}...`, 'info');
+                    // Handle different PumpPortal message formats
+                    const mint = data.mint || data.tokenAddress || data.token;
+                    if (mint && !mintsBuffer.includes(mint)) {
+                        mintsBuffer.push(mint);
+                        log(`Collected mint: ${mint.substring(0, 8)}...`, 'info');
                         updateMetrics();
                     }
                 } catch (e) {
@@ -319,14 +326,36 @@
             testRunning = true;
             log('=== DexPaprika Batch Test Started ===', 'info');
 
-            // Connect to PumpPortal to collect mints
-            let wsInstance = connectPumpPortal();
+            // Check if user provided manual mints
+            const manualMints = document.getElementById('testMints').value
+                .split(',')
+                .map(m => m.trim())
+                .filter(m => m.length > 0);
 
-            // Wait for some mints to be collected
-            for (let i = 0; i < 30; i++) {
-                if (mintsBuffer.length >= 500) break;
-                await new Promise(r => setTimeout(r, 1000));
-                log(`Waiting for mints... (${mintsBuffer.length}/500)`, 'info');
+            if (manualMints.length > 0) {
+                log(`Using ${manualMints.length} manually provided mints`, 'success');
+                mintsBuffer = manualMints;
+            } else {
+                // Connect to PumpPortal to collect mints
+                log('Attempting to collect mints from PumpPortal...', 'info');
+                let wsInstance = connectPumpPortal();
+
+                // Wait for some mints to be collected (max 30 seconds)
+                for (let i = 0; i < 30; i++) {
+                    if (mintsBuffer.length >= 20) break; // Reduced from 500 to 20 for faster testing
+                    await new Promise(r => setTimeout(r, 1000));
+                    if (i % 5 === 0) {
+                        log(`Waiting for mints... (${mintsBuffer.length}/20)`, 'info');
+                    }
+                }
+
+                wsInstance.close();
+
+                if (mintsBuffer.length === 0) {
+                    log('⚠️ No mints collected from PumpPortal. Please enter mints manually or check WebSocket connection.', 'warning');
+                    testRunning = false;
+                    return;
+                }
             }
 
             log(`Starting batch tests with ${mintsBuffer.length} collected mints`, 'info');
@@ -334,11 +363,14 @@
             // Test each batch size sequentially
             for (const size of BATCH_SIZES) {
                 if (!testRunning) break;
+                if (size > mintsBuffer.length) {
+                    log(`Skipping batch size ${size} (only ${mintsBuffer.length} mints available)`, 'warning');
+                    continue;
+                }
                 await testBatchSize(size);
                 await new Promise(r => setTimeout(r, 1000)); // 1s delay between tests
             }
 
-            wsInstance.close();
             testRunning = false;
 
             log('=== Test Complete ===', 'success');
