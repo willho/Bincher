@@ -275,6 +275,67 @@
             }
         }
 
+        // Subscribe to PumpPortal newtoken stream and collect mints with volume
+        let pumpPortalWs = null;
+        async function collectMintsFromStream(timeoutMs = 30000) {
+            return new Promise((resolve) => {
+                const timeout = setTimeout(() => {
+                    log(`⏱️ Mint collection timeout (${timeoutMs}ms). Starting test with ${mintsBuffer.length} mints.`, 'warning');
+                    if (pumpPortalWs) pumpPortalWs.close();
+                    resolve();
+                }, timeoutMs);
+
+                try {
+                    pumpPortalWs = new WebSocket(PUMPPORTAL_PROXY);
+
+                    pumpPortalWs.onopen = () => {
+                        log('📡 Connected to PumpPortal, listening for new tokens...', 'info');
+                        updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Collecting...');
+
+                        // Subscribe to newtoken events
+                        pumpPortalWs.send(JSON.stringify({
+                            method: 'subscribeNewToken'
+                        }));
+                    };
+
+                    pumpPortalWs.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+
+                            // Check if this is a new token event with volume activity
+                            if (data.mint && typeof data.mint === 'string') {
+                                mintsBuffer.push(data.mint);
+                                log(`✓ Collected mint: ${data.mint.slice(0, 8)}...`, 'success');
+
+                                // Stop when we have enough mints
+                                if (mintsBuffer.length >= 500) {
+                                    clearTimeout(timeout);
+                                    log(`✓ Collected ${mintsBuffer.length} mints from PumpPortal stream`, 'success');
+                                    if (pumpPortalWs) pumpPortalWs.close();
+                                    resolve();
+                                }
+                            }
+                        } catch (e) {
+                            // Ignore parse errors, continue collecting
+                        }
+                    };
+
+                    pumpPortalWs.onerror = (error) => {
+                        log(`⚠️ WebSocket error: ${error.message || 'Connection failed'}`, 'warning');
+                    };
+
+                    pumpPortalWs.onclose = () => {
+                        clearTimeout(timeout);
+                        resolve();
+                    };
+                } catch (error) {
+                    log(`Error connecting to PumpPortal: ${error.message}`, 'error');
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            });
+        }
+
         // Main test loop
         async function startTest() {
             if (testRunning) {
@@ -302,37 +363,20 @@
                 log(`✓ Using ${manualMints.length} manually provided mints`, 'success');
                 mintsBuffer = manualMints;
             } else {
-                // Fetch mints from proxy server
-                log('Fetching mints from PumpPortal via proxy...', 'info');
+                // Auto-collect mints from PumpPortal newtoken stream
+                log('Subscribing to PumpPortal newtoken stream...', 'info');
                 updateStatus('pumpPortalStatus', 'pending', 'pumpPortalText', 'Collecting...');
 
-                try {
-                    const response = await fetch('/api/test/collect-mints?count=500', {
-                        method: 'GET'
-                    });
+                await collectMintsFromStream(30000); // 30 second timeout
 
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
-
-                    const data = await response.json();
-
-                    if (data.mints && data.mints.length > 0) {
-                        mintsBuffer = data.mints;
-                        log(`✓ Collected ${data.mints.length} mints from PumpPortal`, 'success');
-                        updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
-                    } else {
-                        log('⚠️ No mints collected. Please enter mints manually.', 'warning');
-                        updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'No data');
-                        testRunning = false;
-                        return;
-                    }
-                } catch (error) {
-                    log(`Error: ${error.message}. Make sure proxy server is running (node test-proxy-server.js)`, 'error');
-                    updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'Error');
+                if (mintsBuffer.length === 0) {
+                    log('⚠️ No mints collected from stream. Please enter mints manually or check connection.', 'warning');
+                    updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'No data');
                     testRunning = false;
                     return;
                 }
+
+                updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
             }
 
             log(`Starting batch tests with ${mintsBuffer.length} collected mints`, 'info');
@@ -357,6 +401,9 @@
 
         function stopTest() {
             testRunning = false;
+            if (pumpPortalWs) {
+                pumpPortalWs.close();
+            }
             log('Test stopped by user', 'warning');
         }
 
