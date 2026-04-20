@@ -408,3 +408,348 @@ export function getDiscoveredWalletCache(): DiscoveredWallet[] {
 export function clearDiscoveredWalletCache(): void {
   DISCOVERED_WALLETS_CACHE.clear();
 }
+
+// =====================
+// RETROLEARNER WALLET DISCOVERY
+// =====================
+
+export interface HolderRanking {
+  wallet: string;
+  criteria: ("earliest" | "largest_balance" | "largest_investment" | "best_pnl")[];
+  score: number;
+}
+
+export interface WalletPnLMetrics {
+  wallet: string;
+  totalPnl7d: number;
+  winRate7d: number;
+  avgHoldMinutes: number;
+  sharpeRatio: number;
+  sampleCount: number;
+}
+
+/**
+ * Rank holders of a token by multiple criteria
+ * Returns top 40 wallets with diverse perspective:
+ * - Top 10 earliest buyers (first-mover advantage)
+ * - Top 10 by current holdings (conviction/belief)
+ * - Top 10 by investment amount (whale vote)
+ * - Top 10 by realized PnL (success metric)
+ */
+export async function rankHoldersByMultipleCriteria(
+  tokenMint: string,
+  limit: number = 40
+): Promise<HolderRanking[]> {
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    // Get all wallets who bought this token
+    const allBuyers = await db
+      .select({
+        wallet: swaps.source,
+        firstBuyTime: sql<number>`min(${swaps.timestamp})`,
+        totalInvested: sql<number>`sum(${swaps.fromAmount})`,
+        totalBought: sql<number>`sum(${swaps.toAmount})`,
+      })
+      .from(swaps)
+      .where(eq(swaps.toToken, tokenMint))
+      .groupBy(swaps.source);
+
+    if (allBuyers.length === 0) {
+      return [];
+    }
+
+    // Rank 1: Earliest 10 buyers
+    const earliestBuyers = allBuyers
+      .sort((a, b) => (a.firstBuyTime || 0) - (b.firstBuyTime || 0))
+      .slice(0, 10)
+      .map(w => ({ wallet: w.wallet, criteria: ["earliest" as const] }));
+
+    // Rank 2: Top 10 by investment amount (largest spenders)
+    const largestInvestors = allBuyers
+      .sort((a, b) => (b.totalInvested || 0) - (a.totalInvested || 0))
+      .slice(0, 10)
+      .map(w => ({ wallet: w.wallet, criteria: ["largest_investment" as const] }));
+
+    // Rank 3: Top 10 by current holdings (would need on-chain query for actual balance)
+    // For now, use total bought as proxy
+    const largestHolders = allBuyers
+      .sort((a, b) => (b.totalBought || 0) - (a.totalBought || 0))
+      .slice(0, 10)
+      .map(w => ({ wallet: w.wallet, criteria: ["largest_balance" as const] }));
+
+    // Rank 4: Top 10 by PnL (from their sell transactions)
+    const walletProfitsPromises = allBuyers.map(buyer =>
+      calculateWalletPnLOnToken(buyer.wallet, tokenMint).then(profit => ({
+        wallet: buyer.wallet,
+        pnl: profit,
+      }))
+    );
+    const walletProfits = await Promise.all(walletProfitsPromises);
+
+    const bestPerformers = walletProfits
+      .sort((a, b) => b.pnl - a.pnl)
+      .slice(0, 10)
+      .map(w => ({ wallet: w.wallet, criteria: ["best_pnl" as const] }));
+
+    // Merge all rankings, deduplicate
+    const merged = new Map<string, HolderRanking>();
+
+    [...earliestBuyers, ...largestInvestors, ...largestHolders, ...bestPerformers].forEach(
+      (ranking) => {
+        if (merged.has(ranking.wallet)) {
+          const existing = merged.get(ranking.wallet)!;
+          existing.criteria = Array.from(new Set([...existing.criteria, ...ranking.criteria]));
+        } else {
+          merged.set(ranking.wallet, {
+            wallet: ranking.wallet,
+            criteria: ranking.criteria,
+            score: 0,
+          });
+        }
+      }
+    );
+
+    // Score based on number of criteria matched
+    const results = Array.from(merged.values())
+      .map(r => ({
+        ...r,
+        score: r.criteria.length / 4, // Normalized to 0-1 based on criteria matched
+      }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+
+    return results;
+  } catch (error) {
+    console.error(`[WalletDiscovery] Error ranking holders for ${tokenMint}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Calculate wallet's PnL on a specific token
+ */
+async function calculateWalletPnLOnToken(wallet: string, tokenMint: string): Promise<number> {
+  try {
+    const trades = await db
+      .select({
+        type: swaps.type,
+        fromAmount: swaps.fromAmount,
+        toAmount: swaps.toAmount,
+      })
+      .from(swaps)
+      .where(
+        and(
+          eq(swaps.source, wallet),
+          eq(swaps.toToken, tokenMint)
+        )
+      );
+
+    if (trades.length === 0) return 0;
+
+    // Simple PnL: sum of (toAmount - fromAmount) for all trades
+    let totalPnl = 0;
+    trades.forEach(t => {
+      const amount = t.type === "buy" ? -(t.fromAmount || 0) : (t.toAmount || 0);
+      totalPnl += amount;
+    });
+
+    return totalPnl;
+  } catch (error) {
+    return 0;
+  }
+}
+
+/**
+ * Assess wallet's PnL metrics over past 7 days
+ * Called at retrolearner execution time
+ */
+export async function assessWalletPnL(
+  walletAddress: string,
+  lookbackDays: number = 7
+): Promise<WalletPnLMetrics> {
+  const now = Math.floor(Date.now() / 1000);
+  const lookbackStart = now - (lookbackDays * 86400);
+
+  try {
+    const trades = await db
+      .select()
+      .from(swaps)
+      .where(
+        and(
+          eq(swaps.source, walletAddress),
+          gte(swaps.timestamp, lookbackStart)
+        )
+      )
+      .orderBy(swaps.timestamp);
+
+    if (trades.length === 0) {
+      return {
+        wallet: walletAddress,
+        totalPnl7d: 0,
+        winRate7d: 0,
+        avgHoldMinutes: 0,
+        sharpeRatio: 0,
+        sampleCount: 0,
+      };
+    }
+
+    // Group trades by token to track positions
+    type TradeRecord = typeof trades[0];
+    interface Position {
+      buys: TradeRecord[];
+      sells: TradeRecord[];
+    }
+    const positions = new Map<string, Position>();
+
+    trades.forEach(trade => {
+      if (!positions.has(trade.toToken)) {
+        positions.set(trade.toToken, { buys: [], sells: [] });
+      }
+      const pos = positions.get(trade.toToken)!;
+      if (trade.type === "buy") {
+        pos.buys.push(trade);
+      } else {
+        pos.sells.push(trade);
+      }
+    });
+
+    // Calculate PnL and hold times
+    let totalPnl = 0;
+    let winCount = 0;
+    let lossCount = 0;
+    let holdTimes: number[] = [];
+    let pnlValues: number[] = [];
+
+    // Convert Map to Array to avoid Map iteration type issues
+    const positionsArray = Array.from(positions.entries());
+    for (const [_token, { buys, sells }] of positionsArray) {
+      // Simple matching: pair buys with sells chronologically
+      const buyQueue = [...buys].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      const sellQueue = [...sells].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+      let buyIdx = 0;
+      let remaining = 0;
+
+      for (const sell of sellQueue) {
+        while (buyIdx < buyQueue.length && remaining <= 0) {
+          remaining += buyQueue[buyIdx].toAmount || 0;
+          buyIdx++;
+        }
+
+        if (remaining > 0) {
+          const sellAmount = Math.min(remaining, sell.toAmount || 0);
+          remaining -= sellAmount;
+
+          // Simple PnL: profit per unit
+          const pnl = sellAmount - (sellAmount * ((buyQueue[buyIdx - 1]?.fromAmount || 0) / (buyQueue[buyIdx - 1]?.toAmount || 1)));
+          totalPnl += pnl;
+          pnlValues.push(pnl);
+
+          if (pnl > 0) {
+            winCount++;
+          } else {
+            lossCount++;
+          }
+
+          // Hold time
+          const holdMinutes = ((sell.timestamp || 0) - (buyQueue[buyIdx - 1]?.timestamp || 0)) / 60;
+          if (holdMinutes > 0) {
+            holdTimes.push(holdMinutes);
+          }
+        }
+      }
+    }
+
+    const sampleCount = winCount + lossCount;
+    const winRate = sampleCount > 0 ? winCount / sampleCount : 0;
+    const avgHoldMinutes = holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b) / holdTimes.length : 0;
+
+    // Calculate Sharpe ratio (simplified: std dev of returns)
+    let sharpeRatio = 0;
+    if (pnlValues.length > 1) {
+      const mean = pnlValues.reduce((a, b) => a + b) / pnlValues.length;
+      const variance = pnlValues.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / pnlValues.length;
+      const stdDev = Math.sqrt(variance);
+      sharpeRatio = stdDev > 0 ? mean / stdDev : 0;
+    }
+
+    return {
+      wallet: walletAddress,
+      totalPnl7d: totalPnl,
+      winRate7d: winRate,
+      avgHoldMinutes,
+      sharpeRatio,
+      sampleCount,
+    };
+  } catch (error) {
+    console.error(`[WalletDiscovery] Error assessing PnL for ${walletAddress}:`, error);
+    return {
+      wallet: walletAddress,
+      totalPnl7d: 0,
+      winRate7d: 0,
+      avgHoldMinutes: 0,
+      sharpeRatio: 0,
+      sampleCount: 0,
+    };
+  }
+}
+
+/**
+ * Discover wallets from tokens they profited on in the past N hours
+ * Used by retrolearner to find missed opportunities and extract wallets
+ */
+export async function discoverWalletsFromMissedTokens(
+  lookbackHours: number = 24,
+  minProfitPercent: number = 5
+): Promise<Map<string, HolderRanking[]>> {
+  const now = Math.floor(Date.now() / 1000);
+  const lookbackStart = now - (lookbackHours * 3600);
+
+  try {
+    // Find all profitable trades in the lookback window
+    const profitableTrades = await db
+      .select({
+        wallet: swaps.source,
+        token: swaps.toToken,
+        type: swaps.type,
+        fromAmount: swaps.fromAmount,
+        toAmount: swaps.toAmount,
+        timestamp: swaps.timestamp,
+      })
+      .from(swaps)
+      .where(gte(swaps.timestamp, lookbackStart))
+      .orderBy(desc(swaps.timestamp));
+
+    // Group by token and identify which ones had profitable trades
+    const tokenProfitability = new Map<string, number>();
+    const walletsByToken = new Map<string, Set<string>>();
+
+    profitableTrades.forEach(trade => {
+      // Simple profitability check: if it's a sell, check if amount increased
+      if (trade.type === "sell") {
+        const profitPercent = ((trade.toAmount || 0) - (trade.fromAmount || 0)) / (trade.fromAmount || 1) * 100;
+        if (profitPercent > minProfitPercent) {
+          tokenProfitability.set(trade.token, (tokenProfitability.get(trade.token) || 0) + profitPercent);
+          if (!walletsByToken.has(trade.token)) {
+            walletsByToken.set(trade.token, new Set());
+          }
+          walletsByToken.get(trade.token)?.add(trade.wallet);
+        }
+      }
+    });
+
+    // For each profitable token, rank its holders
+    const results = new Map<string, HolderRanking[]>();
+    const walletsByTokenArray = Array.from(walletsByToken.entries());
+    for (const [tokenMint, _wallets] of walletsByTokenArray) {
+      const holders = await rankHoldersByMultipleCriteria(tokenMint, 40);
+      results.set(tokenMint, holders);
+    }
+
+    return results;
+  } catch (error) {
+    console.error(`[WalletDiscovery] Error discovering wallets from missed tokens:`, error);
+    return new Map();
+  }
+}

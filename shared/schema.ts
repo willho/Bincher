@@ -4193,3 +4193,40 @@ export const walletFundingLinks = pgTable("wallet_funding_links", {
 export const insertWalletFundingLinksSchema = createInsertSchema(walletFundingLinks).omit({ id: true, createdAt: true, updatedAt: true });
 export type WalletFundingLink = typeof walletFundingLinks.$inferSelect;
 export type InsertWalletFundingLink = z.infer<typeof insertWalletFundingLinksSchema>;
+
+// Retrolearner wallet analysis - tracks wallets discovered from successful tokens
+export const retrolearnerWalletAnalysis = pgTable("retrolearner_wallet_analysis", {
+  id: serial("id").primaryKey(),
+
+  // Wallet identification
+  walletAddress: text("wallet_address").notNull().unique(),
+
+  // Assessment timing
+  lastAnalyzedAt: integer("last_analyzed_at"), // When PnL was last assessed by retrolearner
+  lastTxCheckedAt: integer("last_tx_checked_at"), // When transaction history was last fetched
+
+  // PnL Metrics (snapshot from last assessment, 7-day window)
+  totalPnl7d: real("total_pnl_7d"), // Total profit/loss over last 7 days
+  winRate7d: real("win_rate_7d"), // Fraction of trades that were profitable (0-1)
+  avgHoldMinutes: real("avg_hold_minutes"), // Average time wallet held winning trades
+  sharpeRatio: real("sharpe_ratio"), // Risk-adjusted return metric
+  sampleCount: integer("sample_count"), // Number of trades analyzed
+
+  // Context and discovery
+  discoveredFromTokens: jsonb("discovered_from_tokens"), // Array of token mints wallet profited on
+  discoveryConfidence: real("discovery_confidence"), // Average ANN score of tokens they profited on
+  isActive: boolean("is_active").notNull().default(true),
+
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => ({
+  // Indexes for fast queries
+  walletIdx: index("idx_retrolearner_wallet").on(table.walletAddress),
+  lastAnalyzedIdx: index("idx_retrolearner_last_analyzed").on(table.lastAnalyzedAt),
+  activeIdx: index("idx_retrolearner_active").on(table.isActive),
+}));
+
+export const insertRetrolearnerWalletAnalysisSchema = createInsertSchema(retrolearnerWalletAnalysis).omit({ id: true, createdAt: true, updatedAt: true });
+export type RetrolearnerWalletAnalysis = typeof retrolearnerWalletAnalysis.$inferSelect;
+export type InsertRetrolearnerWalletAnalysis = z.infer<typeof insertRetrolearnerWalletAnalysisSchema>;

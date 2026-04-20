@@ -7,6 +7,7 @@ import {
   jupiterLatencyStats,
   priceHistoryCache,
   graduationEvents,
+  retrolearnerWalletAnalysis,
   TokenOutcome,
   InsertTokenOutcome,
   InsertTokenFingerprint,
@@ -14,6 +15,13 @@ import {
 import axios from "axios";
 import { trainANNModel } from "./token-success-ann";
 import { detectSlowGrowerPatterns, filterHighConfidencePatterns, storeSlowGrowerPatterns } from "./slow-grower-detector";
+import {
+  discoverWalletsFromMissedTokens,
+  assessWalletPnL,
+  rankHoldersByMultipleCriteria,
+  type WalletPnLMetrics
+} from "./wallet-discovery";
+import { predictTokenSuccess } from "./token-success-ann";
 
 // =====================
 // TYPE DEFINITIONS
@@ -172,51 +180,66 @@ async function getLatencyStats(method: string = "swap"): Promise<LatencyStats> {
  */
 async function findWellPerformingTokens(): Promise<TokenPerformanceData[]> {
   try {
-    // For MVP, scan recent tokens that graduated or launched on Raydium
-    // In production, would pull from DexScreener/on-chain data
+    // Query tokenOutcomes table for real performance data
+    // Focus on tokens that graduated or launched recently
     const now = Math.floor(Date.now() / 1000);
-    const lookbackHours = 48; // Analyze tokens from last 48 hours
+    const lookbackHours = 48;
+    const lookbackStart = now - (lookbackHours * 3600);
 
-    // Get recently graduated tokens
-    const graduated = await db.query.graduationEvents.findMany({
-      where: gte(graduationEvents.graduationTime, now - lookbackHours * 3600),
-      limit: 50,
-    });
+    // Fetch tokens with positive outcomes from last 48 hours
+    const outcomes = await db
+      .select({
+        tokenMint: tokenOutcomes.tokenMint,
+        earlyBuyerWinRate: tokenOutcomes.earlyBuyerWinRate,
+        earlyBuyerMedianMultiplier: tokenOutcomes.earlyBuyerMedianMultiplier,
+        peakMultiplierAllTime: tokenOutcomes.peakMultiplierAllTime,
+        profitableWalletCount: tokenOutcomes.profitableWalletCount,
+        timeToPeakMinutes: tokenOutcomes.timeToPeakMinutes,
+        createdAt: tokenOutcomes.createdAt,
+      })
+      .from(tokenOutcomes)
+      .where(
+        and(
+          gte(tokenOutcomes.createdAt, lookbackStart),
+          gte(tokenOutcomes.earlyBuyerMedianMultiplier, RETROLEARNER_CONFIG.minMedianMultiplier),
+          gte(tokenOutcomes.earlyBuyerWinRate, RETROLEARNER_CONFIG.minEarlyBuyerWinRate)
+        )
+      )
+      .limit(100);
 
     const results: TokenPerformanceData[] = [];
 
-    for (const event of graduated) {
+    for (const outcome of outcomes) {
+      // Skip if profitableWalletCount is null or below minimum
+      const profitableCount = outcome.profitableWalletCount ?? 0;
+      if (profitableCount < RETROLEARNER_CONFIG.minProfitableWallets) {
+        continue;
+      }
+
+      // Get token metadata
       const tokenData = await db.query.tokenDataPool.findFirst({
-        where: eq(tokenDataPool.tokenMint, event.tokenMint),
+        where: eq(tokenDataPool.tokenMint, outcome.tokenMint),
       });
 
-      if (!tokenData) continue;
-
-      // Placeholder: In production, would fetch real performance data from blockchain
-      // For now, use tokenDataPool fields if available
       const perfData: TokenPerformanceData = {
-        mint: event.tokenMint,
-        symbol: tokenData.tokenSymbol || undefined,
-        name: tokenData.tokenName || undefined,
-        earlyBuyerWinRate: 0.65, // Placeholder
-        earlyBuyerMedianMultiplier: 2.5,
-        profitableWalletCount: 8,
-        peakMultiplierAllTime: 3.2,
-        timeToPeakMinutes: 45,
+        mint: outcome.tokenMint,
+        symbol: tokenData?.tokenSymbol || undefined,
+        name: tokenData?.tokenName || undefined,
+        earlyBuyerWinRate: outcome.earlyBuyerWinRate ?? 0,
+        earlyBuyerMedianMultiplier: outcome.earlyBuyerMedianMultiplier ?? 0,
+        profitableWalletCount: profitableCount,
+        peakMultiplierAllTime: outcome.peakMultiplierAllTime ?? 0,
+        timeToPeakMinutes: outcome.timeToPeakMinutes ?? 0,
       };
 
-      // Filter by performance criteria
-      if (
-        perfData.earlyBuyerWinRate >= RETROLEARNER_CONFIG.minEarlyBuyerWinRate &&
-        perfData.earlyBuyerMedianMultiplier >= RETROLEARNER_CONFIG.minMedianMultiplier &&
-        perfData.profitableWalletCount >= RETROLEARNER_CONFIG.minProfitableWallets
-      ) {
-        results.push(perfData);
-      }
+      results.push(perfData);
     }
 
+    // Sort by multiplier descending (best performers first)
+    results.sort((a, b) => b.earlyBuyerMedianMultiplier - a.earlyBuyerMedianMultiplier);
+
     console.log(
-      `[Retrolearner] Found ${results.length} well-performing tokens from ${graduated.length} recent graduations`
+      `[Retrolearner] Found ${results.length} well-performing tokens with real outcome data`
     );
     return results;
   } catch (error) {
@@ -563,7 +586,103 @@ async function performRetrolearningCycle(): Promise<void> {
       await processTokenForLearning(token);
     }
 
-    console.log("[Retrolearner] Retrolearning cycle complete");
+    // Step 6: Discover wallets from tokens they profited on (missed opportunities)
+    console.log("[Retrolearner] Discovering wallets from missed tokens...");
+    const missedTokens = await discoverWalletsFromMissedTokens(24, 5); // 24h lookback, 5% min profit
+    let totalMissedTokens = 0;
+    let totalUniqueWallets = 0;
+
+    const walletMetrics = new Map<string, WalletPnLMetrics>();
+    const missedTokensArray = Array.from(missedTokens.entries());
+
+    for (const [tokenMint, holders] of missedTokensArray) {
+      totalMissedTokens++;
+      for (const holder of holders) {
+        totalUniqueWallets++;
+        // Assess each wallet only once (store in map to deduplicate)
+        if (!walletMetrics.has(holder.wallet)) {
+          const pnlMetrics = await assessWalletPnL(holder.wallet, 7);
+          walletMetrics.set(holder.wallet, pnlMetrics);
+        }
+      }
+    }
+
+    // Step 7: Store wallet analysis in database
+    console.log(`[Retrolearner] Storing ${walletMetrics.size} unique wallet analyses...`);
+    let walletUpdateCount = 0;
+
+    const walletMetricsArray = Array.from(walletMetrics.entries());
+    for (const [walletAddress, metrics] of walletMetricsArray) {
+      const now = Math.floor(Date.now() / 1000);
+
+      // Check if wallet already analyzed recently
+      const existing = await db.query.retrolearnerWalletAnalysis.findFirst({
+        where: eq(retrolearnerWalletAnalysis.walletAddress, walletAddress),
+      });
+
+      if (existing && existing.lastAnalyzedAt && now - existing.lastAnalyzedAt < 12 * 3600) {
+        // Skip if analyzed within last 12 hours (avoid redundant assessment)
+        console.log(`[Retrolearner] Skipping wallet ${walletAddress.slice(0, 8)}... (analyzed ${Math.round((now - existing.lastAnalyzedAt) / 3600)}h ago)`);
+        continue;
+      }
+
+      // Get ANN confidence for wallets that profited on missed tokens
+      let avgAnnConfidence = 0.5;
+      const tokensForWallet = Array.from(missedTokens.entries())
+        .filter(([_, holders]) => holders.some(h => h.wallet === walletAddress))
+        .map(([mint]) => mint);
+
+      if (tokensForWallet.length > 0) {
+        const annScores = await Promise.all(
+          tokensForWallet.map(mint => predictTokenSuccess(mint, now - 3600))
+        );
+        avgAnnConfidence = annScores.reduce((a, b) => a + b, 0) / annScores.length;
+      }
+
+      // Upsert wallet analysis record
+      if (existing) {
+        await db
+          .update(retrolearnerWalletAnalysis)
+          .set({
+            lastAnalyzedAt: now,
+            lastTxCheckedAt: now,
+            totalPnl7d: metrics.totalPnl7d,
+            winRate7d: metrics.winRate7d,
+            avgHoldMinutes: metrics.avgHoldMinutes,
+            sharpeRatio: metrics.sharpeRatio,
+            sampleCount: metrics.sampleCount,
+            discoveredFromTokens: tokensForWallet,
+            discoveryConfidence: avgAnnConfidence,
+            updatedAt: now,
+          })
+          .where(eq(retrolearnerWalletAnalysis.walletAddress, walletAddress));
+      } else {
+        await db
+          .insert(retrolearnerWalletAnalysis)
+          .values({
+            walletAddress,
+            lastAnalyzedAt: now,
+            lastTxCheckedAt: now,
+            totalPnl7d: metrics.totalPnl7d,
+            winRate7d: metrics.winRate7d,
+            avgHoldMinutes: metrics.avgHoldMinutes,
+            sharpeRatio: metrics.sharpeRatio,
+            sampleCount: metrics.sampleCount,
+            discoveredFromTokens: tokensForWallet,
+            discoveryConfidence: avgAnnConfidence,
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+          });
+      }
+
+      walletUpdateCount++;
+    }
+
+    console.log(
+      `[Retrolearner] Retrolearning cycle complete. Analyzed ${totalMissedTokens} missed tokens, ` +
+      `updated ${walletUpdateCount} wallets, ${walletMetrics.size} total discovered`
+    );
   } catch (error) {
     console.error("[Retrolearner] Unhandled error in retrolearning cycle:", error);
   } finally {
