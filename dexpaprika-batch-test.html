@@ -99,11 +99,12 @@
     <div class="container">
         <div class="panel">
             <h3>Configuration</h3>
-            <label>Test Mints (comma-separated, or leave empty to auto-collect from PumpPortal):</label>
-            <input type="text" id="testMints" placeholder="EPjFWaLb3odcccccccccccccccccccccccccccccc, ..." style="width: 100%; box-sizing: border-box; margin: 5px 0; padding: 8px; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; font-family: monospace;">
-            <button onclick="startTest()">Start Test</button>
-            <button onclick="stopTest()">Stop Test</button>
-            <button onclick="clearLogs()">Clear Logs</button>
+            <label><strong>📌 Enter Test Mints (comma-separated)</strong></label>
+            <p style="font-size: 12px; color: #8b949e; margin: 5px 0;">Recommended: Paste real pump.fun token addresses from recent trades.</p>
+            <input type="text" id="testMints" placeholder="EPjFWaLb3od..., 9B5X..., 7nXs..., etc." style="width: 100%; box-sizing: border-box; margin: 5px 0; padding: 8px; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 4px; font-family: monospace; font-size: 12px;">
+            <button onclick="startTest()">▶ Start Test</button>
+            <button onclick="stopTest()">⏹ Stop Test</button>
+            <button onclick="clearLogs()">🔄 Clear</button>
         </div>
 
         <div class="panel">
@@ -203,24 +204,40 @@
                 log('PumpPortal connected', 'success');
                 updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
 
-                // Subscribe to pump.fun launches (all new tokens)
-                ws.send(JSON.stringify({
+                // Subscribe to pump.fun new token creations
+                // Format: subscribe to tokenCreate events from pump.fun program
+                const subscriptionMsg = {
                     method: 'subscribeNewToken',
-                }));
+                };
+
+                log('Sending subscription: ' + JSON.stringify(subscriptionMsg), 'info');
+                ws.send(JSON.stringify(subscriptionMsg));
             };
 
             ws.onmessage = (event) => {
                 try {
+                    // Log raw message for debugging
+                    log('Raw message received: ' + event.data.substring(0, 100), 'info');
+
                     const data = JSON.parse(event.data);
+
                     // Handle different PumpPortal message formats
-                    const mint = data.mint || data.tokenAddress || data.token;
-                    if (mint && !mintsBuffer.includes(mint)) {
+                    const mint = data.mint || data.tokenAddress || data.token || data.signature;
+
+                    // Filter out non-mint responses (like subscription confirmation)
+                    if (mint && mint.length > 20 && !mintsBuffer.includes(mint)) {
                         mintsBuffer.push(mint);
-                        log(`Collected mint: ${mint.substring(0, 8)}...`, 'info');
+                        log(`✓ Collected mint: ${mint.substring(0, 8)}...`, 'success');
                         updateMetrics();
+                    } else if (data.method || data.result) {
+                        // Likely a response message
+                        log(`Message: ${JSON.stringify(data).substring(0, 50)}...`, 'info');
                     }
                 } catch (e) {
-                    // Ignore parse errors
+                    // Log parse errors for debugging
+                    if (event.data && event.data.length > 0) {
+                        log('Parse error on: ' + event.data.substring(0, 50), 'warning');
+                    }
                 }
             };
 
