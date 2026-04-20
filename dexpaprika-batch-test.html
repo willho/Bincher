@@ -289,9 +289,37 @@
                 log(`✓ Using ${manualMints.length} manually provided mints`, 'success');
                 mintsBuffer = manualMints;
             } else {
-                log('⚠️ Please enter token mints in the input field above to start testing.', 'warning');
-                testRunning = false;
-                return;
+                // Fetch mints from proxy server
+                log('Fetching mints from PumpPortal via proxy...', 'info');
+                updateStatus('pumpPortalStatus', 'pending', 'pumpPortalText', 'Collecting...');
+
+                try {
+                    const response = await fetch('/api/test/collect-mints?count=500', {
+                        method: 'GET'
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+
+                    const data = await response.json();
+
+                    if (data.mints && data.mints.length > 0) {
+                        mintsBuffer = data.mints;
+                        log(`✓ Collected ${data.mints.length} mints from PumpPortal`, 'success');
+                        updateStatus('pumpPortalStatus', 'active', 'pumpPortalText', 'Connected');
+                    } else {
+                        log('⚠️ No mints collected. Please enter mints manually.', 'warning');
+                        updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'No data');
+                        testRunning = false;
+                        return;
+                    }
+                } catch (error) {
+                    log(`Error: ${error.message}. Make sure proxy server is running (node test-proxy-server.js)`, 'error');
+                    updateStatus('pumpPortalStatus', 'error', 'pumpPortalText', 'Error');
+                    testRunning = false;
+                    return;
+                }
             }
 
             log(`Starting batch tests with ${mintsBuffer.length} collected mints`, 'info');
