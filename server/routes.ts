@@ -8353,6 +8353,17 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/quota-status", requireAuth, async (req, res) => {
+    try {
+      const { getQuotaStatus } = await import("./api-budget-enforcer");
+      const status = getQuotaStatus();
+      res.json(status);
+    } catch (error) {
+      console.error("Error fetching quota status:", error);
+      res.status(500).json({ error: "Failed to fetch quota status" });
+    }
+  });
+
   app.post("/api/background-jobs/run/:jobName", requireAuth, async (req, res) => {
     try {
       const { runJobManually } = await import("./background-jobs");

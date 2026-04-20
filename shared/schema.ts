@@ -4192,6 +4192,45 @@ export const walletFundingLinks = pgTable("wallet_funding_links", {
 
 export const insertWalletFundingLinksSchema = createInsertSchema(walletFundingLinks).omit({ id: true, createdAt: true, updatedAt: true });
 export type WalletFundingLink = typeof walletFundingLinks.$inferSelect;
+
+// Bot detection and flagging - identify mechanical trading patterns
+export const botFlaggedWallets = pgTable("bot_flagged_wallets", {
+  id: serial("id").primaryKey(),
+
+  walletAddress: text("wallet_address").notNull().unique(),
+  botConfidence: real("bot_confidence").notNull(), // 0-1 composite score
+
+  // Individual signal scores
+  timingRegularity: real("timing_regularity"),
+  replicationScore: real("replication_score"),
+  profitabilityParadox: real("profitability_paradox"),
+  pumpDumpScore: real("pump_dump_score"),
+  replenishmentAnomaly: real("replenishment_anomaly"),
+
+  // Flagging metadata
+  flaggedAt: integer("flagged_at").notNull(),
+  flaggedBy: text("flagged_by").default("automatic"), // 'automatic' | 'admin'
+
+  // Re-entry eligibility
+  reflagEligibleAt: integer("reflag_eligible_at"),
+  reflagCount: integer("reflag_count").default(0),
+
+  // Cost tracking
+  apiQuotaSavedCalls: integer("api_quota_saved_calls").default(0),
+  apiQuotaSavedUsd: real("api_quota_saved_usd").default(0),
+
+  // Historical scores (JSONB for trend analysis)
+  scoreHistory: text("score_history"), // JSON array: [{timestamp, score}]
+
+  createdAt: integer("created_at").notNull(),
+}, (table) => ({
+  walletIdx: index("idx_bot_wallet").on(table.walletAddress),
+  confidenceIdx: index("idx_bot_confidence").on(table.botConfidence),
+  flaggedAtIdx: index("idx_bot_flagged_at").on(table.flaggedAt),
+}));
+
+export const insertBotFlaggedWalletsSchema = createInsertSchema(botFlaggedWallets).omit({ id: true, createdAt: true });
+export type BotFlaggedWallet = typeof botFlaggedWallets.$inferSelect;
 export type InsertWalletFundingLink = z.infer<typeof insertWalletFundingLinksSchema>;
 
 // Retrolearner wallet analysis - tracks wallets discovered from successful tokens

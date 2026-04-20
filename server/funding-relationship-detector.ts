@@ -2,6 +2,8 @@ import { db } from "./db";
 import { eq, and, gte, lte, inArray, desc, asc } from "drizzle-orm";
 import { swaps, walletFundingLinks, monitoredWallets } from "@shared/schema";
 import { getTopFamiliarWhales } from "./familiar-whales";
+import { getSignaturesForAddress } from "./rpc-selector";
+import { checkApiQuota } from "./api-budget-enforcer";
 
 // Constants
 const SOL_MINT = "So11111111111111111111111111111111111111112";
@@ -115,7 +117,17 @@ async function filterFreshWallets(addresses: string[]): Promise<Set<string>> {
   const freshWallets = new Set<string>();
 
   // Query swaps table to count transactions per wallet
+  // TODO: For deeper history (7+ days), switch to Chainstack RPC getSignaturesForAddress
+  // and add quota check: await checkApiQuota("chainstack", 5); // 5 credits per RPC call
   for (const address of addresses) {
+    // Check quota if using Chainstack RPC (future enhancement)
+    try {
+      // Uncomment when switching to RPC: await checkApiQuota("chainstack", 5);
+    } catch (error) {
+      console.error(`[FundingDetector] Quota exceeded for ${address}:`, error);
+      continue;
+    }
+
     const txCount = await db
       .select()
       .from(swaps)
