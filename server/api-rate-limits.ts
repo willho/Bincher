@@ -35,14 +35,14 @@ export const STRICT_RATE_LIMITS = {
     description: "3.33 requests per second (200/min)",
   },
 
-  // DexScreener: 20 req/min strict limit (conservative)
-  // 20 / 60 = 0.33 req/sec
+  // DexScreener: 300 req/min strict limit
+  // 300 / 60 = 5 req/sec
   dexScreener: {
-    perSecond: 0.33,
-    perMinute: 20,
-    perHour: 1200,
-    perDay: 28800,
-    description: "0.33 requests per second (1 every 3 seconds)",
+    perSecond: 5,
+    perMinute: 300,
+    perHour: 18000,
+    perDay: 432000,
+    description: "5 requests per second (300/min)",
   },
 
   // Shyft HTTP RPC: UNLIMITED
@@ -266,6 +266,7 @@ export const rateLimiters = {
   dexPaprika: new StrictRateLimiter(STRICT_RATE_LIMITS.dexPaprika.perSecond),
   dexScreener: new StrictRateLimiter(STRICT_RATE_LIMITS.dexScreener.perSecond),
   shyftHttp: new StrictRateLimiter(STRICT_RATE_LIMITS.shyftHttp.perSecond),
+  pumpPortal: new StrictRateLimiter(STRICT_RATE_LIMITS.pumpPortal.perSecond),
   rugCheck: new StrictRateLimiter(STRICT_RATE_LIMITS.rugCheck.perSecond),
   constantK: new StrictRateLimiter(STRICT_RATE_LIMITS.constantK.perSecond),
 };
@@ -279,9 +280,44 @@ export const quotaTrackers = {
   helius: new DailyQuotaTracker(STRICT_RATE_LIMITS.helius.perDay),
   dexPaprika: new DailyQuotaTracker(STRICT_RATE_LIMITS.dexPaprika.perDay),
   dexScreener: new DailyQuotaTracker(STRICT_RATE_LIMITS.dexScreener.perDay),
+  pumpPortal: new DailyQuotaTracker(STRICT_RATE_LIMITS.pumpPortal.perDay),
   rugCheck: new DailyQuotaTracker(STRICT_RATE_LIMITS.rugCheck.perDay),
   constantK: new DailyQuotaTracker(STRICT_RATE_LIMITS.constantK.perDay),
 };
+
+/**
+ * WAIT AND ENFORCE RATE LIMIT
+ * Blocks caller until tokens available and quota allows
+ * This is what API callers should use
+ */
+export async function enforceRateLimit(
+  apiName: keyof typeof rateLimiters,
+  amount: number = 1
+): Promise<void> {
+  const quotaTracker = quotaTrackers[apiName];
+  const rateLimiter = rateLimiters[apiName];
+
+  // Check daily quota - hard stop, no retry
+  if (!quotaTracker.canUse(amount)) {
+    throw new Error(
+      `Daily quota exhausted for ${apiName}: ${quotaTracker.getUsagePercent().toFixed(1)}% used`
+    );
+  }
+
+  // Check circuit breaker - hard stop, no retry
+  const usagePercent = quotaTracker.getUsagePercent();
+  if (usagePercent >= CIRCUIT_BREAKER_THRESHOLDS[apiName] * 100) {
+    throw new Error(
+      `Circuit breaker triggered for ${apiName} at ${usagePercent.toFixed(1)}% usage`
+    );
+  }
+
+  // Wait for rate limit tokens (blocking, but respects per-second limit)
+  await rateLimiter.waitAndConsume(amount);
+
+  // Record usage
+  quotaTracker.use(amount);
+}
 
 /**
  * CHECK IF API CALL IS ALLOWED
@@ -367,6 +403,20 @@ export function getApiStatus() {
       remaining: quotaTrackers.dexScreener.getRemaining(),
       usagePercent: quotaTrackers.dexScreener.getUsagePercent(),
       circuitBreakerActive: quotaTrackers.dexScreener.getUsagePercent() >= 95,
+    },
+    dexPaprika: {
+      perSecond: STRICT_RATE_LIMITS.dexPaprika.perSecond,
+      used: quotaTrackers.dexPaprika.getUsed(),
+      remaining: quotaTrackers.dexPaprika.getRemaining(),
+      usagePercent: quotaTrackers.dexPaprika.getUsagePercent(),
+      circuitBreakerActive: quotaTrackers.dexPaprika.getUsagePercent() >= 95,
+    },
+    pumpPortal: {
+      perSecond: STRICT_RATE_LIMITS.pumpPortal.perSecond,
+      used: quotaTrackers.pumpPortal.getUsed(),
+      remaining: quotaTrackers.pumpPortal.getRemaining(),
+      usagePercent: quotaTrackers.pumpPortal.getUsagePercent(),
+      circuitBreakerActive: quotaTrackers.pumpPortal.getUsagePercent() >= 95,
     },
     rugCheck: {
       perSecond: STRICT_RATE_LIMITS.rugCheck.perSecond,
