@@ -11,6 +11,7 @@ import {
   FetchWorkQueueItem,
 } from "@shared/schema";
 import { memoryCache } from "./memory-cache";
+import { isValidSolanaAddress } from "@shared/solana-validation";
 
 const PRICE_TTL_SECONDS = 60;
 const MARKET_DATA_TTL_SECONDS = 300;
@@ -991,6 +992,12 @@ function isBondingCurveTokenOldEnough(
 async function enrichToken(request: EnrichmentRequest): Promise<boolean> {
   const { tokenMint, requiredFields } = request;
 
+  // Validate token mint format before attempting enrichment
+  if (!isValidSolanaAddress(tokenMint)) {
+    console.warn(`[Enrichment] Invalid Solana address: ${tokenMint}`);
+    return false;
+  }
+
   const cached = await getTokenData(tokenMint);
   if (cached && hasRequiredFields(cached, requiredFields)) {
     return true;
@@ -1082,15 +1089,26 @@ export async function bulkEnrich(
   priority: 'high' | 'normal' | 'low' = 'low'
 ): Promise<number> {
   let queued = 0;
-  
+  let invalid = 0;
+
   for (const tokenMint of tokenMints) {
+    // Validate mint format before queuing
+    if (!isValidSolanaAddress(tokenMint)) {
+      invalid++;
+      continue;
+    }
+
     const cached = await getTokenData(tokenMint);
     if (!cached || isDataStale(cached)) {
       queueEnrichment(tokenMint, priority);
       queued++;
     }
   }
-  
+
+  if (invalid > 0) {
+    console.warn(`[bulkEnrich] Skipped ${invalid} invalid token addresses`);
+  }
+
   return queued;
 }
 
