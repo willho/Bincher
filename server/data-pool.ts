@@ -997,13 +997,15 @@ async function enrichToken(request: EnrichmentRequest): Promise<boolean> {
   }
 
   // DexPaprika can't handle bonding curve tokens until 10+ seconds have passed
-  // Check if token is old enough before attempting enrichment
+  // Wait if token is too new
   const now = Math.floor(Date.now() / 1000);
   const MIN_AGE_FOR_PAPRIKA = 10; // seconds
 
   if (cached && !isBondingCurveTokenOldEnough(cached, now, MIN_AGE_FOR_PAPRIKA)) {
-    console.log(`[Enrichment] Token ${tokenMint} too new for DexPaprika (need 10s, have ${now - (cached.createdAt || 0)}s)`);
-    // Still try other sources, but skip DexPaprika for now
+    const age = now - (cached.createdAt || 0);
+    const waitTime = (MIN_AGE_FOR_PAPRIKA - age) * 1000;
+    console.log(`[Enrichment] Token ${tokenMint} too new for DexPaprika (${age}s old), waiting ${Math.ceil(waitTime / 1000)}s...`);
+    await new Promise(resolve => setTimeout(resolve, waitTime));
   }
 
   const dexData = await fetchFromDexScreener(tokenMint);
