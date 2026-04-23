@@ -16,7 +16,7 @@ import { WebSocket as WSType } from "ws";
 import { db } from "./db";
 import { eq, desc, lt } from "drizzle-orm";
 import { tokenDataPool } from "@shared/schema";
-import { isValidSolanaAddress } from "@shared/solana-validation";
+import { isValidSolanaAddress, normalizeSolanaAddress } from "@shared/solana-validation";
 
 interface WebSocketProvider {
   name: string;
@@ -610,14 +610,16 @@ export function getPumpFunWebSocket(): PumpFunWebSocket | null {
 }
 
 export function subscribeTrades(mint: string, tier: "webhook" | "hot" | "warm" | "cold" = "warm"): void {
-  if (!isValidSolanaAddress(mint)) {
+  const normalized = normalizeSolanaAddress(mint);
+  if (!normalized || !isValidSolanaAddress(normalized)) {
     console.warn(`[PumpFun WebSocket] Rejecting invalid mint: "${mint}"`);
     return;
   }
   if (!instance) {
     throw new Error("WebSocket not started");
   }
-  instance.addTokenSubscription(mint, tier);
+  // Use normalized address (trimmed, decoded, etc.)
+  instance.addTokenSubscription(normalized, tier);
 }
 
 export function unsubscribeTrades(mint: string): void {

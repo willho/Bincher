@@ -11,7 +11,7 @@ import {
   FetchWorkQueueItem,
 } from "@shared/schema";
 import { memoryCache } from "./memory-cache";
-import { isValidSolanaAddress } from "@shared/solana-validation";
+import { isValidSolanaAddress, normalizeSolanaAddress } from "@shared/solana-validation";
 
 const PRICE_TTL_SECONDS = 60;
 const MARKET_DATA_TTL_SECONDS = 300;
@@ -92,14 +92,17 @@ export async function upsertTokenData(
   source: string = 'backend',
   fetchedBy?: number
 ): Promise<TokenDataPoolEntry> {
-  // Validate token mint at gateway - prevent malformed addresses from entering system
-  if (!isValidSolanaAddress(tokenMint)) {
+  // Normalize and validate token mint at gateway
+  const normalized = normalizeSolanaAddress(tokenMint);
+  if (!normalized || !isValidSolanaAddress(normalized)) {
     console.error(`[upsertTokenData] Rejecting invalid token mint: "${tokenMint}" from source "${source}"`);
     throw new Error(`Invalid token mint: ${tokenMint}`);
   }
 
+  // Use normalized address throughout
+  const finalMint = normalized;
   const now = Math.floor(Date.now() / 1000);
-  const existing = await getTokenData(tokenMint);
+  const existing = await getTokenData(finalMint);
 
   if (existing) {
     const updateData: Record<string, any> = {
@@ -158,7 +161,7 @@ export async function upsertTokenData(
         const { emit } = await import("./discovery-event-bus");
         await emit({
           type: "social_detected" as any,
-          tokenMint,
+          tokenMint: finalMint,
           tokenSymbol: data.tokenSymbol || existing.tokenSymbol || undefined,
           source: source,
           data: {
@@ -183,13 +186,13 @@ export async function upsertTokenData(
     }
 
     const mergedData = { ...existing, ...updateData } as TokenDataPoolEntry;
-    memoryCache.setToken(tokenMint, mergedData, true);
+    memoryCache.setToken(finalMint, mergedData, true);
     return mergedData;
   }
 
   const newEntry: TokenDataPoolEntry = {
     id: 0,
-    tokenMint,
+    tokenMint: finalMint,
     tokenSymbol: data.tokenSymbol ?? null,
     tokenName: data.tokenName ?? null,
     priceUsd: data.priceUsd ?? null,
@@ -263,7 +266,7 @@ export async function upsertTokenData(
     imageUrlFetchedAt: data.imageUrl ? now : null,
   };
 
-  memoryCache.setToken(tokenMint, newEntry, true);
+  memoryCache.setToken(finalMint, newEntry, true);
   return newEntry;
 }
 
