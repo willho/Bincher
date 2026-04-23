@@ -18,6 +18,12 @@ const MARKET_DATA_TTL_SECONDS = 300;
 const HOLDER_CACHE_TTL_SECONDS = 86400;
 
 export async function getTokenData(tokenMint: string): Promise<TokenDataPoolEntry | null> {
+  // Quick validation - reject obviously malformed addresses
+  if (!isValidSolanaAddress(tokenMint)) {
+    console.warn(`[getTokenData] Invalid token mint requested: "${tokenMint}"`);
+    return null;
+  }
+
   const cached = memoryCache.getToken(tokenMint);
   if (cached) return cached;
 
@@ -86,6 +92,12 @@ export async function upsertTokenData(
   source: string = 'backend',
   fetchedBy?: number
 ): Promise<TokenDataPoolEntry> {
+  // Validate token mint at gateway - prevent malformed addresses from entering system
+  if (!isValidSolanaAddress(tokenMint)) {
+    console.error(`[upsertTokenData] Rejecting invalid token mint: "${tokenMint}" from source "${source}"`);
+    throw new Error(`Invalid token mint: ${tokenMint}`);
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const existing = await getTokenData(tokenMint);
 
