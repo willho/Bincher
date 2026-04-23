@@ -2660,6 +2660,74 @@ export async function getTopViewedTokens(limit: number = 20): Promise<Array<{
   
   // Sort by score descending
   results.sort((a, b) => b.score - a.score);
-  
+
   return results.slice(0, limit);
+}
+
+// =====================
+// PUMP.FUN GRADUATION MONITORING
+// =====================
+
+/**
+ * Check bonding curve progress for active tokens
+ * Detects when tokens graduate (reach 100% bonding curve)
+ */
+export async function checkBondingCurveProgress(): Promise<{ graduations: number; checked: number }> {
+  try {
+    const { fetchBondingCurveProgress } = await import("./pump-sdk-client");
+    const { handleGraduation } = await import("./graduation-tracker");
+
+    let checked = 0;
+    let graduations = 0;
+
+    // Get all non-graduated pump.fun tokens from the pool
+    const activeTokens = await db.select({
+      tokenMint: tokenDataPool.tokenMint,
+      tokenSymbol: tokenDataPool.tokenSymbol,
+    })
+      .from(tokenDataPool)
+      .where(and(
+        eq(tokenDataPool.isPumpfun, true),
+        eq(tokenDataPool.pumpfunGraduated, false),
+        // Only check tokens created in last 24 hours (avoid spam from old tokens)
+        gte(tokenDataPool.pairCreatedAt, Math.floor(Date.now() / 1000) - 86400)
+      ))
+      .limit(100); // Check up to 100 tokens per run
+
+    for (const token of activeTokens) {
+      checked++;
+
+      try {
+        const summary = await fetchBondingCurveProgress(token.tokenMint);
+
+        if (!summary) {
+          continue;
+        }
+
+        // Check if token has graduated
+        if (summary.isGraduated) {
+          await handleGraduation(token.tokenMint);
+          graduations++;
+        } else if (summary.progressBps >= 9500) {
+          // Token is 95%+ full - log for monitoring
+          console.log(
+            `[Discovery] Token ${token.tokenSymbol} at ${(summary.progressBps / 100).toFixed(1)}% bonding curve`
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[Discovery] Error checking bonding curve for ${token.tokenMint}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+
+    return { graduations, checked };
+  } catch (error) {
+    console.error(
+      "[Discovery] Error in checkBondingCurveProgress:",
+      error instanceof Error ? error.message : error
+    );
+    return { graduations: 0, checked: 0 };
+  }
 }

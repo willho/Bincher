@@ -120,11 +120,19 @@ app.use((req, res, next) => {
     const { initializeWhaleTracker } = await import("./whale-tracker");
     initializeWhaleTracker();
 
+    // Initialize Pump SDK for graduation detection
+    const { initializePumpSdk } = await import("./pump-sdk-client");
+    await initializePumpSdk();
+
     const { startPumpFunMonitoring } = await import("./pumpfun-bonding-curve");
     startPumpFunMonitoring();
 
     const { startGraduationTracking } = await import("./graduation-tracker");
     startGraduationTracking();
+
+    // Start real-time graduation progress monitoring
+    const { startGraduationMonitor } = await import("./graduation-monitor");
+    startGraduationMonitor();
 
     const { startRaydiumPoolDiscovery } = await import("./raydium-pool-discovery");
     startRaydiumPoolDiscovery();
