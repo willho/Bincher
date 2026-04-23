@@ -974,14 +974,38 @@ async function processEnrichmentQueue(): Promise<void> {
   }
 }
 
+/**
+ * Check if a bonding curve token is old enough for DexPaprika
+ * DexPaprika can't handle bonding curve tokens until 10+ seconds after creation
+ */
+function isBondingCurveTokenOldEnough(
+  tokenData: TokenDataPoolEntry,
+  now: number,
+  minAge: number
+): boolean {
+  if (!tokenData.createdAt) return false;
+  const age = now - tokenData.createdAt;
+  return age >= minAge;
+}
+
 async function enrichToken(request: EnrichmentRequest): Promise<boolean> {
   const { tokenMint, requiredFields } = request;
-  
+
   const cached = await getTokenData(tokenMint);
   if (cached && hasRequiredFields(cached, requiredFields)) {
     return true;
   }
-  
+
+  // DexPaprika can't handle bonding curve tokens until 10+ seconds have passed
+  // Check if token is old enough before attempting enrichment
+  const now = Math.floor(Date.now() / 1000);
+  const MIN_AGE_FOR_PAPRIKA = 10; // seconds
+
+  if (cached && !isBondingCurveTokenOldEnough(cached, now, MIN_AGE_FOR_PAPRIKA)) {
+    console.log(`[Enrichment] Token ${tokenMint} too new for DexPaprika (need 10s, have ${now - (cached.createdAt || 0)}s)`);
+    // Still try other sources, but skip DexPaprika for now
+  }
+
   const dexData = await fetchFromDexScreener(tokenMint);
   if (dexData) {
     await upsertTokenData(tokenMint, {
@@ -994,7 +1018,7 @@ async function enrichToken(request: EnrichmentRequest): Promise<boolean> {
       volume24h: dexData.volume24h,
       priceChange24h: dexData.priceChange24h,
     }, 'dexscreener');
-    
+
     const updated = await getTokenData(tokenMint);
     if (updated && hasRequiredFields(updated, requiredFields)) {
       return true;
