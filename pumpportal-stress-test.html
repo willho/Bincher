@@ -95,6 +95,10 @@
         <button id="startBtn" onclick="startTest()">START TEST</button>
         <button id="stopBtn" onclick="stopTest()" disabled>STOP TEST</button>
         <button onclick="clearLogs()">CLEAR LOGS</button>
+        <label style="margin-left: 20px;">
+            <input type="checkbox" id="useProxy" checked>
+            Use CORS Proxy (for browser restrictions)
+        </label>
         <span id="connectionStatus" style="margin-left: 20px; font-weight: bold;">Status: Disconnected</span>
     </div>
 
@@ -291,7 +295,20 @@
         }
 
         function connectWebSocket() {
-            ws = new WebSocket('wss://pumpportal.fun/api/data');
+            let wsUrl = 'wss://pumpportal.fun/api/data';
+
+            // Use CORS proxy if enabled (for browser security restrictions)
+            if (document.getElementById('useProxy').checked) {
+                wsUrl = 'wss://cors-anywhere.herokuapp.com/wss://pumpportal.fun/api/data';
+                log('new', 'Using CORS proxy for connection...');
+            }
+
+            try {
+                ws = new WebSocket(wsUrl);
+            } catch (error) {
+                log('error', `WebSocket creation failed: ${error.message}. Try enabling/disabling CORS proxy.`);
+                return;
+            }
 
             ws.onopen = () => {
                 document.getElementById('connectionStatus').textContent = 'Status: Connected ✓';
