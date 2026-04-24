@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PumpPortal Stress Test - 3 Subscriptions</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #0f0;
+            padding: 20px;
+            overflow: hidden;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 15px;
+            height: 100vh;
+        }
+        .panel {
+            border: 2px solid #0f0;
+            padding: 15px;
+            background: #0a0a0a;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .panel h2 {
+            color: #0f0;
+            font-size: 14px;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #0f0;
+            padding-bottom: 5px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+            font-size: 12px;
+        }
+        .stat-item {
+            background: #111;
+            padding: 8px;
+            border: 1px solid #0a0a0a;
+        }
+        .stat-label { color: #888; font-size: 10px; }
+        .stat-value { color: #0f0; font-weight: bold; font-size: 14px; }
+        .status { padding: 5px; margin: 5px 0; font-size: 11px; word-break: break-all; }
+        .status.new { background: #002200; }
+        .status.trade { background: #220000; }
+        .status.migration { background: #002222; }
+        .status.error { background: #220000; color: #f00; }
+        .list {
+            flex: 1;
+            overflow-y: auto;
+            font-size: 10px;
+            border: 1px solid #0a0a0a;
+            padding: 5px;
+        }
+        .list-item {
+            padding: 2px;
+            margin: 1px 0;
+            background: #111;
+            border-left: 2px solid #0f0;
+            padding-left: 5px;
+        }
+        .metric-high { color: #f0f; }
+        .metric-critical { color: #f00; animation: pulse 0.5s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .controls {
+            margin-bottom: 15px;
+            padding: 10px;
+            border: 1px solid #0f0;
+            background: #111;
+        }
+        button {
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-weight: bold;
+            margin-right: 10px;
+            border-radius: 3px;
+        }
+        button:hover { background: #0c0; }
+        button:disabled { background: #666; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <button id="startBtn" onclick="startTest()">START TEST</button>
+        <button id="stopBtn" onclick="stopTest()" disabled>STOP TEST</button>
+        <button onclick="clearLogs()">CLEAR LOGS</button>
+        <span id="connectionStatus" style="margin-left: 20px; font-weight: bold;">Status: Disconnected</span>
+    </div>
+
+    <div class="container">
+        <!-- METRICS PANEL -->
+        <div class="panel">
+            <h2>📊 METRICS</h2>
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-label">Msgs/Sec</div>
+                    <div class="stat-value" id="currentRate">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Peak Msgs/Sec</div>
+                    <div class="stat-value metric-high" id="peakRate">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Total Messages</div>
+                    <div class="stat-value" id="totalMessages">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Uptime</div>
+                    <div class="stat-value" id="uptime">0s</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">New Tokens</div>
+                    <div class="stat-value" id="newTokenCount">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Monitored Tokens</div>
+                    <div class="stat-value" id="monitoredTokenCount">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Trades Received</div>
+                    <div class="stat-value" id="tradeCount">0</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Graduations</div>
+                    <div class="stat-value" id="graduationCount">0</div>
+                </div>
+            </div>
+            <div style="font-size: 11px; color: #888; margin-top: 10px;">
+                <div>Rate Limit: 200 msg/sec</div>
+                <div id="rateLimitStatus" style="color: #0f0;">✓ Safe</div>
+            </div>
+            <div style="font-size: 10px; color: #666; margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
+                <div><strong>Strategy:</strong></div>
+                <div>1. Subscribe to newToken</div>
+                <div>2. Add each new token to trade subscriptions</div>
+                <div>3. Subscribe to migrations</div>
+                <div>4. Monitor message rate continuously</div>
+                <div style="margin-top: 10px;"><strong>Peak will show when:</strong></div>
+                <div>- High volume of new tokens + trades</div>
+                <div>- Graduating tokens spike</div>
+            </div>
+        </div>
+
+        <!-- NEW TOKEN LOG -->
+        <div class="panel">
+            <h2>🆕 NEW TOKENS</h2>
+            <div id="newTokenLog" class="list"></div>
+        </div>
+
+        <!-- TOKEN TRADES LOG -->
+        <div class="panel">
+            <h2>💱 TOKEN TRADES</h2>
+            <div id="tradeLog" class="list"></div>
+        </div>
+
+        <!-- MIGRATION & EVENTS LOG -->
+        <div class="panel">
+            <h2>🚀 MIGRATIONS & EVENTS</h2>
+            <div id="eventLog" class="list"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isRunning = false;
+        let monitoredMints = new Set();
+        let metrics = {
+            messageCount: 0,
+            startTime: null,
+            peakRate: 0,
+            newTokens: 0,
+            trades: 0,
+            graduations: 0,
+            messageCountLastSecond: 0,
+            lastRateCheck: Date.now(),
+        };
+
+        function log(type, message) {
+            const maxLogs = 100;
+            const logId = `${type}Log`;
+            const logEl = document.getElementById(logId);
+
+            const item = document.createElement('div');
+            item.className = `status ${type}`;
+            item.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+
+            logEl.insertBefore(item, logEl.firstChild);
+
+            // Keep only last N logs
+            while (logEl.children.length > maxLogs) {
+                logEl.removeChild(logEl.lastChild);
+            }
+        }
+
+        function updateMetrics() {
+            const now = Date.now();
+            const elapsed = (now - metrics.lastRateCheck) / 1000;
+
+            if (elapsed >= 1) {
+                const currentRate = Math.round(metrics.messageCountLastSecond / elapsed);
+                document.getElementById('currentRate').textContent = currentRate;
+
+                if (currentRate > metrics.peakRate) {
+                    metrics.peakRate = currentRate;
+                    document.getElementById('peakRate').textContent = currentRate;
+
+                    // Update rate limit status
+                    const rateLimitEl = document.getElementById('rateLimitStatus');
+                    if (currentRate > 180) {
+                        rateLimitEl.textContent = '⚠ APPROACHING LIMIT';
+                        rateLimitEl.style.color = '#f0f';
+                    } else if (currentRate > 150) {
+                        rateLimitEl.textContent = '⚠ High usage';
+                        rateLimitEl.style.color = '#ff0';
+                    } else {
+                        rateLimitEl.textContent = '✓ Safe';
+                        rateLimitEl.style.color = '#0f0';
+                    }
+                }
+
+                metrics.messageCountLastSecond = 0;
+                metrics.lastRateCheck = now;
+            }
+
+            // Update display
+            document.getElementById('totalMessages').textContent = metrics.messageCount.toLocaleString();
+            document.getElementById('newTokenCount').textContent = metrics.newTokens;
+            document.getElementById('monitoredTokenCount').textContent = monitoredMints.size;
+            document.getElementById('tradeCount').textContent = metrics.trades.toLocaleString();
+            document.getElementById('graduationCount').textContent = metrics.graduations;
+
+            const uptime = Math.floor((now - metrics.startTime) / 1000);
+            document.getElementById('uptime').textContent = formatUptime(uptime);
+        }
+
+        function formatUptime(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = seconds % 60;
+            return `${h}h ${m}m ${s}s`;
+        }
+
+        function startTest() {
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            document.getElementById('connectionStatus').textContent = 'Status: Connecting...';
+
+            isRunning = true;
+            metrics.messageCount = 0;
+            metrics.startTime = Date.now();
+            metrics.peakRate = 0;
+            metrics.newTokens = 0;
+            metrics.trades = 0;
+            metrics.graduations = 0;
+            metrics.messageCountLastSecond = 0;
+            metrics.lastRateCheck = Date.now();
+            monitoredMints.clear();
+
+            clearLogs();
+            connectWebSocket();
+
+            // Update metrics every 100ms
+            setInterval(() => {
+                if (isRunning) updateMetrics();
+            }, 100);
+        }
+
+        function stopTest() {
+            isRunning = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('connectionStatus').textContent = 'Status: Stopped';
+
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+
+            log('migration', `Test stopped. Peak: ${metrics.peakRate} msg/sec, Total: ${metrics.messageCount} messages`);
+        }
+
+        function connectWebSocket() {
+            ws = new WebSocket('wss://pumpportal.fun/api/data');
+
+            ws.onopen = () => {
+                document.getElementById('connectionStatus').textContent = 'Status: Connected ✓';
+                document.getElementById('connectionStatus').style.color = '#0f0';
+                log('new', 'Connected to PumpPortal');
+
+                // Subscribe to all three types
+                ws.send(JSON.stringify({ method: "subscribeNewToken" }));
+                log('new', 'Subscribed to: subscribeNewToken');
+
+                ws.send(JSON.stringify({ method: "subscribeMigration" }));
+                log('migration', 'Subscribed to: subscribeMigration');
+
+                log('new', 'Ready to add tokens to trade subscriptions...');
+            };
+
+            ws.onmessage = (event) => {
+                if (!isRunning) return;
+
+                metrics.messageCount++;
+                metrics.messageCountLastSecond++;
+
+                try {
+                    const data = JSON.parse(event.data);
+
+                    // Handle new token creation
+                    if (data.mint) {
+                        metrics.newTokens++;
+                        monitoredMints.add(data.mint);
+
+                        // Subscribe to trades for this token
+                        ws.send(JSON.stringify({
+                            method: "subscribeTokenTrade",
+                            keys: [data.mint]
+                        }));
+
+                        log('new', `New token: ${data.mint.slice(0, 8)}... (monitoring ${monitoredMints.size} tokens)`);
+                    }
+
+                    // Handle trades
+                    if (data.txType === 'buy' || data.txType === 'sell') {
+                        metrics.trades++;
+                        const type = data.txType === 'buy' ? '📈' : '📉';
+                        log('trade', `${type} ${data.mint?.slice(0, 8) || 'unknown'}... ${data.tokenAmount || '?'} tokens`);
+                    }
+
+                    // Handle migrations (graduations)
+                    if (data.migration === 'pump_to_raydium' || data.migration === 'pump_to_pumpswap') {
+                        metrics.graduations++;
+                        monitoredMints.delete(data.mint);
+                        log('migration', `🚀 GRADUATION: ${data.mint.slice(0, 8)}... → ${data.migration}`);
+                    }
+
+                } catch (e) {
+                    // Ignore parse errors for non-JSON messages
+                }
+            };
+
+            ws.onerror = (error) => {
+                document.getElementById('connectionStatus').textContent = 'Status: Error ✗';
+                document.getElementById('connectionStatus').style.color = '#f00';
+                log('error', `WebSocket error: ${error.message || 'Unknown error'}`);
+            };
+
+            ws.onclose = () => {
+                document.getElementById('connectionStatus').textContent = 'Status: Disconnected';
+                document.getElementById('connectionStatus').style.color = '#888';
+                if (isRunning) {
+                    log('error', 'Connection closed, retrying in 5 seconds...');
+                    setTimeout(connectWebSocket, 5000);
+                }
+            };
+        }
+
+        function clearLogs() {
+            document.getElementById('newTokenLog').innerHTML = '';
+            document.getElementById('tradeLog').innerHTML = '';
+            document.getElementById('eventLog').innerHTML = '';
+        }
+    </script>
+</body>
+</html>
