@@ -66,6 +66,16 @@ app.use((req, res, next) => {
     await storage.initialize();
     console.log("Database initialized");
     dbAvailable = true;
+
+    // Run startup wizard - verify proxies and APIs
+    const { runStartupWizard } = await import("./startup-wizard");
+    const wizardSuccess = await runStartupWizard();
+
+    if (!wizardSuccess) {
+      console.error("Startup wizard failed - proxies not connected or verification failed");
+      console.error("Blocking application startup. Please verify proxy connections.");
+      process.exit(1);
+    }
     
     const { startCleanupScheduler } = await import("./discovery-worker");
     startCleanupScheduler();
