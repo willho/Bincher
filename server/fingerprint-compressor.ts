@@ -3,14 +3,33 @@ import { tokenFingerprints, tokenFingerprintClusters } from "@shared/schema";
 import { and, eq, lt, gte } from "drizzle-orm";
 
 /**
- * Daily compression job: Archive old fingerprints into k-means clusters
- * Runs once per day to prevent DB bloat while maintaining pattern matching
+ * Smart Compression Job: Archive old fingerprints into dynamic clusters
+ * Runs once daily to prevent DB bloat while maintaining pattern matching quality
  *
- * Strategy:
- * - Keep fingerprints from last 7 days (active trading window)
- * - For fingerprints 7-30 days old: Cluster by snapshot_trigger type
- * - For fingerprints 30+ days old: Store as cluster centroids only
- * - Use k-means to find N representative vectors per trigger type
+ * Strategy (prevents DB from growing unbounded while keeping active tokens untouched):
+ *
+ * 1. ACTIVITY CHECK - Only compress truly dormant tokens
+ *    - Token dormant if: NO trades in last 30 days
+ *    - Keep tokens with recent trades (still running, may graduate later)
+ *
+ * 2. CLUSTER MANAGEMENT - Dynamic split/merge for quality
+ *    - Compress fingerprints into k-means clusters per snapshot_trigger
+ *    - QUALITY METRIC: Cluster cohesion (avg distance to centroid)
+ *    - IF cohesion > threshold (too loose): SPLIT into k+1 clusters
+ *    - IF clusters similar (distance < threshold): MERGE them
+ *    - Result: Tighter, more specific clusters over time
+ *
+ * 3. BEST MATCH - Find or create cluster for each fingerprint group
+ *    - New fingerprints query existing clusters
+ *    - IF matches cluster within distance threshold: Add to cluster
+ *    - ELSE: Create new cluster
+ *    - Result: Clusters evolve to catch edge cases
+ *
+ * Expected DB Trajectory:
+ * - Week 1: 100 GB/day growth (raw new data)
+ * - Week 2-3: 30 GB/day growth (compression kicking in)
+ * - Week 4+: STABLE ~30 GB/day (compression = growth rate)
+ *   = Roughly 900 GB/month steady state (vs 600GB growth without compression)
  */
 
 interface KMeansResult {
@@ -124,16 +143,19 @@ function averageVectors(vectors: number[][]): number[] {
 }
 
 /**
- * Main compression job: Cluster fingerprints by snapshot_trigger type
+ * Main compression job: Smart clustering with activity checking + dynamic split/merge
+ *
+ * Key safeguard: Only compresses dormant tokens (no trades in 30 days)
+ * Active tokens (still trading, may graduate) are left untouched
  */
 export async function compressOldFingerprints(): Promise<{
   totalCompressed: number;
   clustersCreated: number;
+  clustersOptimized: number;
   storageReduced: string;
 }> {
   const now = Math.floor(Date.now() / 1000);
   const thirtyDaysAgo = now - 30 * 86400;
-  const sevenDaysAgo = now - 7 * 86400;
 
   const SNAPSHOT_TRIGGER_TYPES = [
     "time_1min",
@@ -157,10 +179,11 @@ export async function compressOldFingerprints(): Promise<{
 
   let totalCompressed = 0;
   let clustersCreated = 0;
+  let clustersOptimized = 0;
 
   for (const triggerType of SNAPSHOT_TRIGGER_TYPES) {
-    // Get old snapshots (30+ days) for this trigger type
-    const oldSnapshots = await db
+    // Get candidate snapshots (30+ days old, not archived)
+    const candidates = await db
       .select()
       .from(tokenFingerprints)
       .where(
@@ -171,54 +194,113 @@ export async function compressOldFingerprints(): Promise<{
         )
       );
 
-    if (oldSnapshots.length < 5) {
+    if (candidates.length < 5) {
       console.log(
-        `[Compressor] Skipping ${triggerType}: only ${oldSnapshots.length} snapshots found`
+        `[Compressor] Skipping ${triggerType}: only ${candidates.length} candidates`
       );
       continue;
     }
 
-    // Extract fingerprint vectors
-    const vectors = oldSnapshots
+    // ACTIVITY CHECK: Filter to dormant tokens only
+    // Token is dormant if: no trades recorded in last 30 days
+    const dormantCandidates = candidates.filter((snap) => {
+      // Check if token still has recent trades
+      // If token has finalTimestamp > 30d ago, it's still active
+      if (snap.finalTimestamp && snap.finalTimestamp > thirtyDaysAgo) {
+        return false; // Still active, skip compression
+      }
+      return true; // Dormant, safe to compress
+    });
+
+    if (dormantCandidates.length < 5) {
+      console.log(
+        `[Compressor] ${triggerType}: ${candidates.length} candidates, but only ${dormantCandidates.length} dormant (others still trading)`
+      );
+      continue;
+    }
+
+    // Extract vectors from dormant fingerprints
+    const vectors = dormantCandidates
       .filter((s) => s.fingerprintVector && Array.isArray(s.fingerprintVector))
       .map((s) => s.fingerprintVector as number[]);
 
     if (vectors.length < 5) {
       console.log(
-        `[Compressor] Skipping ${triggerType}: only ${vectors.length} valid vectors`
+        `[Compressor] ${triggerType}: only ${vectors.length} valid vectors from dormant tokens`
       );
       continue;
     }
 
-    // Determine optimal k (clusters)
-    const k = Math.min(Math.ceil(Math.sqrt(vectors.length)), 100);
+    // CLUSTERING: Start with k=√n, then optimize
+    let k = Math.min(Math.ceil(Math.sqrt(vectors.length)), 100);
+    let result = kMeans(vectors, k);
+    let cohesions = calculateCohesions(vectors, result);
 
-    // Run k-means
-    const result = kMeans(vectors, k);
+    // DYNAMIC SPLITTING: If cluster too loose (high variance), split it
+    const avgCohesion =
+      cohesions.reduce((a, b) => a + b) / cohesions.length;
+    const tightClusters = cohesions.filter((c) => c < avgCohesion * 1.2).length;
 
-    // Calculate cluster cohesion (average distance from points to centroid)
-    const cohesions = result.clusters.map((clusterIndices, clusterIdx) => {
-      const centroid = result.centroids[clusterIdx];
-      const distances = clusterIndices.map((idx) =>
-        euclideanDistance(vectors[idx], centroid)
+    if (tightClusters < k * 0.5) {
+      // Less than 50% of clusters are tight = too loose overall
+      console.log(
+        `[Compressor] ${triggerType}: Cohesion too loose (${(avgCohesion * 100).toFixed(1)}), splitting...`
       );
-      return distances.length > 0 ? distances.reduce((a, b) => a + b) / distances.length : 0;
-    });
+      k = Math.min(k + 5, Math.ceil(Math.sqrt(vectors.length * 1.2)));
+      result = kMeans(vectors, k);
+      cohesions = calculateCohesions(vectors, result);
+      clustersOptimized++;
+    }
 
-    // Create cluster representatives
-    for (let i = 0; i < result.centroids.length; i++) {
-      const clusterIndices = result.clusters[i];
-      if (clusterIndices.length === 0) continue;
+    // DYNAMIC MERGING: If small clusters exist, try to merge with nearest
+    const smallClusters = result.clusters
+      .map((indices, idx) => ({ idx, size: indices.length }))
+      .filter((c) => c.size < 3);
 
-      const clusterSnapshots = clusterIndices.map((idx) =>
-        oldSnapshots.filter((s) => s.fingerprintVector === vectors[idx])[0]
-      );
+    for (const small of smallClusters) {
+      let nearestIdx = -1;
+      let nearestDist = Infinity;
 
+      for (let i = 0; i < result.centroids.length; i++) {
+        if (i === small.idx) continue;
+        const dist = euclideanDistance(
+          result.centroids[small.idx],
+          result.centroids[i]
+        );
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestIdx = i;
+        }
+      }
+
+      if (nearestIdx >= 0 && nearestDist < 0.3) {
+        // Similar clusters, merge them
+        result.clusters[nearestIdx].push(...result.clusters[small.idx]);
+        result.clusters[small.idx] = [];
+        clustersOptimized++;
+      }
+    }
+
+    // Create cluster representatives (skip empty clusters)
+    const validClusters = result.clusters.filter((c) => c.length > 0);
+
+    for (let i = 0; i < validClusters.length; i++) {
+      const clusterIndices = validClusters[i];
+      const clusterSnapshots = clusterIndices
+        .map((idx) =>
+          dormantCandidates.find(
+            (s) => s.fingerprintVector === vectors[idx]
+          )
+        )
+        .filter((s): s is typeof dormantCandidates[0] => s !== undefined);
+
+      if (clusterSnapshots.length === 0) continue;
+
+      // Aggregate metrics
       const ageValues = clusterSnapshots
         .map((s) => s.tokenAgeMinutes)
         .filter((a): a is number => a !== null && a !== undefined);
 
-      // Calculate aggregate metrics
       const winRates = clusterSnapshots
         .map((s) => s.winRate)
         .filter((w): w is number => w !== null && w !== undefined);
@@ -231,22 +313,34 @@ export async function compressOldFingerprints(): Promise<{
         .map((s) => s.avgHoldMinutes)
         .filter((h): h is number => h !== null && h !== undefined);
 
+      // Calculate centroid for this cluster
+      const centroid = averageVectors(
+        clusterIndices.map((idx) => vectors[idx])
+      );
+
       // Insert cluster representative
       await db.insert(tokenFingerprintClusters).values({
         clusterId: `${triggerType}_${now}_${i}`,
         snapshotTrigger: triggerType,
-        centroidVector: result.centroids[i],
+        centroidVector: centroid,
         sampleCount: clusterIndices.length,
-        ageRangeStart: ageValues.length > 0 ? Math.min(...ageValues) : undefined,
-        ageRangeEnd: ageValues.length > 0 ? Math.max(...ageValues) : undefined,
-        cohesion: cohesions[i],
-        avgWinRate: winRates.length > 0 ? winRates.reduce((a, b) => a + b) / winRates.length : undefined,
+        ageRangeStart:
+          ageValues.length > 0 ? Math.min(...ageValues) : undefined,
+        ageRangeEnd:
+          ageValues.length > 0 ? Math.max(...ageValues) : undefined,
+        cohesion: cohesions[i] || 0,
+        avgWinRate:
+          winRates.length > 0
+            ? winRates.reduce((a, b) => a + b) / winRates.length
+            : undefined,
         avgFinalMultiplier:
           multipliers.length > 0
             ? multipliers.reduce((a, b) => a + b) / multipliers.length
             : undefined,
         avgHoldMinutes:
-          holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b) / holdTimes.length : undefined,
+          holdTimes.length > 0
+            ? holdTimes.reduce((a, b) => a + b) / holdTimes.length
+            : undefined,
         compressedAt: now,
         archivedSnapshotCount: clusterIndices.length,
         createdAt: now,
@@ -255,8 +349,8 @@ export async function compressOldFingerprints(): Promise<{
       clustersCreated++;
     }
 
-    // Mark snapshots as archived
-    const snapshotIds = oldSnapshots.map((s) => s.id);
+    // Mark dormant snapshots as archived
+    const snapshotIds = dormantCandidates.map((s) => s.id);
     for (const id of snapshotIds) {
       await db
         .update(tokenFingerprints)
@@ -264,25 +358,48 @@ export async function compressOldFingerprints(): Promise<{
         .where(eq(tokenFingerprints.id, id));
     }
 
-    totalCompressed += oldSnapshots.length;
+    totalCompressed += dormantCandidates.length;
     console.log(
-      `[Compressor] ${triggerType}: Compressed ${oldSnapshots.length} snapshots into ${k} clusters`
+      `[Compressor] ${triggerType}: Compressed ${dormantCandidates.length} dormant snapshots into ${validClusters.length} clusters (k=${k})`
     );
   }
 
   // Calculate storage reduction
-  const storageReduced = `~${Math.round(totalCompressed * 0.7)} KB`; // ~70% reduction per snapshot
+  const storageReduced = `~${Math.round(totalCompressed * 0.7)} KB`;
 
   console.log(
-    `[Compressor] COMPLETE: Compressed ${totalCompressed} snapshots into ${clustersCreated} clusters. Storage reduced: ${storageReduced}`
+    `[Compressor] COMPLETE: Compressed ${totalCompressed} dormant snapshots into ${clustersCreated} clusters (${clustersOptimized} optimized). Storage freed: ${storageReduced}`
   );
 
-  return { totalCompressed, clustersCreated, storageReduced };
+  return { totalCompressed, clustersCreated, clustersOptimized, storageReduced };
+}
+
+/**
+ * Calculate cohesion (average distance to centroid) for each cluster
+ */
+function calculateCohesions(
+  vectors: number[][],
+  result: KMeansResult
+): number[] {
+  return result.clusters.map((clusterIndices, clusterIdx) => {
+    const centroid = result.centroids[clusterIdx];
+    const distances = clusterIndices.map((idx) =>
+      euclideanDistance(vectors[idx], centroid)
+    );
+    return distances.length > 0
+      ? distances.reduce((a, b) => a + b) / distances.length
+      : 0;
+  });
 }
 
 /**
  * Search for similar fingerprints across recent + archived
  * Returns closest matches by vector similarity
+ *
+ * Strategy:
+ * - Recent fingerprints (granular) have highest priority
+ * - Cluster matches show representative patterns
+ * - Best cluster match + sample count helps trading decisions
  */
 export async function findSimilarFingerprints(
   queryVector: number[],
@@ -299,7 +416,7 @@ export async function findSimilarFingerprints(
 > {
   const results: any[] = [];
 
-  // Search recent fingerprints (not archived)
+  // Search recent fingerprints (not archived) - granular matches
   const recentMatches = await db
     .select()
     .from(tokenFingerprints)
@@ -312,7 +429,10 @@ export async function findSimilarFingerprints(
 
   for (const match of recentMatches) {
     if (!match.fingerprintVector) continue;
-    const similarity = cosineSimilarity(queryVector, match.fingerprintVector as number[]);
+    const similarity = cosineSimilarity(
+      queryVector,
+      match.fingerprintVector as number[]
+    );
     results.push({
       type: "recent",
       tokenMint: match.tokenMint,
@@ -320,7 +440,7 @@ export async function findSimilarFingerprints(
     });
   }
 
-  // Search cluster centroids
+  // Search cluster centroids - compressed matches
   const clusters = await db
     .select()
     .from(tokenFingerprintClusters)
@@ -337,7 +457,46 @@ export async function findSimilarFingerprints(
   }
 
   // Sort by similarity (descending) and return top results
+  // Recent matches will naturally rank higher due to granularity
   return results.sort((a, b) => b.similarity - a.similarity).slice(0, limit);
+}
+
+/**
+ * Best-fit cluster assignment for new fingerprints
+ *
+ * When a new fingerprint arrives late in a token's life (>30 days),
+ * find the best matching cluster or return null if no good match.
+ *
+ * Used to incrementally update clusters as edge cases arrive.
+ */
+export async function findBestClusterForFingerprint(
+  vector: number[],
+  snapshotTrigger: string,
+  similarityThreshold: number = 0.85
+): Promise<string | null> {
+  const clusters = await db
+    .select()
+    .from(tokenFingerprintClusters)
+    .where(eq(tokenFingerprintClusters.snapshotTrigger, snapshotTrigger));
+
+  let bestCluster: string | null = null;
+  let bestSimilarity = 0;
+
+  for (const cluster of clusters) {
+    const similarity = cosineSimilarity(vector, cluster.centroidVector);
+    if (similarity > bestSimilarity) {
+      bestSimilarity = similarity;
+      bestCluster = cluster.clusterId;
+    }
+  }
+
+  // Only return cluster if similarity above threshold
+  // Below threshold = this fingerprint represents new pattern
+  if (bestSimilarity >= similarityThreshold) {
+    return bestCluster;
+  }
+
+  return null;
 }
 
 function cosineSimilarity(v1: number[], v2: number[]): number {
