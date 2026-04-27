@@ -29,7 +29,9 @@ export interface TradingDecision {
 }
 
 /**
- * Evaluate buying at T+0 (launch): Check creator reputation
+ * Evaluate creator reputation signal
+ * Available at any time (from token metadata at launch)
+ * Triggers immediately if creator_win_rate >= learned threshold
  */
 export async function shouldBuyAtLaunch(
   tokenMint: string,
@@ -94,7 +96,9 @@ export async function shouldBuyAtLaunch(
 }
 
 /**
- * Evaluate buying at T+3: Check whale entry
+ * Evaluate whale entry signal
+ * Triggers immediately when whale (>= learned threshold) detected
+ * Confidence ramps up over first ~3 minutes of whale presence
  */
 export async function shouldBuyOnSmartMoney(
   tokenMint: string,
@@ -136,7 +140,8 @@ export async function shouldBuyOnSmartMoney(
 
   const expectedSuccessRate = threshold.expectedSuccessRate || 0.75;
 
-  // Confidence based on time passed (ramps up from 0 at launch to full by T+3)
+  // Confidence ramps up as whale presence duration increases
+  // Full confidence after ~3 minutes of whale holding
   const timeSinceWhale = (snapshot.timeSinceFirstWhale5Sol || 0) / 60; // Convert to minutes
   const timeConfidence = Math.min(1.0, timeSinceWhale / 3); // Full confidence at 3 minutes
 
@@ -146,14 +151,15 @@ export async function shouldBuyOnSmartMoney(
     shouldBuy: true,
     confidence: finalConfidence,
     triggers: ["whale_entry_detected"],
-    reason: `Whale >=${whaleSize} SOL entered ${timeSinceWhale.toFixed(1)}min ago, success rate ${(expectedSuccessRate * 100).toFixed(1)}%`,
+    reason: `Whale >=${whaleSize} SOL detected, age ${timeSinceWhale.toFixed(1)}min, expected success ${(expectedSuccessRate * 100).toFixed(1)}%`,
     metadata: { whaleScore: expectedSuccessRate },
   };
 }
 
 /**
- * Evaluate buying at T+5+: Check ANN score
- * Integrates with token-success-ann.ts
+ * Evaluate ANN shape-matching signal
+ * Available once early dynamics fingerprint is complete (usually T+5-T+10)
+ * Triggers immediately if ANN score >= learned threshold
  */
 export async function shouldBuyOnANNSignal(annScore: number): Promise<TradingDecision> {
   // Get learned ANN threshold
@@ -198,7 +204,9 @@ export async function shouldBuyOnANNSignal(annScore: number): Promise<TradingDec
 }
 
 /**
- * Evaluate buying at milestones: Check trader diversity + buy ratio
+ * Evaluate milestone signal (trader diversity + buy ratio)
+ * Triggers whenever milestone conditions are met
+ * Available once sufficient trader activity accumulated
  */
 export async function shouldBuyOnMilestone(snapshot: {
   uniqueTraders?: number;
@@ -256,14 +264,24 @@ export async function shouldBuyOnMilestone(snapshot: {
 }
 
 /**
- * Combined decision: Evaluate all conditions and make final buy decision
+ * Combined decision: Evaluate ALL available signals immediately
+ *
+ * System acts on signals as they arrive, not on time-based gates.
+ * Time gates removed - retrolearner learns confidence thresholds for each condition.
+ *
+ * Strategy:
+ * - Creator available? Evaluate immediately → may trigger at T+0, T+1, any time
+ * - Whale entered? Evaluate immediately → may trigger at T+1, T+3, any time
+ * - ANN score ready? Evaluate immediately → may trigger at T+5, T+8, any time
+ * - Milestones hit? Evaluate immediately → may trigger at T+10, T+20, any time
+ *
+ * Act on first qualified signal with confidence > 0.5, ignoring time entirely.
  */
 export async function makeTradingDecision(
   tokenMint: string,
   creatorAddress: string,
   snapshot: {
-    // Snapshot data at specific time
-    age: "T0" | "T3" | "T5" | "T10"; // Time stage
+    // Available signals (any subset may be present)
     whaleEntered5Sol?: number;
     whaleEntered1Sol?: number;
     timeSinceFirstWhale5Sol?: number;
@@ -274,74 +292,66 @@ export async function makeTradingDecision(
   }
 ): Promise<TradingDecision> {
   const decisions: TradingDecision[] = [];
+  const allMetadata: Record<string, any> = {};
 
-  // Always check creator at any stage
-  decisions.push(await shouldBuyAtLaunch(tokenMint, creatorAddress));
+  // 1. CREATOR SIGNAL - Check immediately if available
+  // Creator signal is always available (from metadata at launch)
+  const creatorDecision = await shouldBuyAtLaunch(tokenMint, creatorAddress);
+  decisions.push(creatorDecision);
+  allMetadata.creator = creatorDecision.metadata;
 
-  // Stage-specific checks
-  switch (snapshot.age) {
-    case "T0":
-      // Just check creator
-      break;
-
-    case "T3":
-      decisions.push(
-        await shouldBuyOnSmartMoney({
-          whaleEntered5Sol: snapshot.whaleEntered5Sol,
-          whaleEntered1Sol: snapshot.whaleEntered1Sol,
-          timeSinceFirstWhale5Sol: snapshot.timeSinceFirstWhale5Sol,
-        })
-      );
-      break;
-
-    case "T5":
-      if (snapshot.annScore !== undefined) {
-        decisions.push(await shouldBuyOnANNSignal(snapshot.annScore));
-      }
-      break;
-
-    case "T10":
-      decisions.push(
-        await shouldBuyOnMilestone({
-          uniqueTraders: snapshot.uniqueTraders,
-          buyRatio: snapshot.buyRatio,
-          concentration: snapshot.concentration,
-        })
-      );
-      break;
+  // 2. WHALE SIGNAL - Check immediately if whale data available
+  if (snapshot.whaleEntered5Sol !== undefined || snapshot.whaleEntered1Sol !== undefined) {
+    const whaleDecision = await shouldBuyOnSmartMoney({
+      whaleEntered5Sol: snapshot.whaleEntered5Sol,
+      whaleEntered1Sol: snapshot.whaleEntered1Sol,
+      timeSinceFirstWhale5Sol: snapshot.timeSinceFirstWhale5Sol,
+    });
+    decisions.push(whaleDecision);
+    allMetadata.whale = whaleDecision.metadata;
   }
 
-  // Combine decisions: Any trigger with confidence > 0.5 = BUY
-  const activeTriggers = decisions.filter((d) => d.shouldBuy && d.confidence > 0.5);
+  // 3. ANN SIGNAL - Check immediately if ANN score available
+  if (snapshot.annScore !== undefined) {
+    const annDecision = await shouldBuyOnANNSignal(snapshot.annScore);
+    decisions.push(annDecision);
+    allMetadata.ann = annDecision.metadata;
+  }
 
-  if (activeTriggers.length === 0) {
+  // 4. MILESTONE SIGNAL - Check immediately if milestone data available
+  if (
+    snapshot.uniqueTraders !== undefined &&
+    snapshot.buyRatio !== undefined
+  ) {
+    const milestoneDecision = await shouldBuyOnMilestone({
+      uniqueTraders: snapshot.uniqueTraders,
+      buyRatio: snapshot.buyRatio,
+      concentration: snapshot.concentration,
+    });
+    decisions.push(milestoneDecision);
+    allMetadata.milestone = milestoneDecision.metadata;
+  }
+
+  // DECISION RULE: Act on first qualified signal
+  // Select first decision that meets confidence threshold (> 0.5)
+  const qualifiedDecision = decisions.find((d) => d.shouldBuy && d.confidence > 0.5);
+
+  if (!qualifiedDecision) {
     return {
       shouldBuy: false,
       confidence: 0,
       triggers: [],
-      reason: "No conditions met for trading",
-      metadata: decisions
-        .reduce(
-          (acc, d) => ({ ...acc, ...d.metadata }),
-          {}
-        ),
+      reason: "No signals qualified (all below 0.5 confidence threshold)",
+      metadata: allMetadata,
     };
   }
 
-  // Calculate average confidence from all positive signals
-  const avgConfidence =
-    activeTriggers.reduce((sum, d) => sum + d.confidence, 0) / activeTriggers.length;
-  const allTriggers = activeTriggers.flatMap((d) => d.triggers);
-
   return {
     shouldBuy: true,
-    confidence: Math.min(1.0, avgConfidence),
-    triggers: allTriggers,
-    reason: `Triggered by: ${allTriggers.join(", ")}`,
-    metadata: decisions.reduce(
-      (acc, d) => ({ ...acc, ...d.metadata }),
-      {}
-    ),
+    confidence: qualifiedDecision.confidence,
+    triggers: qualifiedDecision.triggers,
+    reason: `Signal triggered: ${qualifiedDecision.triggers.join(", ")} (confidence: ${(qualifiedDecision.confidence * 100).toFixed(1)}%)`,
+    metadata: allMetadata,
   };
 }
 
