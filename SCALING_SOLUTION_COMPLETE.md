@@ -87,35 +87,44 @@
 
 ---
 
-## Buying Logic: 4-Stage Decision Tree
+## Buying Logic: Signal-Based (Not Time-Based)
+
+**Key Principle: Act on signals as they arrive, not on time gates**
 
 ```
-TIME    SIGNAL          DECISION FUNCTION           CONFIDENCE
-────────────────────────────────────────────────────────────────
-T+0     Creator         shouldBuyAtLaunch()        creator.winRate
-        Reputation      "creator >= 55% → 62%"      if qualified
+SIGNAL              AVAILABLE AT      TRIGGERS IMMEDIATELY IF    CONFIDENCE
+───────────────────────────────────────────────────────────────────────────
+Creator             T+0 (metadata)    creator_win_rate >= 0.55   creator.winRate
+Reputation          from launch                                  (if >0.55)
 
-T+3     Whale Entry     shouldBuyOnSmartMoney()    0 to expectedSuccessRate
-        Detection       "whale >= 5 SOL → 75%"      over 3 minutes
+Whale Entry         Any time          whale >= 5 SOL detected    ramps 0→1.0
+Detection           whale detected                               over 3 min hold
 
-T+5     ANN Shape       shouldBuyOnANNSignal()     annScore (0-1)
-        Matching        "ANN score >= 0.70 → 65%"   direct
+ANN Score           T+3-T+10          ANN score >= 0.70         annScore (0-1)
+Matching            fingerprint ready
 
-T+10    Milestone       shouldBuyOnMilestone()     expectedSuccessRate
-        Conditions      "100+ traders + 65% buys"   if qualified
+Milestone           Any time          100+ traders +            expectedRate
+Conditions          traders arrive    65%+ buys (concentration  (if all met)
+                                      < 70%)
 ```
 
 **Flow:**
 ```
 makeTradingDecision(mint, creator, snapshot)
-  ├─ Always check creator (any stage)
-  ├─ If creator qualifies (confidence > 0.5) → BUY immediately
-  ├─ Else, check stage-specific conditions
-  │   ├─ T+0: (creator only)
-  │   ├─ T+3: whale entry detected?
-  │   ├─ T+5: ANN score > threshold?
-  │   └─ T+10: all milestone conditions met?
-  └─ Return first qualified decision
+  ├─ Evaluate ALL available signals simultaneously
+  ├─ Creator available? Check against learned threshold
+  ├─ Whale data available? Check against learned threshold
+  ├─ ANN score available? Check against learned threshold
+  ├─ Milestone data available? Check against learned threshold
+  │
+  └─ Return first signal with confidence > 0.5
+     (ignoring time - act immediately when conditions met)
+
+Examples of correct behavior:
+  • Creator 100% success rate → BUY at T+0
+  • Whale enters at T+1 → BUY at T+1 (not wait for T+3)
+  • ANN matches at T+3 → BUY at T+3 (not wait for T+5)
+  • Milestones hit at T+8 → BUY at T+8 (not wait for T+10)
 ```
 
 ---
