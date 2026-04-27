@@ -1405,6 +1405,37 @@ export const tradeLogs = pgTable("trade_logs", {
   createdAt: integer("created_at").notNull(),
 });
 
+// Raw on-chain trades for fingerprinting (short retention, then deleted)
+export const rawTokenTrades = pgTable("raw_token_trades", {
+  id: serial("id").primaryKey(),
+
+  // Trade identification
+  tokenMint: text("token_mint").notNull(),
+  signature: text("signature").notNull().unique(), // Prevents duplicates from multiple sources
+
+  // Trade details
+  walletAddress: text("wallet_address").notNull(),
+  amountSol: real("amount_sol").notNull(),
+  amountTokens: real("amount_tokens").notNull(),
+  direction: text("direction").notNull(), // "buy" | "sell"
+  price: real("price"), // SOL per token
+
+  // Metadata
+  source: text("source"), // "pumpportal" | "pumpdev" | "dexpaprika"
+  timestamp: integer("timestamp").notNull(),
+  discoveredAt: integer("discovered_at").notNull(), // When we first saw this trade
+
+  // Retention control (auto-delete after 1 day via cron job)
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_token_mint_recent").on(table.tokenMint, table.discoveredAt),
+  index("idx_created_at").on(table.createdAt), // For deletion job
+]);
+
+export const insertRawTokenTradesSchema = createInsertSchema(rawTokenTrades).omit({ id: true, createdAt: true });
+export type RawTokenTrade = typeof rawTokenTrades.$inferSelect;
+export type InsertRawTokenTrade = z.infer<typeof insertRawTokenTradesSchema>;
+
 export const insertTradeLogSchema = createInsertSchema(tradeLogs).omit({ id: true });
 export type TradeLog = typeof tradeLogs.$inferSelect;
 export type InsertTradeLog = z.infer<typeof insertTradeLogSchema>;
