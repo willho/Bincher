@@ -701,6 +701,18 @@ export async function registerRoutes(
     }
   });
 
+  // Get Phase 1 Infrastructure Status
+  app.get("/api/phase1/status", async (req, res) => {
+    try {
+      const { getPhase1Status } = await import("./phase1-infrastructure");
+      const status = getPhase1Status();
+      res.json(status);
+    } catch (error) {
+      console.error("Failed to get Phase 1 status:", error);
+      res.status(500).json({ error: "Phase 1 infrastructure not initialized" });
+    }
+  });
+
   // Start monitoring
   app.post("/api/monitoring/start", async (req, res) => {
     try {

@@ -76,7 +76,24 @@ app.use((req, res, next) => {
       console.error("Blocking application startup. Please verify proxy connections.");
       process.exit(1);
     }
-    
+
+    // Initialize Phase 1: 3-Server Mesh Infrastructure
+    const { initializePhase1Infrastructure, phase1MaintenanceTask } = await import("./phase1-infrastructure");
+    const shyftApiKey = process.env.SHYFT_API_KEY || "";
+
+    if (shyftApiKey) {
+      try {
+        await initializePhase1Infrastructure(shyftApiKey);
+
+        // Schedule periodic maintenance
+        setInterval(phase1MaintenanceTask, 5 * 60 * 1000); // Every 5 minutes
+      } catch (error) {
+        console.warn("Phase 1 infrastructure initialization failed, continuing without it:", error);
+      }
+    } else {
+      console.warn("SHYFT_API_KEY not set, Phase 1 infrastructure will not be initialized");
+    }
+
     const { startCleanupScheduler } = await import("./discovery-worker");
     startCleanupScheduler();
     
@@ -207,4 +224,27 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // Graceful shutdown handler for Phase 1 infrastructure
+  process.on("SIGTERM", async () => {
+    console.log("SIGTERM received, shutting down gracefully...");
+    try {
+      const { shutdownPhase1Infrastructure } = await import("./phase1-infrastructure");
+      await shutdownPhase1Infrastructure();
+    } catch (error) {
+      console.error("Error during Phase 1 shutdown:", error);
+    }
+    process.exit(0);
+  });
+
+  process.on("SIGINT", async () => {
+    console.log("SIGINT received, shutting down gracefully...");
+    try {
+      const { shutdownPhase1Infrastructure } = await import("./phase1-infrastructure");
+      await shutdownPhase1Infrastructure();
+    } catch (error) {
+      console.error("Error during Phase 1 shutdown:", error);
+    }
+    process.exit(0);
+  });
 })();
