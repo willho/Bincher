@@ -66,6 +66,16 @@ app.use((req, res, next) => {
     await storage.initialize();
     console.log("Database initialized");
     dbAvailable = true;
+
+    // Run startup wizard - verify proxies and APIs
+    const { runStartupWizard } = await import("./startup-wizard");
+    const wizardSuccess = await runStartupWizard();
+
+    if (!wizardSuccess) {
+      console.error("Startup wizard failed - proxies not connected or verification failed");
+      console.error("Blocking application startup. Please verify proxy connections.");
+      process.exit(1);
+    }
     
     const { startCleanupScheduler } = await import("./discovery-worker");
     startCleanupScheduler();
@@ -120,11 +130,19 @@ app.use((req, res, next) => {
     const { initializeWhaleTracker } = await import("./whale-tracker");
     initializeWhaleTracker();
 
+    // Initialize Pump SDK for graduation detection
+    const { initializePumpSdk } = await import("./pump-sdk-client");
+    await initializePumpSdk();
+
     const { startPumpFunMonitoring } = await import("./pumpfun-bonding-curve");
     startPumpFunMonitoring();
 
     const { startGraduationTracking } = await import("./graduation-tracker");
     startGraduationTracking();
+
+    // Start real-time graduation progress monitoring
+    const { startGraduationMonitor } = await import("./graduation-monitor");
+    startGraduationMonitor();
 
     const { startRaydiumPoolDiscovery } = await import("./raydium-pool-discovery");
     startRaydiumPoolDiscovery();

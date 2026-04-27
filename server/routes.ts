@@ -8612,6 +8612,50 @@ export async function registerRoutes(
     console.error("[WebSocket] Failed to start:", error);
   }
 
+  // Proxy Registration API
+  const { proxyRegistry } = await import("./proxy-registry");
+  const proxyAuthPassword = process.env.PROXY_AUTH_PASSWORD || "penny-pincher";
+
+  // POST /api/proxy/register - Register proxy server
+  app.post("/api/proxy/register", (req: Request, res: Response) => {
+    const authHeader = req.headers.authorization;
+    const expectedAuth = `Bearer ${proxyAuthPassword}`;
+
+    if (!authHeader || authHeader !== expectedAuth) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { proxyName, outboundIP, port } = req.body;
+
+    if (!proxyName || !outboundIP) {
+      return res.status(400).json({
+        error: "Missing required fields: proxyName, outboundIP"
+      });
+    }
+
+    try {
+      const proxy = proxyRegistry.registerProxy(
+        proxyName,
+        outboundIP,
+        port || 3000
+      );
+      res.json({
+        registered: true,
+        proxy
+      });
+    } catch (error) {
+      res.status(500).json({
+        error: error instanceof Error ? error.message : "Unknown error"
+      });
+    }
+  });
+
+  // GET /api/proxy/status - Get proxy registration status
+  app.get("/api/proxy/status", (_req: Request, res: Response) => {
+    const status = proxyRegistry.getStatus();
+    res.json(status);
+  });
+
   return httpServer;
 }
 
