@@ -6973,9 +6973,45 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid request", details: parsed.error.errors });
       }
+
+      const { tokenMint, entrySol, strategyTheory } = parsed.data;
+
+      // Step 1: Validate position before opening
+      const { validateAndOpenPaperPosition } = await import("./paper-trading-simulation");
+      const validation = await validateAndOpenPaperPosition({
+        userId: req.userId!,
+        tokenMint,
+        entrySol,
+        strategyTheory: strategyTheory || "retrolearner_guided_entry",
+      });
+
+      if (!validation.success) {
+        return res.status(400).json({
+          error: "Position validation failed",
+          details: validation.error,
+          simulation: validation.simulation,
+        });
+      }
+
+      // Step 2: Open position with validated exit strategy
       const { openPaperPosition } = await import("./paper-trading");
-      const position = await openPaperPosition({ userId: req.userId!, ...parsed.data });
-      res.json(position);
+      const position = await openPaperPosition({
+        userId: req.userId!,
+        ...parsed.data,
+        // Use exit strategy from validation
+        takeProfitMultiplier: validation.exitStrategy?.takeProfitMultiplier,
+        stopLossPercent: validation.exitStrategy?.stopLossPercent,
+        trailingStopPercent: validation.exitStrategy?.trailingStopPercent,
+      });
+
+      res.json({
+        position,
+        validation: {
+          simulationPassed: validation.simulation.success,
+          exitStrategy: validation.exitStrategy,
+          expectedOutcome: validation.exitStrategy?.takeProfitMultiplier,
+        },
+      });
     } catch (error: any) {
       console.error("Error opening paper position:", error);
       res.status(500).json({ error: error.message || "Failed to open paper position" });
