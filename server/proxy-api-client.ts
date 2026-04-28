@@ -10,6 +10,7 @@ import {
   getProxyConfigs,
   selectHealthyProxy,
 } from "./proxy-config";
+import { rateLimiter } from "./unified-rate-limiter";
 
 export interface ProxyRequestOptions {
   service: "shyft" | "chainstack" | "dexpaprika"; // Service to route through
@@ -43,6 +44,9 @@ export async function requestViaProxy<T = any>(
   }
 
   try {
+    // Enforce rate limit for the service being called
+    await rateLimiter.waitUntilAllowed(options.service);
+
     // Build proxy URL
     const proxyUrl = `${healthyProxy.url}/api/proxy-forward`;
 
