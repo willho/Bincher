@@ -3,21 +3,25 @@ import { tokenFingerprintClusters, tokenFingerprints } from "@shared/schema";
 import { eq, and, gte, lt, sql } from "drizzle-orm";
 
 /**
- * Trajectory Archetype Management: Post-Mortem Clustering
+ * Lifecycle Stage Archetype Management
  *
- * Key Insight: All tokens eventually reach a final state (archived).
- * The distinction between "winning" and "losing" is temporal—even winners
- * become archived. Compression happens post-mortem on complete trajectories.
+ * Key Insight: All tokens eventually reach a final state.
+ * Each snapshot is a moment in the token's lifecycle with specific characteristics.
+ * Snapshots cluster independently by STAGE, not by token.
  *
  * Architecture:
- * 1. Active phase: Tokens evolve naturally, snapshots captured via activity-gating
- *    (T0, per-minute for 10min, per-50-trades after, per-multiplier at graduation)
- * 2. Archive phase: Token reaches final state, complete trajectory sequence captured
- * 3. Compression phase: Trajectory signature computed and merged into archetype
- *    (similar evolution patterns cluster together)
+ * 1. Snapshot capture (existing): Activity-gated fingerprints at T0, per-min for 10min,
+ *    per-50-trades after, per-multiplier at graduation
+ * 2. Snapshot clustering: Each fingerprint independently clusters to lifecycle archetype
+ *    based on its state (age, multiplier, holder concentration, etc.)
+ *    - Snapshot 4 of Token X (1hr, 5x, tight holders) → archetype "pump_early_concentrated"
+ *    - Snapshot 8 of Token X (6hr, 2x, dispersed) → archetype "crash_dispersed"
+ *    - Snapshot 4 of Token Y (45min, 2x, tight) → SAME archetype "pump_early_concentrated"
+ * 3. Trajectory emerges: Sequence of archetypes a token traverses (not averaged)
  *
- * Result: ~4,300 archetypes for 36K tokens/month (12% of no-merge bloat)
- * Each archetype represents a trajectory pattern, not an outcome class.
+ * Result: ~2-5K archetypes represent all lifecycle stages/patterns.
+ * Same archetype can contain snapshots from different tokens at different times.
+ * Preserves complete trajectory while clustering similar states together.
  */
 
 /**
@@ -78,76 +82,53 @@ function averageVectors(vectors: number[][]): {
 }
 
 /**
- * Archive complete token trajectory into archetype cluster
+ * Cluster a single snapshot into lifecycle stage archetype
  *
- * Called when token reaches final state (volume death, graduation, rugpull, etc.)
- * Compresses the complete fingerprint sequence into a trajectory archetype.
+ * Called whenever a fingerprint is created (activity-gated).
+ * Snapshots cluster independently based on their STAGE characteristics,
+ * not the complete token trajectory.
  *
- * Process:
- * 1. Fetch all fingerprints for token (complete trajectory in order)
- * 2. Compute trajectory signature (sequence compression)
- * 3. Find similar trajectory archetypes (other tokens with same evolution pattern)
- * 4. Merge into archetype cluster (represents "tokens that evolved like this")
+ * Examples:
+ * - Token X snapshot 4 (1hr, 5x, tight holders) → "pump_early_concentrated"
+ * - Token Y snapshot 4 (45min, 2x, tight) → SAME "pump_early_concentrated"
+ * - Token X snapshot 8 (6hr, 2x, dispersed) → "crash_dispersed"
  *
- * All tokens eventually reach this phase (all tokens look like losers eventually).
- * Clustering happens post-mortem on complete lifecycle, not during active trading.
+ * The trajectory emerges as the sequence of archetypes visited.
  */
-export async function archiveTokenTrajectory(
-  tokenMint: string,
-  archiveReason: string
+export async function clusterSnapshotToArchetype(
+  fingerprint: {
+    tokenMint: string;
+    fingerprintVector: number[];
+    tokenAgeMinutes: number;
+    medianMultiplier: number;
+    holderConcentration?: number;
+    buyerDiversity?: number;
+  }
 ): Promise<{
   archetypeClusterId: string;
-  trajectoryLength: number;
   similarityToArchetype: number;
   isNewArchetype: boolean;
 }> {
-  // Fetch complete trajectory (all fingerprints for this token in sequence)
-  const trajectoryFPs = await db
-    .select()
-    .from(tokenFingerprints)
-    .where(eq(tokenFingerprints.tokenMint, tokenMint))
-    .orderBy(tokenFingerprints.snapshotTimestamp);
+  const vector = fingerprint.fingerprintVector;
 
-  if (trajectoryFPs.length === 0) {
-    throw new Error(`[ArchiveTrajectory] No fingerprints found for token ${tokenMint}`);
-  }
-
-  // Compute trajectory signature from complete fingerprint sequence
-  // For now: average of all fingerprints (later: could use dynamic time warping or other sequence metrics)
-  const trajectoryVectors = trajectoryFPs
-    .map((fp) => fp.fingerprintVector as number[])
-    .filter((v): v is number[] => v !== null && v.length > 0);
-
-  if (trajectoryVectors.length === 0) {
-    throw new Error(`[ArchiveTrajectory] No valid vectors in trajectory for ${tokenMint}`);
-  }
-
-  const { centroid: trajectorySignature, cohesion: trajectoryQuality } =
-    averageVectors(trajectoryVectors);
-
-  // Find most similar trajectory archetype
+  // Find all existing archetypes (lifecycle stage patterns)
   const allArchetypes = await db
     .select()
     .from(tokenFingerprintClusters)
     .where(eq(tokenFingerprintClusters.type, "dead"));
 
   if (allArchetypes.length === 0) {
-    // Create first trajectory archetype
-    return createTrajectoryArchetype(
-      tokenMint,
-      trajectorySignature,
-      trajectoryFPs.length,
-      archiveReason
-    );
+    // Create first archetype for this stage
+    return createStageArchetype(fingerprint);
   }
 
-  // Find best matching archetype (similar trajectory evolution)
+  // Find most similar archetype (same lifecycle stage/characteristics)
   let bestArchetype = allArchetypes[0];
   let bestSimilarity = -1;
 
   for (const archetype of allArchetypes) {
     const archetypeCentroid = archetype.centroid as number[];
-    const similarity = cosineSimilarity(trajectorySignature, archetypeCentroid);
+    const similarity = cosineSimilarity(vector, archetypeCentroid);
 
     if (similarity > bestSimilarity) {
       bestSimilarity = similarity;
@@ -155,75 +136,64 @@ export async function archiveTokenTrajectory(
     }
   }
 
-  // Archetype matching thresholds (trajectory-based)
+  // Snapshot matching thresholds (stage-based)
   const thresholds = {
-    mergeTrajectories: 0.80, // Similar trajectory shapes → merge
+    mergeSimilarity: 0.80, // Similar lifecycle stages → merge
     minArchetypeCohesion: 0.70, // Archetype must stay tight
     cohesionDropTolerance: 0.08, // Allow max 8% cohesion drop
   };
 
-  // Too different trajectory → create new archetype
-  if (bestSimilarity < thresholds.mergeTrajectories) {
-    return createTrajectoryArchetype(
-      tokenMint,
-      trajectorySignature,
-      trajectoryFPs.length,
-      archiveReason
-    );
+  // Too different stage → create new archetype
+  if (bestSimilarity < thresholds.mergeSimilarity) {
+    return createStageArchetype(fingerprint);
   }
 
   // Check if merging would degrade archetype cohesion
   if (bestArchetype.sampleCount > 50) {
     if (bestArchetype.cohesion < thresholds.minArchetypeCohesion) {
       // Archetype already loose, create new one
-      return createTrajectoryArchetype(
-        tokenMint,
-        trajectorySignature,
-        trajectoryFPs.length,
-        archiveReason
-      );
+      return createStageArchetype(fingerprint);
     }
   }
 
-  // Merge trajectory into archetype
-  const updated = await mergeTrajectoryIntoArchetype(
+  // Merge snapshot into archetype
+  const updated = await mergeSnapshotIntoArchetype(
     bestArchetype.clusterId,
-    trajectorySignature,
-    tokenMint
+    vector,
+    fingerprint.tokenMint
   );
 
   return {
     archetypeClusterId: bestArchetype.clusterId,
-    trajectoryLength: trajectoryFPs.length,
     similarityToArchetype: bestSimilarity,
     isNewArchetype: false,
   };
 }
 
 /**
- * Create new trajectory archetype
+ * Create new lifecycle stage archetype
  */
-async function createTrajectoryArchetype(
-  tokenMint: string,
-  trajectorySignature: number[],
-  trajectoryLength: number,
-  archiveReason: string
-): Promise<{
+async function createStageArchetype(fingerprint: {
+  tokenMint: string;
+  fingerprintVector: number[];
+  tokenAgeMinutes: number;
+  medianMultiplier: number;
+}): Promise<{
   archetypeClusterId: string;
-  trajectoryLength: number;
   similarityToArchetype: number;
   isNewArchetype: boolean;
 }> {
   const now = Math.floor(Date.now() / 1000);
-  const archetypeId = `trajectory_archetype_${archiveReason}_${now}`;
+  const stageDesc = `stage_age${Math.round(fingerprint.tokenAgeMinutes)}_mul${Math.round(fingerprint.medianMultiplier * 10) / 10}_${now}`;
+  const archetypeId = `lifecycle_${stageDesc}`;
 
   await db.insert(tokenFingerprintClusters).values({
     clusterId: archetypeId,
     type: "dead",
-    centroid: trajectorySignature,
-    sampleCount: 1, // One token (this trajectory) in archetype
-    archivedTokenMints: [tokenMint],
-    cohesion: 1.0, // Single trajectory = perfect cohesion
+    centroid: fingerprint.fingerprintVector,
+    sampleCount: 1, // One snapshot (this fingerprint) in archetype
+    archivedTokenMints: [fingerprint.tokenMint],
+    cohesion: 1.0, // Single snapshot = perfect cohesion
     minSimilarity: 1.0,
     maxSimilarity: 1.0,
     createdAt: now,
@@ -233,18 +203,17 @@ async function createTrajectoryArchetype(
 
   return {
     archetypeClusterId: archetypeId,
-    trajectoryLength,
     similarityToArchetype: 1.0,
     isNewArchetype: true,
   };
 }
 
 /**
- * Merge trajectory into existing archetype (recompute centroid with new trajectory signature)
+ * Merge snapshot into existing lifecycle archetype (recompute centroid with new snapshot)
  */
-async function mergeTrajectoryIntoArchetype(
+async function mergeSnapshotIntoArchetype(
   archetypeId: string,
-  trajectorySignature: number[],
+  snapshotVector: number[],
   tokenMint: string
 ): Promise<{
   sampleCount: number;
@@ -264,27 +233,26 @@ async function mergeTrajectoryIntoArchetype(
   const current = archetype[0];
   const currentMints = (current.archivedTokenMints as string[]) || [];
 
-  // Recompute archetype centroid including new trajectory signature
-  // Collect all trajectory signatures from archived mints
-  const allTrajectorySignatures: number[][] = [];
+  // Recompute archetype centroid with new snapshot vector
+  const allVectors: number[][] = [];
 
   // Add existing archetype centroid as representative
   if (current.centroid) {
-    allTrajectorySignatures.push(current.centroid as number[]);
+    allVectors.push(current.centroid as number[]);
   }
 
-  // Add new trajectory signature
-  allTrajectorySignatures.push(trajectorySignature);
+  // Add new snapshot vector
+  allVectors.push(snapshotVector);
 
   const { centroid: newCentroid, cohesion: newCohesion } =
-    averageVectors(allTrajectorySignatures);
+    averageVectors(allVectors);
 
-  // Calculate similarity range among trajectories
+  // Calculate similarity range among snapshots
   let minSim = 1,
     maxSim = 0;
-  for (let i = 0; i < allTrajectorySignatures.length; i++) {
-    for (let j = i + 1; j < allTrajectorySignatures.length; j++) {
-      const sim = cosineSimilarity(allTrajectorySignatures[i], allTrajectorySignatures[j]);
+  for (let i = 0; i < allVectors.length; i++) {
+    for (let j = i + 1; j < allVectors.length; j++) {
+      const sim = cosineSimilarity(allVectors[i], allVectors[j]);
       minSim = Math.min(minSim, sim);
       maxSim = Math.max(maxSim, sim);
     }
