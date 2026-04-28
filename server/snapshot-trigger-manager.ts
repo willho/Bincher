@@ -101,20 +101,21 @@ export function getTriggeredMilestones(
     const triggered = updated[key] ?? false;
     const downKey = `${key}_down`;
     const recoveryKey = `${key}_recovery`;
+    const isUnlocked = updated[downKey] === true; // Has dropped >50% away
 
     if (current >= milestone && !triggered) {
       // First time hitting this milestone
       newSnapshots.push({ trigger: key, type: "up" });
       updated[key] = true;
-      updated[downKey] = false; // Mark as not triggered on downside
-    } else if (current >= milestone && triggered && prev < milestone * 0.5) {
-      // Recovery: price dropped 50% away, now bouncing back
+      updated[downKey] = false; // Mark: not yet unlocked (no 50% drop yet)
+    } else if (current >= milestone && triggered && isUnlocked && prev < milestone * 0.5) {
+      // Recovery: price previously dropped >50% away (unlocked), now bouncing back through milestone
       newSnapshots.push({ trigger: recoveryKey, type: "recovery" });
-      // Don't reset the milestone, just record recovery
-    } else if (current < milestone * 0.5 && !updated[downKey]) {
-      // Price dropped >50% away, unlock for re-triggering
+      updated[downKey] = false; // Re-lock after recovery snapshot
+      // Don't reset triggered; milestone stays active
+    } else if (current < milestone * 0.5 && triggered && !isUnlocked) {
+      // Price dropped >50% away for first time, unlock for potential recovery
       updated[downKey] = true;
-      // Will re-trigger if bounces back above milestone
     }
   }
 
@@ -122,23 +123,17 @@ export function getTriggeredMilestones(
   const downwardMilestones = [0.5, 0.1, 0.01];
 
   for (const milestone of downwardMilestones) {
-    const key = `price_${(milestone * 100).toFixed(0)}x_down`;
-    const recoveryKey = `price_${(milestone * 100).toFixed(0)}x_recovery`;
+    const key = `price_${milestone.toFixed(2)}x_down`;
     const triggered = updated[key] ?? false;
-    const recoveryThreshold = milestone * 2; // 100% recovery buffer (2x the milestone)
 
     if (current <= milestone && prev > milestone && !triggered) {
-      // Crossing downward through milestone
+      // Crossing downward through milestone (triggers once per crash cycle)
       newSnapshots.push({ trigger: key, type: "down" });
       updated[key] = true;
-      updated[recoveryKey] = false;
-    } else if (current <= milestone && triggered && prev > recoveryThreshold) {
-      // Re-crash: price recovered to 2x+ the milestone, now crashing back down
-      newSnapshots.push({ trigger: recoveryKey, type: "down" });
-      // Keep triggered, will unlock when price recovers enough again
-    } else if (current > recoveryThreshold && updated[recoveryKey] === false) {
-      // Price bounced back above 2x the milestone, unlock for re-crashing
-      updated[recoveryKey] = true;
+    } else if (current > milestone * 2 && triggered) {
+      // Price recovered 100%+ back above 2x the milestone
+      // Reset for next crash (allows re-trigger if crashes down again)
+      updated[key] = false;
     }
   }
 
@@ -175,28 +170,36 @@ export function isTokenDeathbed(
   holderCount: number | null,
   peakHolderCount: number | null
 ): boolean {
-  // No trades in 30+ minutes
+  const tokenAgeSeconds = now - state.createdAt;
+
+  // Too early to call deathbed - tokens often have quiet periods in first hour
+  // Require age > 1 hour before any deathbed signals count
+  if (tokenAgeSeconds < 3600) {
+    return false;
+  }
+
+  // Extreme crash to <0.001x (essentially worthless, never recovering)
+  if (state.currentMultiplier < 0.001) {
+    return true;
+  }
+
+  // No trades in 30+ minutes AND token is at least 1 hour old
   if (lastTradeAt && now - lastTradeAt > 1800) {
     return true;
   }
 
-  // Volume collapsed to <0.5% of peak
+  // Volume collapsed to <0.5% of peak (activity stopped)
   if (volume24h !== null && peakVolume24h !== null && peakVolume24h > 0) {
     if (volume24h < peakVolume24h * 0.005) {
       return true;
     }
   }
 
-  // Holder count dropped >50% in last hour
-  if (holderCount !== null && peakHolderCount !== null) {
-    if (holderCount < peakHolderCount * 0.5) {
+  // Holder count dropped >80% in last hour (liquidation/rug pattern)
+  if (holderCount !== null && peakHolderCount !== null && peakHolderCount > 0) {
+    if (holderCount < peakHolderCount * 0.2) {
       return true;
     }
-  }
-
-  // Price crashed to <0.01x (penny territory, unlikely to recover)
-  if (state.currentMultiplier < 0.01) {
-    return true;
   }
 
   return false;
@@ -204,21 +207,38 @@ export function isTokenDeathbed(
 
 /**
  * Update token snapshot state after snapshot creation
+ * @param tokenMint - Token mint address
+ * @param now - Current timestamp (seconds)
+ * @param totalTradeCountNow - Total trade count at this moment (cumulative)
+ * @param multiplier - Current price multiplier
+ * @param triggeredMilestones - Milestone state map
+ * @param isDeathbed - If true, mark token as deathbed
  */
 export async function updateTokenSnapshotState(
   tokenMint: string,
   now: number,
-  tradeCount: number,
+  totalTradeCountNow: number,
   multiplier: number,
   triggeredMilestones: Record<string, boolean>,
   isDeathbed: boolean = false
 ): Promise<void> {
+  // Get current snapshot count and increment
+  const currentToken = await db
+    .select({ snapshotsCount: tokenDataPool.snapshotsCount })
+    .from(tokenDataPool)
+    .where(eq(tokenDataPool.tokenMint, tokenMint))
+    .limit(1)
+    .then((rows) => rows[0]);
+
+  const newSnapshotCount = (currentToken?.snapshotsCount || 0) + 1;
+
   const updates: Record<string, any> = {
     lastSnapshotAt: now,
-    lastSnapshotTradeCount: tradeCount,
-    totalTradeCount: tradeCount,
+    lastSnapshotTradeCount: totalTradeCountNow,
+    totalTradeCount: totalTradeCountNow,
     lastMilestoneMultiplier: multiplier,
     triggeredMilestones,
+    snapshotsCount: newSnapshotCount, // Increment on each snapshot
   };
 
   if (isDeathbed) {

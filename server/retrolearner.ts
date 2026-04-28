@@ -555,7 +555,8 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
       const maxMultiplier = Math.max(...multipliers);
       const minMultiplier = Math.min(...multipliers);
       const finalMultiplier = multipliers[multipliers.length - 1] || 1;
-      const tokenAgeSeconds = Math.floor((token.deathbedDetectedAt || token.createdAt || Date.now()) / 1000);
+      // createdAt/deathbedDetectedAt are already in seconds; only Date.now() is milliseconds
+      const tokenAgeSeconds = (token.deathbedDetectedAt || token.createdAt || Math.floor(Date.now() / 1000));
 
       const trajectoryOutcome = determineTrajectoryOutcome(
         maxMultiplier,
