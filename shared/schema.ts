@@ -1369,6 +1369,20 @@ export const insertApiLogSchema = createInsertSchema(apiLogs).omit({ id: true })
 export type ApiLog = typeof apiLogs.$inferSelect;
 export type InsertApiLog = z.infer<typeof insertApiLogSchema>;
 
+// Cache Invalidation Log - tracks memory-cache invalidations for coherence
+export const cacheInvalidationLog = pgTable("cache_invalidation_log", {
+  id: serial("id").primaryKey(),
+  scope: text("scope").notNull(), // token | wallet | outcome | cluster | all
+  targetId: text("target_id"), // mint, wallet address, etc.
+  reason: text("reason").notNull(), // why cache was invalidated
+  triggeredBy: text("triggered_by").notNull(), // retrolearner, discovery-engine, manual, etc.
+  invalidatedAt: integer("invalidated_at").notNull(),
+});
+
+export const insertCacheInvalidationLogSchema = createInsertSchema(cacheInvalidationLog).omit({ id: true });
+export type CacheInvalidationLog = typeof cacheInvalidationLog.$inferSelect;
+export type InsertCacheInvalidationLog = z.infer<typeof insertCacheInvalidationLogSchema>;
+
 // Webhook Logs - Helius swap notifications
 export const webhookLogs = pgTable("webhook_logs", {
   id: serial("id").primaryKey(),
