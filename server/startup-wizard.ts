@@ -6,6 +6,7 @@
 import axios from "axios";
 import { proxyRegistry } from "./proxy-registry";
 import { apiHealthChecker, type HealthStatus } from "./api-health-check";
+import { verifyProxiesForStartup, printProxyStartupReport } from "./proxy-startup-verifier";
 
 const COLORS = {
   reset: '\x1b[0m',
@@ -153,7 +154,7 @@ class StartupWizard {
     // Detect own IP
     this.ownIP = await this.detectOwnIP();
 
-    // Wait for proxies
+    // Display wizard header
     console.log(
       `${COLORS.cyan}${'='.repeat(70)}${COLORS.reset}`
     );
@@ -165,6 +166,39 @@ class StartupWizard {
     );
 
     this.printStatus('✓', `Penny-Pincher2 IP: ${this.ownIP}`, COLORS.green);
+
+    // Verify proxy health (independent of registry registration)
+    console.log(`\n${COLORS.cyan}Verifying proxy health...${COLORS.reset}`);
+    const proxyVerificationResult = await verifyProxiesForStartup();
+
+    if (proxyVerificationResult.success) {
+      this.printStatus(
+        '✓',
+        `${proxyVerificationResult.connectedProxies}/${proxyVerificationResult.totalProxies} proxies verified`,
+        COLORS.green
+      );
+    } else if (proxyVerificationResult.connectedProxies > 0) {
+      this.printStatus(
+        '⚠',
+        `${proxyVerificationResult.connectedProxies}/${proxyVerificationResult.totalProxies} proxies verified (degraded mode)`,
+        COLORS.yellow
+      );
+    } else {
+      this.printStatus(
+        '✗',
+        'No proxies available',
+        COLORS.red
+      );
+    }
+
+    if (proxyVerificationResult.errors.length > 0) {
+      console.log(`${COLORS.yellow}Proxy verification details:${COLORS.reset}`);
+      proxyVerificationResult.errors.forEach((error) => {
+        console.log(`  ${COLORS.gray}${error}${COLORS.reset}`);
+      });
+    }
+
+    // Wait for proxies to register with timeout
     console.log(`\n${COLORS.cyan}Waiting for proxies to connect...${COLORS.reset}`);
 
     const proxiesReady = await this.waitForProxies(proxyWaitTimeoutMs);
@@ -183,8 +217,30 @@ class StartupWizard {
 
     this.printStatus('✓', `Penny-Pincher2 IP: ${this.ownIP}`, COLORS.green);
 
-    // Show proxy status
-    console.log(`\n${COLORS.cyan}Proxy Status:${COLORS.reset}`);
+    // Show proxy verification status
+    console.log(`\n${COLORS.cyan}Proxy Verification:${COLORS.reset}`);
+    if (proxyVerificationResult.success) {
+      this.printStatus(
+        '✓',
+        `${proxyVerificationResult.connectedProxies}/${proxyVerificationResult.totalProxies} proxies healthy`,
+        COLORS.green
+      );
+    } else if (proxyVerificationResult.connectedProxies > 0) {
+      this.printStatus(
+        '⚠',
+        `${proxyVerificationResult.connectedProxies}/${proxyVerificationResult.totalProxies} proxies healthy (degraded mode)`,
+        COLORS.yellow
+      );
+    } else {
+      this.printStatus(
+        '✗',
+        'No proxies available',
+        COLORS.red
+      );
+    }
+
+    // Show proxy registry status
+    console.log(`\n${COLORS.cyan}Proxy Registration:${COLORS.reset}`);
     const proxyStatus = proxyRegistry.getStatus();
     proxyStatus.proxies.forEach((proxy) => {
       if (proxy.registered) {
@@ -198,7 +254,28 @@ class StartupWizard {
       }
     });
 
-    if (!proxiesReady) {
+    // Block startup if no proxies available (critical for redundancy)
+    if (proxyVerificationResult.connectedProxies === 0) {
+      console.log(
+        `\n${COLORS.red}✗ STARTUP BLOCKED: No proxies available${COLORS.reset}`
+      );
+      console.log(
+        `${COLORS.gray}Proxy connectivity is required. Ensure proxies are running and accessible.${COLORS.reset}\n`
+      );
+      return false;
+    }
+
+    // Warn if proxies not ready but allow startup if verification passed (they may still be registering)
+    if (!proxiesReady && proxyVerificationResult.connectedProxies > 0) {
+      this.printStatus(
+        '⚠',
+        'Proxies healthy but registration timeout',
+        COLORS.yellow
+      );
+      console.log(
+        `${COLORS.gray}Proxies verified healthy but not yet registered. Proceeding with caution.${COLORS.reset}\n`
+      );
+    } else if (!proxiesReady) {
       this.printStatus(
         '✗',
         'Not all proxies connected (timeout)',
@@ -208,7 +285,7 @@ class StartupWizard {
         `\n${COLORS.yellow}⚠ You can retry proxy connection manually later${COLORS.reset}`
       );
       console.log(
-        `${COLORS.gray}Proxy connection is required for redundancy. Blocking startup.${COLORS.reset}\n`
+        `${COLORS.gray}Proxy connection required for redundancy. Blocking startup.${COLORS.reset}\n`
       );
       return false;
     }
