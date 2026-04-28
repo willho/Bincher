@@ -16,7 +16,7 @@
 
 import { db } from "./db";
 import { tokenOutcomes, paperPositions, strategyValidations } from "@shared/schema";
-import { eq, gte, lte, desc } from "drizzle-orm";
+import { eq, gte, lte, desc, and } from "drizzle-orm";
 import { getQuote } from "./jupiter";
 import { addRecentEvent } from "./log-buckets";
 
@@ -75,7 +75,9 @@ export async function simulateTradeOnJupiter(
   try {
     // Simulate: SOL → Token
     const quote = await getQuote("So11111111111111111111111111111111111111112", tokenMint, solAmountLamports, {
-      slippageBps: Math.round(maxSlippagePercent * 100), // Convert % to basis points
+      mode: "fixed",
+      maxBps: Math.round(maxSlippagePercent * 100), // Convert % to basis points
+      minBps: 0,
     });
 
     if (!quote || !quote.outAmount) {
@@ -366,10 +368,10 @@ export async function getStrategyValidationRate(
     .select()
     .from(strategyValidations)
     .where(
-      ...(([
+      and(
         eq(strategyValidations.strategyTheory, strategyTheory),
-        gte(strategyValidations.createdAt, sinceTimestamp),
-      ] as unknown) as any[])
+        gte(strategyValidations.createdAt, sinceTimestamp)
+      )
     );
 
   const confirmedCount = validations.filter((v) => v.validationStatus === "confirmed").length;
