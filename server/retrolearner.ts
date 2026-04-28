@@ -512,11 +512,6 @@ async function processTokenForLearning(perfData: TokenPerformanceData): Promise<
 /**
  * Backfill trajectory outcomes on archived tokens and cluster snapshots to archetypes
  * Called once per retrolearner cycle to update outcome distributions
- *
- * ALSO handles storage-aware compression:
- * - Summarize raw trades (compress trade history into OHLCV)
- * - Only compress when storage is needed
- * - Priority: dead tokens first, then lowest-volume tokens
  */
 async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
   // Find deathbed tokens that haven't been backfilled yet
@@ -560,8 +555,7 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
       const maxMultiplier = Math.max(...multipliers);
       const minMultiplier = Math.min(...multipliers);
       const finalMultiplier = multipliers[multipliers.length - 1] || 1;
-      // createdAt/deathbedDetectedAt are already in seconds; only Date.now() is milliseconds
-      const tokenAgeSeconds = (token.deathbedDetectedAt || token.createdAt || Math.floor(Date.now() / 1000));
+      const tokenAgeSeconds = Math.floor((token.deathbedDetectedAt || token.createdAt || Date.now()) / 1000);
 
       const trajectoryOutcome = determineTrajectoryOutcome(
         maxMultiplier,
@@ -589,117 +583,6 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
   }
 
   return processedCount;
-}
-
-/**
- * Summarize raw trades into OHLCV candles
- * Runs every 6 hours to keep raw trade table manageable
- *
- * Strategy:
- * 1. Get all trades from last 6+ hours (since last summarization)
- * 2. Group trades by token and time window (5-min candles)
- * 3. Create OHLCV summary entries in priceHistoryCache or summary table
- * 4. Delete raw trades after summarization (they're now in OHLCV form)
- *
- * Result: Raw trade data footprint stays small (max 6hr window)
- * OHLCV summaries preserved forever for retrolearning
- */
-export async function summarizeRawTrades(
-  since6HoursAgo: number
-): Promise<{ tradesSummarized: number; tokensProcessed: number; rawTradesDeleted: number }> {
-  console.log(`[Retrolearner] Summarizing trades since ${new Date(since6HoursAgo * 1000).toISOString()}`);
-
-  // Get all trades in the 6-hour window
-  const allTrades = await db
-    .select()
-    .from(rawTokenTrades)
-    .where(gte(rawTokenTrades.timestamp, since6HoursAgo));
-
-  if (allTrades.length === 0) {
-    console.log("[Retrolearner] No trades to summarize");
-    return { tradesSummarized: 0, tokensProcessed: 0, rawTradesDeleted: 0 };
-  }
-
-  // Group trades by token + 5-minute candles
-  const candles = new Map<string, any>();
-  const tokensMinted = new Set<string>();
-
-  for (const trade of allTrades) {
-    tokensMinted.add(trade.tokenMint);
-    const candle5MinKey = `${trade.tokenMint}_${Math.floor((trade.timestamp || 0) / 300) * 300}`;
-
-    if (!candles.has(candle5MinKey)) {
-      candles.set(candle5MinKey, {
-        tokenMint: trade.tokenMint,
-        timestampStart: Math.floor((trade.timestamp || 0) / 300) * 300,
-        trades: [],
-        open: trade.price || 0,
-        high: trade.price || 0,
-        low: trade.price || 0,
-        close: trade.price || 0,
-        volume: 0,
-      });
-    }
-
-    const candle = candles.get(candle5MinKey)!;
-    const price = trade.price || 0;
-    candle.high = Math.max(candle.high, price);
-    candle.low = Math.min(candle.low, price);
-    candle.close = price; // Last trade in candle
-    candle.volume += (trade.amountSol || 0) + (trade.amountTokens || 0);
-    candle.trades.push(trade);
-  }
-
-  // Store OHLCV summaries to priceHistoryCache
-  console.log(`[Retrolearner] Created ${candles.size} OHLCV candles for ${tokensMinted.size} tokens`);
-
-  const now = Math.floor(Date.now() / 1000);
-
-  try {
-    // Insert candles into priceHistoryCache table
-    const candlesToInsert = Array.from(candles.values()).map((candle) => ({
-      tokenMint: candle.tokenMint,
-      timeframe: "5m" as const,
-      timestamp: candle.timestampStart,
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-      volume: candle.volume,
-      source: "retrolearner_summarized",
-      fetchedAt: now,
-    }));
-
-    if (candlesToInsert.length > 0) {
-      await db.insert(priceHistoryCache).values(candlesToInsert);
-      console.log(`[Retrolearner] Inserted ${candlesToInsert.length} OHLCV candles into priceHistoryCache`);
-    }
-  } catch (error) {
-    console.error("[Retrolearner] Error inserting candles:", error instanceof Error ? error.message : error);
-  }
-
-  // Delete raw trades after summarization (they're now in OHLCV form)
-  // This keeps rawTokenTrades table small (only 6-hour window of live trades)
-  let deletedCount = 0;
-  try {
-    await db.delete(rawTokenTrades).where(lt(rawTokenTrades.timestamp, since6HoursAgo));
-    // Note: Drizzle with PostgreSQL doesn't return row count on delete,
-    // so we just log that deletion occurred
-    console.log(`[Retrolearner] Deleted raw trades older than 6 hours (since ${new Date(since6HoursAgo * 1000).toISOString()})`);
-  } catch (error) {
-    console.error("[Retrolearner] Error deleting old trades:", error instanceof Error ? error.message : error);
-  }
-
-  console.log(
-    `[Retrolearner] Summarization complete: ${allTrades.length} trades → ` +
-    `${candles.size} candles, old raw trades cleaned up`
-  );
-
-  return {
-    tradesSummarized: allTrades.length,
-    tokensProcessed: tokensMinted.size,
-    rawTradesDeleted: 0, // Count not returned by Drizzle delete operation
-  };
 }
 
 // =====================
