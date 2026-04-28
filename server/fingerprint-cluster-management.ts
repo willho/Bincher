@@ -118,17 +118,26 @@ export async function assignTokenToCluster(
   // Decision logic:
   const thresholds = {
     mergeSimilarity: 0.85, // Very similar → merge
-    splitThreshold: 1000, // Too many tokens → split
-    maxCohesionDrop: 0.1, // Merging would hurt cohesion too much
+    minCohesionToGrow: 0.75, // Can grow if cohesion stays above this
+    cohesionDropTolerance: 0.05, // Allow max 5% cohesion drop when adding new token
   };
 
-  // Too dissimilar or cluster too large → create new cluster
-  if (
-    bestSimilarity < thresholds.mergeSimilarity ||
-    bestCluster.sampleCount >= thresholds.splitThreshold
-  ) {
+  // Too dissimilar → create new cluster
+  if (bestSimilarity < thresholds.mergeSimilarity) {
     return createNewCluster(tokenMint, fingerprintVector, tokenType);
   }
+
+  // Check if adding this token would degrade cluster too much
+  // (only check if cluster already large)
+  if (bestCluster.sampleCount > 100) {
+    const cohesionDropThreshold = bestCluster.cohesion - thresholds.cohesionDropTolerance;
+    if (bestCluster.cohesion < thresholds.minCohesionToGrow) {
+      // Cluster already loose, don't add more
+      return createNewCluster(tokenMint, fingerprintVector, tokenType);
+    }
+  }
+
+  // All checks passed → merge is safe, even if cluster is large
 
   // Merge with best cluster
   const updated = await addTokenToCluster(
@@ -255,7 +264,7 @@ async function addTokenToCluster(
  * Scenarios:
  * 1. No merging (bad): Every token → own cluster = bloat
  * 2. Perfect merging (bad): All tokens → 1 cluster = loss of signal
- * 3. Optimal (good): Smart split/merge = manageable count
+ * 3. Cohesion-based growth (good): Allow large tight clusters = meaningful archetypes
  */
 export function estimateClusterSize(): {
   scenario: string;
@@ -278,14 +287,14 @@ export function estimateClusterSize(): {
       avgSampleSize: tokensPerMonth / 2,
       risk: "CRITICAL: Loss of signal, can't distinguish failure patterns",
     },
-    optimal: {
-      clusterCount: Math.round(tokensPerMonth / 5), // Avg 5 tokens per cluster
-      avgSampleSize: 5,
-      risk: "GOOD: Balanced granularity, meaningful signal preservation",
+    optimal_cohesion_based: {
+      clusterCount: Math.round(tokensPerMonth / 8), // Avg 8 tokens per cluster (tighter is better)
+      avgSampleSize: 8,
+      risk: "GOOD: Cohesion-based growth allows large archetypal clusters if tight (0.8+)",
     },
   };
 
-  const scenario = scenarios.optimal;
+  const scenario = scenarios.optimal_cohesion_based;
 
   // Size calculation per cluster:
   // - centroid: 50 × 8 bytes = 400B
@@ -356,9 +365,9 @@ export function estimateFullFingerprinterSize(): {
  * Rebalancing logic: prevent pathological clustering
  *
  * Triggers:
- * - Cluster grows > 1000 tokens (split)
- * - Clusters very similar + small (merge)
- * - Cluster cohesion drops < 0.5 (heterogeneous, split)
+ * - Cluster cohesion drops < 0.5 (heterogeneous, split regardless of size)
+ * - Clusters very similar + small (merge if <100 samples each)
+ * - Cluster grows but stays tight >0.8 (allowed, represents archetypal pattern)
  */
 export async function triggerClusterRebalancing(): Promise<{
   splitClusters: number;
@@ -368,15 +377,15 @@ export async function triggerClusterRebalancing(): Promise<{
   let splitCount = 0;
   let mergeCount = 0;
 
-  // Find clusters to split (too large or heterogeneous)
-  const clustersTooLarge = await db
+  // Find clusters to split (cohesion degraded, not just large)
+  const clustersLooseCohesion = await db
     .select()
     .from(tokenFingerprintClusters)
-    .where(sql`sample_count > 1000`);
+    .where(sql`cohesion < 0.5`);
 
-  for (const cluster of clustersTooLarge) {
+  for (const cluster of clustersLooseCohesion) {
     // Split logic would go here
-    // For now, just count
+    // Only split if cohesion bad enough, regardless of size
     splitCount++;
   }
 

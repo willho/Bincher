@@ -4441,3 +4441,82 @@ export const retrolearnerThresholds = pgTable("retrolearner_thresholds", {
 export const insertRetrolearnerThresholdsSchema = createInsertSchema(retrolearnerThresholds).omit({ id: true, createdAt: true });
 export type RetrolearnerThreshold = typeof retrolearnerThresholds.$inferSelect;
 export type InsertRetrolearnerThreshold = z.infer<typeof insertRetrolearnerThresholdsSchema>;
+
+/**
+ * Phase 2: Server Mesh & Subscription Management
+ * DB-driven assignment for 3-server architecture (Pincher2 + 2 proxies)
+ */
+export const serverSubscriptions = pgTable("server_subscriptions", {
+  id: serial("id").primaryKey(),
+  serverName: text("server_name").notNull(), // "pincher2", "proxy-1", "proxy-2"
+  tokenMint: text("token_mint"),
+  walletAddress: text("wallet_address"),
+  subscriptionType: text("subscription_type").notNull(), // "newtoken", "migration", "wallet_trade"
+  assignedAt: integer("assigned_at").notNull(),
+  status: text("status").default("active"), // active, reconnecting, paused
+}, (table) => [
+  index("idx_server_name").on(table.serverName),
+  index("idx_subscription_type").on(table.subscriptionType),
+  index("idx_token_mint").on(table.tokenMint),
+  index("idx_wallet_address").on(table.walletAddress),
+]);
+
+export const insertServerSubscriptionsSchema = createInsertSchema(serverSubscriptions).omit({ id: true, assignedAt: true });
+export type ServerSubscription = typeof serverSubscriptions.$inferSelect;
+export type InsertServerSubscription = z.infer<typeof insertServerSubscriptionsSchema>;
+
+/**
+ * Good Traders: Wallet reputation tracking
+ * Identifies wallets with high success rate on pump.fun tokens
+ */
+export const goodTraders = pgTable("good_traders", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull().unique(),
+  winRate: real("win_rate"), // 0-1: percentage of profitable trades
+  totalTrades: integer("total_trades"),
+  profitableCount: integer("profitable_count"),
+  totalPnl: real("total_pnl"), // SOL equivalent
+  avgHoldMinutes: real("avg_hold_minutes"),
+  sharpeRatio: real("sharpe_ratio"),
+  discoveryScore: real("discovery_score"), // 0-1: confidence in assessment
+  discoveredFromTokens: jsonb("discovered_from_tokens").$type<string[]>(), // token mints
+  lastAssessedAt: integer("last_assessed_at"),
+  isActive: boolean("is_active").default(true),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_win_rate").on(table.winRate),
+  index("idx_total_pnl").on(table.totalPnl),
+  index("idx_discovery_score").on(table.discoveryScore),
+  uniqueIndex("idx_wallet_address_unique").on(table.walletAddress),
+]);
+
+export const insertGoodTradersSchema = createInsertSchema(goodTraders).omit({ id: true, createdAt: true });
+export type GoodTrader = typeof goodTraders.$inferSelect;
+export type InsertGoodTrader = z.infer<typeof insertGoodTradersSchema>;
+
+/**
+ * Wallet Clusters: Behavioral clustering of wallets
+ * Groups wallets with similar trading patterns
+ */
+export const walletClusters = pgTable("wallet_clusters", {
+  id: serial("id").primaryKey(),
+  clusterId: text("cluster_id").notNull().unique(),
+  walletAddresses: jsonb("wallet_addresses").$type<string[]>(), // member wallets
+  clusterType: text("cluster_type"), // "pump_coordinated", "arbitrage", "whale", etc.
+  avgWinRate: real("avg_win_rate"),
+  avgHoldDuration: real("avg_hold_duration"),
+  coordinationScore: real("coordination_score"), // 0-1: how coordinated are trades?
+  sampleCount: integer("sample_count"), // number of wallets in cluster
+  cohesion: real("cohesion"), // vector similarity metric
+  centroid: jsonb("centroid").$type<number[]>(), // behavioral vector average
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  uniqueIndex("idx_cluster_id_unique").on(table.clusterId),
+  index("idx_cluster_type").on(table.clusterType),
+  index("idx_coordination_score").on(table.coordinationScore),
+]);
+
+export const insertWalletClustersSchema = createInsertSchema(walletClusters).omit({ id: true, createdAt: true });
+export type WalletCluster = typeof walletClusters.$inferSelect;
+export type InsertWalletCluster = z.infer<typeof insertWalletClustersSchema>;

@@ -404,13 +404,6 @@ export function getApiStatus() {
       usagePercent: quotaTrackers.dexScreener.getUsagePercent(),
       circuitBreakerActive: quotaTrackers.dexScreener.getUsagePercent() >= 95,
     },
-    dexPaprika: {
-      perSecond: STRICT_RATE_LIMITS.dexPaprika.perSecond,
-      used: quotaTrackers.dexPaprika.getUsed(),
-      remaining: quotaTrackers.dexPaprika.getRemaining(),
-      usagePercent: quotaTrackers.dexPaprika.getUsagePercent(),
-      circuitBreakerActive: quotaTrackers.dexPaprika.getUsagePercent() >= 95,
-    },
     pumpPortal: {
       perSecond: STRICT_RATE_LIMITS.pumpPortal.perSecond,
       used: quotaTrackers.pumpPortal.getUsed(),

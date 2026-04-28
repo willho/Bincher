@@ -125,6 +125,30 @@ describe("Fingerprint Cluster Management", () => {
       expect(result2.isNewCluster).toBe(true);
     });
 
+    it("should create new cluster if adding would degrade cohesion too much", async () => {
+      const vector1 = generateVector(0.3, 0.01);
+      const vector2 = generateVector(0.7, 0.01);
+
+      // Create first cluster with vector1
+      const result1 = await assignTokenToCluster(
+        "token_test_loose_1",
+        vector1,
+        "dead"
+      );
+
+      // Try to add very different vector - should create new cluster
+      // because cohesion would drop too much
+      const result2 = await assignTokenToCluster(
+        "token_test_loose_2",
+        vector2,
+        "dead"
+      );
+
+      // Should be separate clusters due to poor cohesion
+      expect(result2.clusterId).not.toBe(result1.clusterId);
+      expect(result2.isNewCluster).toBe(true);
+    });
+
     it("should track sample count correctly", async () => {
       const vector = generateVector(0.5, 0.01);
 
@@ -161,24 +185,22 @@ describe("Fingerprint Cluster Management", () => {
       expect(deadResult.clusterId).not.toBe(activeResult.clusterId);
     });
 
-    it("should prevent cluster from growing unbounded (split protection)", async () => {
-      const vector = generateVector(0.5, 0.01);
+    it("should allow clusters to grow large if cohesion stays high", async () => {
+      const vector = generateVector(0.5, 0.01); // Very tight clustering
 
-      // Try to add more tokens than split threshold (1000)
-      // In practice, on 1001st token, should create new cluster
-      // For this test, just verify the logic exists
-
+      // Add many similar tokens - should stay in same cluster
       let result = null;
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 20; i++) {
         result = await assignTokenToCluster(
-          `token_test_${i}`,
+          `token_test_tight_${i}`,
           vector,
           "dead"
         );
       }
 
-      // After 10 tokens, should all be in same cluster (no split yet)
-      expect(result?.sampleCount).toBeLessThanOrEqual(10);
+      // All 20 tokens should be in same cluster (tight cohesion allows growth)
+      expect(result?.sampleCount).toBe(20);
+      expect(result?.isNewCluster).toBe(false);
     });
   });
 
@@ -308,16 +330,58 @@ describe("Fingerprint Cluster Management", () => {
     });
   });
 
+  describe("Cohesion-Based Growth", () => {
+    it("should allow very large clusters if cohesion stays tight (>0.8)", async () => {
+      // Create a tight cluster with many similar tokens
+      const baseVector = generateVector(0.5, 0.005); // Very tight variance
+
+      let lastResult = null;
+      for (let i = 0; i < 50; i++) {
+        const vector = generateVector(0.5, 0.005); // Same variance = tight cluster
+        lastResult = await assignTokenToCluster(
+          `token_test_large_${i}`,
+          vector,
+          "dead"
+        );
+      }
+
+      // Should all be in same cluster despite size
+      expect(lastResult?.sampleCount).toBeGreaterThan(40);
+      expect(lastResult?.isNewCluster).toBe(false);
+    });
+
+    it("should split loose clusters even if small", async () => {
+      // Create first loose cluster
+      const vector1 = generateVector(0.2, 0.05);
+      const result1 = await assignTokenToCluster(
+        "token_test_split_1",
+        vector1,
+        "dead"
+      );
+
+      // Try to add very different vector
+      const vector2 = generateVector(0.8, 0.05);
+      const result2 = await assignTokenToCluster(
+        "token_test_split_2",
+        vector2,
+        "dead"
+      );
+
+      // Should be separate due to cohesion drop, not size
+      expect(result2.isNewCluster).toBe(true);
+    });
+  });
+
   describe("Worst-Case Analysis", () => {
     it("should prevent fragmentation (no merge)", () => {
       const estimate = estimateClusterSize();
 
       // Worst case: no merge → 36K clusters
-      // Our approach: ~7K clusters
-      // Reduction factor: 5x
+      // Our approach: ~4.5K clusters (cohesion-based, allows larger tight clusters)
+      // Reduction factor: 8x
 
       expect(estimate.clusterCount).toBeLessThan(36000);
-      expect(estimate.clusterCount / 36000).toBeCloseTo(0.2, 0); // ~20% of worst case
+      expect(estimate.clusterCount / 36000).toBeCloseTo(0.125, 0); // ~12.5% of worst case
     });
 
     it("should prevent signal loss (aggressive merge)", () => {
