@@ -40,14 +40,52 @@ export async function verifyProxiesForStartup(): Promise<StartupVerificationResu
   await Promise.all(verificationPromises);
 
   // Count results
+  const outboundIps = new Set<string>();
+  const shyftKeys = new Set<string>();
+  const chainstackKeys = new Set<string>();
+
   for (const proxy of proxies) {
     if (proxy.status === "connected") {
       result.connectedProxies++;
       console.log(`[ProxyStartup] ✓ ${proxy.name} connected (IP: ${proxy.outboundIp})`);
+
+      // Track IPs and keys for duplicate detection
+      if (proxy.outboundIp) {
+        outboundIps.add(proxy.outboundIp);
+      }
+      if (proxy.shyftKey) {
+        shyftKeys.add(proxy.shyftKey);
+      }
+      if (proxy.chainstackRpc) {
+        chainstackKeys.add(proxy.chainstackRpc);
+      }
     } else {
       result.errors.push(`${proxy.name}: ${proxy.status}`);
       console.error(`[ProxyStartup] ✗ ${proxy.name} failed: ${proxy.status}`);
     }
+  }
+
+  // Check for duplicate IPs (critical: each proxy must have unique outbound IP)
+  if (result.connectedProxies > 1 && outboundIps.size < result.connectedProxies) {
+    result.errors.push(
+      `⚠️  DUPLICATE IPs DETECTED: ${result.connectedProxies} proxies but only ${outboundIps.size} unique IPs. This breaks IP-based rate limit avoidance.`
+    );
+    console.error(`[ProxyStartup] ✗ Duplicate IPs detected - proxies must have different outbound IPs`);
+  }
+
+  // Check for duplicate API keys (warning: API keys should be unique for quota multiplication)
+  if (result.connectedProxies > 1 && shyftKeys.size > 0 && shyftKeys.size < result.connectedProxies) {
+    result.errors.push(
+      `⚠️  DUPLICATE SHYFT KEYS: ${result.connectedProxies} proxies but only ${shyftKeys.size} unique Shyft keys. API quotas won't multiply.`
+    );
+    console.warn(`[ProxyStartup] ⚠️  Duplicate Shyft API keys detected - quotas won't multiply across proxies`);
+  }
+
+  if (result.connectedProxies > 1 && chainstackKeys.size > 0 && chainstackKeys.size < result.connectedProxies) {
+    result.errors.push(
+      `⚠️  DUPLICATE CHAINSTACK KEYS: ${result.connectedProxies} proxies but only ${chainstackKeys.size} unique Chainstack endpoints. Credits won't separate.`
+    );
+    console.warn(`[ProxyStartup] ⚠️  Duplicate Chainstack endpoints detected - credits won't separate across proxies`);
   }
 
   // For 2/3 mesh: need at least 2 proxies connected

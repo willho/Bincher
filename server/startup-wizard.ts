@@ -192,10 +192,27 @@ class StartupWizard {
     }
 
     if (proxyVerificationResult.errors.length > 0) {
-      console.log(`${COLORS.yellow}Proxy verification details:${COLORS.reset}`);
-      proxyVerificationResult.errors.forEach((error) => {
-        console.log(`  ${COLORS.gray}${error}${COLORS.reset}`);
-      });
+      // Check for critical issues (duplicate IPs, duplicate API keys)
+      const criticalErrors = proxyVerificationResult.errors.filter((e) =>
+        e.includes("DUPLICATE") || e.includes("breaks IP-based")
+      );
+
+      if (criticalErrors.length > 0) {
+        console.log(`\n${COLORS.red}⚠️  CRITICAL CONFIGURATION ISSUES:${COLORS.reset}`);
+        criticalErrors.forEach((error) => {
+          console.log(`  ${COLORS.red}${error}${COLORS.reset}`);
+        });
+      }
+
+      const warnings = proxyVerificationResult.errors.filter(
+        (e) => !e.includes("DUPLICATE") && !e.includes("breaks IP-based")
+      );
+      if (warnings.length > 0) {
+        console.log(`\n${COLORS.yellow}Proxy verification notes:${COLORS.reset}`);
+        warnings.forEach((error) => {
+          console.log(`  ${COLORS.gray}${error}${COLORS.reset}`);
+        });
+      }
     }
 
     // Wait for proxies to register with timeout
