@@ -13,7 +13,6 @@ import {
   getTokensToEvict,
 } from "../token-composite-scoring";
 import { getPoolStatus, performPoolMaintenance } from "../monitored-pool-manager";
-import { assessAutotradeEligibility, getAutotradeEligibleTokens, getAutotradePicksSummary } from "../autotrade-eligibility";
 
 const router = Router();
 
@@ -212,83 +211,6 @@ router.post("/pool/maintenance", async (req: Request, res: Response) => {
       message: "Pool maintenance completed",
       poolStatus: status,
     });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-/**
- * GET /api/autotrade/picks
- * Get tokens eligible for autotrade (separate from monitoring pool ranking)
- *
- * Autotrade has stricter gates than monitoring:
- * - ANN > 0.65 (not just > 0.50)
- * - Liquidity > $100K
- * - Holder concentration < 80%
- * - Age 1-30min (bonding curve) or 5-60min (graduated)
- * - Volume > $50K
- * - RugCheck risk < 7
- * - Known deployer (not scammer)
- * - Social presence (Twitter or Telegram)
- * - Contract verified
- *
- * Query params:
- *   limit: number (default 5, max 10)
- */
-router.get("/autotrade/picks", async (req: Request, res: Response) => {
-  try {
-    const limit = Math.min(10, parseInt(req.query.limit as string) || 5);
-
-    const eligible = await getAutotradeEligibleTokens(limit);
-
-    res.json({
-      count: eligible.length,
-      limit,
-      message:
-        eligible.length > 0
-          ? `${eligible.length} token(s) eligible for autotrade`
-          : "No tokens currently meet autotrade safety requirements",
-      tokens: eligible,
-      note: "Autotrade picks are much stricter than monitoring pool ranking. Not all #1-ranked tokens qualify.",
-    });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-/**
- * GET /api/autotrade/assess/:mint
- * Assess autotrade eligibility for a specific token
- */
-router.get("/autotrade/assess/:mint", async (req: Request, res: Response) => {
-  try {
-    const { mint } = req.params;
-
-    if (!mint) {
-      return res.status(400).json({ error: "Missing mint parameter" });
-    }
-
-    const assessment = await assessAutotradeEligibility(mint);
-
-    res.json({
-      mint,
-      ...assessment,
-      gatesSummary: `${Object.values(assessment.gates).filter((v) => v).length}/9 gates passed`,
-    });
-  } catch (error) {
-    res.status(500).json({ error: (error as Error).message });
-  }
-});
-
-/**
- * GET /api/autotrade/summary
- * Quick summary of current autotrade picks
- */
-router.get("/autotrade/summary", async (req: Request, res: Response) => {
-  try {
-    const summary = await getAutotradePicksSummary();
-
-    res.json(summary);
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });
   }
