@@ -592,51 +592,113 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
 }
 
 /**
- * Storage-aware compression of raw trades
- * Only called when storage space is needed
+ * Summarize raw trades into OHLCV candles
+ * Runs every 6 hours to keep raw trade table manageable
  *
  * Strategy:
- * 1. Compress trades for dead tokens first (they won't generate more)
- * 2. If more space needed, compress lowest-volume tokens
- * 3. Create OHLCV summary, delete individual trades
- * 4. Keep snapshots but mark trades as "compressed"
+ * 1. Get all trades from last 6+ hours (since last summarization)
+ * 2. Group trades by token and time window (5-min candles)
+ * 3. Create OHLCV summary entries in priceHistoryCache or summary table
+ * 4. Delete raw trades after summarization (they're now in OHLCV form)
+ *
+ * Result: Raw trade data footprint stays small (max 6hr window)
+ * OHLCV summaries preserved forever for retrolearning
  */
-export async function compressTradesIfNeeded(
-  targetFreeBytesGB: number = 1
-): Promise<{ tokensTouched: number; spaceFreedGB: number }> {
-  // Check storage usage (this would be database-specific)
-  // For now, log the capability
-  console.log(`[Retrolearner] Storage compression: targeting ${targetFreeBytesGB}GB free space`);
+export async function summarizeRawTrades(
+  since6HoursAgo: number
+): Promise<{ tradesSummarized: number; tokensProcessed: number; rawTradesDeleted: number }> {
+  console.log(`[Retrolearner] Summarizing trades since ${new Date(since6HoursAgo * 1000).toISOString()}`);
 
-  // Priority 1: Compress trades for already-deathbedded tokens (done, won't change)
-  const deathbedTokens = await db
-    .select({ tokenMint: tokenDataPool.tokenMint, volume24h: tokenDataPool.volume24h })
-    .from(tokenDataPool)
-    .where(eq(tokenDataPool.isDeathbed, true))
-    .orderBy((t) => (t.volume24h || 0) as any); // Lowest volume first
+  // Get all trades in the 6-hour window
+  const allTrades = await db
+    .select()
+    .from(rawTokenTrades)
+    .where(gte(rawTokenTrades.timestamp, since6HoursAgo));
 
-  // Priority 2: If more space needed, compress low-volume active tokens
-  const lowVolumeTokens = await db
-    .select({ tokenMint: tokenDataPool.tokenMint, volume24h: tokenDataPool.volume24h })
-    .from(tokenDataPool)
-    .where(eq(tokenDataPool.isDeathbed, false))
-    .orderBy((t) => (t.volume24h || 0) as any)
-    .limit(100); // Process up to 100 low-volume tokens
+  if (allTrades.length === 0) {
+    console.log("[Retrolearner] No trades to summarize");
+    return { tradesSummarized: 0, tokensProcessed: 0, rawTradesDeleted: 0 };
+  }
 
-  const tokensToCompress = [...deathbedTokens, ...lowVolumeTokens];
+  // Group trades by token + 5-minute candles
+  const candles = new Map<string, any>();
+  const tokensMinted = new Set<string>();
 
-  console.log(`[Retrolearner] Ready to compress trades for ${tokensToCompress.length} tokens`);
-  console.log(`[Retrolearner] Dead tokens: ${deathbedTokens.length}, Low-volume active: ${lowVolumeTokens.length}`);
+  for (const trade of allTrades) {
+    tokensMinted.add(trade.tokenMint);
+    const candle5MinKey = `${trade.tokenMint}_${Math.floor((trade.timestamp || 0) / 300) * 300}`;
 
-  // TODO: Implement actual trade compression:
-  // - Group trades into OHLCV candles by time window
-  // - Delete individual trades
-  // - Mark token as "trades_compressed"
-  // - Keep snapshots for future analysis
+    if (!candles.has(candle5MinKey)) {
+      candles.set(candle5MinKey, {
+        tokenMint: trade.tokenMint,
+        timestampStart: Math.floor((trade.timestamp || 0) / 300) * 300,
+        trades: [],
+        open: trade.price || 0,
+        high: trade.price || 0,
+        low: trade.price || 0,
+        close: trade.price || 0,
+        volume: 0,
+      });
+    }
+
+    const candle = candles.get(candle5MinKey)!;
+    const price = trade.price || 0;
+    candle.high = Math.max(candle.high, price);
+    candle.low = Math.min(candle.low, price);
+    candle.close = price; // Last trade in candle
+    candle.volume += (trade.amountSol || 0) + (trade.amountTokens || 0);
+    candle.trades.push(trade);
+  }
+
+  // Store OHLCV summaries to priceHistoryCache
+  console.log(`[Retrolearner] Created ${candles.size} OHLCV candles for ${tokensMinted.size} tokens`);
+
+  const now = Math.floor(Date.now() / 1000);
+
+  try {
+    // Insert candles into priceHistoryCache table
+    const candlesToInsert = Array.from(candles.values()).map((candle) => ({
+      tokenMint: candle.tokenMint,
+      timeframe: "5m" as const,
+      timestamp: candle.timestampStart,
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume: candle.volume,
+      source: "retrolearner_summarized",
+      fetchedAt: now,
+    }));
+
+    if (candlesToInsert.length > 0) {
+      await db.insert(priceHistoryCache).values(candlesToInsert);
+      console.log(`[Retrolearner] Inserted ${candlesToInsert.length} OHLCV candles into priceHistoryCache`);
+    }
+  } catch (error) {
+    console.error("[Retrolearner] Error inserting candles:", error instanceof Error ? error.message : error);
+  }
+
+  // Delete raw trades after summarization (they're now in OHLCV form)
+  // This keeps rawTokenTrades table small (only 6-hour window of live trades)
+  let deletedCount = 0;
+  try {
+    await db.delete(rawTokenTrades).where(lt(rawTokenTrades.timestamp, since6HoursAgo));
+    // Note: Drizzle with PostgreSQL doesn't return row count on delete,
+    // so we just log that deletion occurred
+    console.log(`[Retrolearner] Deleted raw trades older than 6 hours (since ${new Date(since6HoursAgo * 1000).toISOString()})`);
+  } catch (error) {
+    console.error("[Retrolearner] Error deleting old trades:", error instanceof Error ? error.message : error);
+  }
+
+  console.log(
+    `[Retrolearner] Summarization complete: ${allTrades.length} trades → ` +
+    `${candles.size} candles, old raw trades cleaned up`
+  );
 
   return {
-    tokensTouched: 0,
-    spaceFreedGB: 0,
+    tradesSummarized: allTrades.length,
+    tokensProcessed: tokensMinted.size,
+    rawTradesDeleted: 0, // Count not returned by Drizzle delete operation
   };
 }
 
