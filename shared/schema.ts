@@ -4022,8 +4022,11 @@ export const tokenFingerprints = pgTable("token_fingerprints", {
 
   // Fingerprint identification
   fingerprintType: text("fingerprint_type").notNull(), // "pregrad_bonding_curve" | "postgrad_raydium"
-  clusterId: text("cluster_id").notNull(), // Links to strategy cluster (same cluster = similar trading style)
-  snapshotTrigger: text("snapshot_trigger"), // "time_1min", "trade_count_50", "milestone_100_traders", etc.
+  snapshotTrigger: text("snapshot_trigger"), // "t0_creation" | "t0_first_fingerprint" | "activity_volume" | "deathbread_final"
+
+  // Trajectory tracking: individual fingerprints for active tokens (not clustered)
+  // Only used for dead token archiving: archetyped into cluster for anti-pattern learning
+  archetypeClusterId: text("archetype_cluster_id"), // NULL for active tokens, set when dead token archived
 
   // Reference
   tokenMint: text("token_mint"), // Example token this fingerprint is based on
@@ -4072,20 +4075,15 @@ export const tokenFingerprints = pgTable("token_fingerprints", {
   finalMultiplier: real("final_multiplier"), // Peak multiplier achieved
   finalTimestamp: integer("final_timestamp"), // When token peaked or outcome determined
 
-  // Archive flag (for clustering)
-  isArchived: boolean("is_archived").default(false), // Marked for compression into cluster
-
   // Timestamps
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [
-  index("idx_fingerprint_type_cluster").on(table.fingerprintType, table.clusterId),
-  index("idx_cluster").on(table.clusterId),
-  index("idx_snapshot_trigger").on(table.snapshotTrigger),
+  index("idx_fingerprint_type_trigger").on(table.fingerprintType, table.snapshotTrigger),
   index("idx_token_mint_snapshots").on(table.tokenMint),
   index("idx_creator_address").on(table.creatorAddress),
   index("idx_whale_entries").on(table.whaleEntered5Sol, table.tokenAgeMinutes),
-  index("idx_is_archived").on(table.isArchived),
+  index("idx_archetype_cluster_id").on(table.archetypeClusterId), // Only set for archived dead tokens
 ]);
 
 export const insertTokenFingerprintsSchema = createInsertSchema(tokenFingerprints).omit({ id: true });
@@ -4370,42 +4368,90 @@ export const insertCreatorReputationSchema = createInsertSchema(creatorReputatio
 export type CreatorReputation = typeof creatorReputation.$inferSelect;
 export type InsertCreatorReputation = z.infer<typeof insertCreatorReputationSchema>;
 
-// Token Fingerprint Clusters - Compressed historical fingerprints via k-means clustering
+// Token Fingerprint Archetypes - Dead token patterns archived for ANN anti-pattern learning
+// Created when dead tokens are archived (T0 + deathbread fingerprints merged into shared cluster)
+// NOT used for active token clustering (active tokens maintain individual trajectories)
 export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   id: serial("id").primaryKey(),
 
-  // Cluster metadata
-  clusterId: text("cluster_id").notNull().unique(), // "time_1min_20260427_0"
-  snapshotTrigger: text("snapshot_trigger").notNull(), // "time_1min", "trade_count_50", etc.
+  // Archetype cluster identification
+  clusterId: text("cluster_id").notNull().unique(), // "dead_archetype_crash_20260428_0"
+  type: text("type").notNull().default("dead"), // "dead" = archetype cluster for failed tokens only
 
-  // Centroid vector (50-dim fingerprint)
-  centroidVector: jsonb("centroid_vector").$type<number[]>().notNull(), // 50 floats
+  // Centroid vector (averaged T0 + deathbread vectors from member tokens)
+  centroid: jsonb("centroid").$type<number[]>().notNull(), // 50-dim fingerprint vector
 
-  // Cluster statistics
-  sampleCount: integer("sample_count").notNull(), // How many tokens in this cluster
-  ageRangeStart: real("age_range_start"), // Min token age (minutes)
-  ageRangeEnd: real("age_range_end"), // Max token age (minutes)
-  cohesion: real("cohesion"), // Cluster cohesion metric (0-1)
+  // Archetype statistics
+  sampleCount: integer("sample_count").notNull(), // How many dead tokens merged into this archetype
+  archivedTokenMints: jsonb("archived_token_mints").$type<string[]>(), // Token mints in this archetype
 
-  // Outcome statistics (aggregated from cluster members)
-  avgWinRate: real("avg_win_rate"),
-  avgFinalMultiplier: real("avg_final_multiplier"),
-  avgHoldMinutes: real("avg_hold_minutes"),
+  // Cohesion metric (0-1: how similar are the archived dead tokens?)
+  cohesion: real("cohesion").notNull(), // Higher = tighter archetype pattern
+  minSimilarity: real("min_similarity"), // Lowest similarity among members
+  maxSimilarity: real("max_similarity"), // Highest similarity among members
 
-  // Compression metadata
-  compressedAt: integer("compressed_at").notNull(),
-  archivedSnapshotCount: integer("archived_snapshot_count"), // How many snapshots compressed
+  // Anti-pattern characteristics (what made these tokens fail?)
+  avgWinRate: real("avg_win_rate"), // Win rate of wallets that traded these tokens (usually low)
+  avgFinalMultiplier: real("avg_final_multiplier"), // Peak multiplier before crash
+  avgHoldMinutes: real("avg_hold_minutes"), // How long holders stayed in losing trade
 
+  // Metadata
   createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+  lastRebalancedAt: integer("last_rebalanced_at"),
 }, (table) => [
-  index("idx_cluster_trigger").on(table.snapshotTrigger),
-  index("idx_cluster_age").on(table.ageRangeStart, table.ageRangeEnd),
-  index("idx_cluster_compressed").on(table.compressedAt),
+  index("idx_archetype_type").on(table.type),
+  index("idx_archetype_cohesion").on(table.cohesion),
+  index("idx_archetype_sample_count").on(table.sampleCount),
 ]);
 
 export const insertTokenFingerprintClustersSchema = createInsertSchema(tokenFingerprintClusters).omit({ id: true, createdAt: true });
 export type TokenFingerprintCluster = typeof tokenFingerprintClusters.$inferSelect;
 export type InsertTokenFingerprintCluster = z.infer<typeof insertTokenFingerprintClustersSchema>;
+
+// Active Token Trajectories - Fingerprint snapshots for live trading tokens (NOT archived/clustered)
+// Active tokens maintain individual trajectory through activity-gated snapshots
+// Each token has its own series of fingerprints showing evolution over time
+export const activeTokenTrajectories = pgTable("active_token_trajectories", {
+  id: serial("id").primaryKey(),
+
+  tokenMint: text("token_mint").notNull(),
+
+  // Trajectory sequence (ordered snapshots over time for this token)
+  snapshotSequence: integer("snapshot_sequence").notNull(), // 0, 1, 2, ... (T0, activity-gated FP1, FP2, etc.)
+  snapshotTimestamp: integer("snapshot_timestamp").notNull(),
+  tokenAgeMinutes: real("token_age_minutes"),
+
+  // Snapshot characteristics
+  snapshotTrigger: text("snapshot_trigger").notNull(), // "t0_creation" | "activity_volume_since_last"
+  triggerContext: jsonb("trigger_context").$type<Record<string, any>>(), // volume count, time elapsed, etc.
+
+  // Fingerprint vector (50-dim)
+  fingerprintVector: jsonb("fingerprint_vector").$type<number[]>().notNull(),
+
+  // State at snapshot time
+  currentMultiplier: real("current_multiplier"), // Price relative to entry
+  tradeCount: integer("trade_count"), // Trades on token by sampling window
+  holderCount: integer("holder_count"), // Unique holders
+
+  // Outcome status (filled in when token dies/archives)
+  finalMultiplier: real("final_multiplier"), // Peak or exit multiplier
+  archiveReason: text("archive_reason"), // "volume_death" | "graduation" | "rugpull" | null (if still active)
+  archivedAt: integer("archived_at"), // When token was archived, null if still active
+
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_token_mint_trajectory").on(table.tokenMint),
+  index("idx_snapshot_sequence").on(table.tokenMint, table.snapshotSequence),
+  index("idx_snapshot_timestamp").on(table.snapshotTimestamp),
+  index("idx_archived_at").on(table.archivedAt), // NULL = still active
+  index("idx_current_multiplier").on(table.currentMultiplier),
+]);
+
+export const insertActiveTokenTrajectoriesSchema = createInsertSchema(activeTokenTrajectories).omit({ id: true, createdAt: true });
+export type ActiveTokenTrajectory = typeof activeTokenTrajectories.$inferSelect;
+export type InsertActiveTokenTrajectory = z.infer<typeof insertActiveTokenTrajectoriesSchema>;
 
 // Retrolearner Thresholds - Learned buying thresholds per condition type
 export const retrolearnerThresholds = pgTable("retrolearner_thresholds", {

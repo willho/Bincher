@@ -74,11 +74,19 @@ function averageVectors(vectors: number[][]): {
 }
 
 /**
- * Decide where to assign new token's fingerprint
- * Options:
- * 1. Add to existing similar cluster
- * 2. Create new cluster
- * 3. Trigger rebalancing if cluster too large
+ * Archive dead token's trajectory into archetypal cluster
+ *
+ * IMPORTANT: Only call for DEAD tokens being archived.
+ * Active tokens maintain individual fingerprint trajectories (no clustering).
+ *
+ * Archiving logic:
+ * 1. Token created → T0 fingerprint (captured immediately)
+ * 2. Token trading → Multiple snapshots (activity-gated)
+ * 3. Token dies → Deathbread fingerprint (final state)
+ * 4. Archive → Merge (T0 + deathbread) into archetypal cluster
+ *
+ * This creates anti-pattern clusters for ANN negative training labels,
+ * while preserving complete trajectories for active tokens.
  */
 export async function assignTokenToCluster(
   tokenMint: string,
@@ -90,18 +98,28 @@ export async function assignTokenToCluster(
   similarityToCluster: number;
   isNewCluster: boolean;
 }> {
-  // Find most similar existing cluster (same type)
+  // VALIDATION: Only archive dead tokens
+  // Active tokens should NOT go through clustering - they maintain trajectory
+  if (tokenType === "active") {
+    throw new Error(
+      `[ClusterMgmt] Cannot cluster active token ${tokenMint}. ` +
+      `Active tokens maintain individual fingerprint trajectories. ` +
+      `Only archive dead tokens into clusters.`
+    );
+  }
+
+  // Find most similar DEAD token cluster
   const allClusters = await db
     .select()
     .from(tokenFingerprintClusters)
-    .where(eq(tokenFingerprintClusters.type, tokenType));
+    .where(eq(tokenFingerprintClusters.type, "dead")); // Only dead clusters
 
   if (allClusters.length === 0) {
-    // Create first cluster
-    return createNewCluster(tokenMint, fingerprintVector, tokenType);
+    // Create first archetype cluster for dead patterns
+    return createNewCluster(tokenMint, fingerprintVector, "dead");
   }
 
-  // Find best match
+  // Find best archetype match (most similar dead token pattern)
   let bestCluster = allClusters[0];
   let bestSimilarity = -1;
 
@@ -115,31 +133,28 @@ export async function assignTokenToCluster(
     }
   }
 
-  // Decision logic:
+  // Archetype matching thresholds
   const thresholds = {
-    mergeSimilarity: 0.85, // Very similar → merge
-    minCohesionToGrow: 0.75, // Can grow if cohesion stays above this
-    cohesionDropTolerance: 0.05, // Allow max 5% cohesion drop when adding new token
+    mergeDeadTokens: 0.80, // Very similar dead patterns → merge (lower than active)
+    minArchetypeCohesion: 0.70, // Dead cluster must stay tight >0.70
+    cohesionDropTolerance: 0.08, // Allow max 8% cohesion drop when adding dead token
   };
 
-  // Too dissimilar → create new cluster
-  if (bestSimilarity < thresholds.mergeSimilarity) {
-    return createNewCluster(tokenMint, fingerprintVector, tokenType);
+  // Too dissimilar to existing archetype → create new pattern
+  if (bestSimilarity < thresholds.mergeDeadTokens) {
+    return createNewCluster(tokenMint, fingerprintVector, "dead");
   }
 
-  // Check if adding this token would degrade cluster too much
-  // (only check if cluster already large)
-  if (bestCluster.sampleCount > 100) {
-    const cohesionDropThreshold = bestCluster.cohesion - thresholds.cohesionDropTolerance;
-    if (bestCluster.cohesion < thresholds.minCohesionToGrow) {
-      // Cluster already loose, don't add more
-      return createNewCluster(tokenMint, fingerprintVector, tokenType);
+  // Check if adding this dead token would degrade archetype cohesion
+  if (bestCluster.sampleCount > 50) { // Archetype threshold (smaller than active)
+    if (bestCluster.cohesion < thresholds.minArchetypeCohesion) {
+      // Archetype pattern already loose, create new pattern
+      return createNewCluster(tokenMint, fingerprintVector, "dead");
     }
   }
 
-  // All checks passed → merge is safe, even if cluster is large
+  // All checks passed → merge dead token into archetype
 
-  // Merge with best cluster
   const updated = await addTokenToCluster(
     bestCluster.clusterId,
     fingerprintVector,

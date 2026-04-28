@@ -68,10 +68,23 @@ describe("Fingerprint Cluster Management", () => {
   });
 
   describe("assignTokenToCluster", () => {
-    it("should create first cluster when none exist", async () => {
+    it("should reject active tokens (clustering only for dead token archetype)", async () => {
+      const vector = generateVector(0.5);
+
+      // Active tokens should NOT be clustered - they maintain individual trajectories
+      // Only dead tokens are archived into archetypal clusters
+      try {
+        await assignTokenToCluster("token_test_active", vector, "active");
+        expect.fail("Should have thrown error for active token");
+      } catch (error: any) {
+        expect(error.message).toContain("Cannot cluster active token");
+      }
+    });
+
+    it("should create first archetype cluster for dead token", async () => {
       const vector = generateVector(0.5);
       const result = await assignTokenToCluster(
-        "token_test_1",
+        "token_test_dead_1",
         vector,
         "dead"
       );
@@ -81,46 +94,46 @@ describe("Fingerprint Cluster Management", () => {
       expect(result.similarityToCluster).toBe(1.0);
     });
 
-    it("should merge similar tokens into same cluster", async () => {
-      const baseVector = generateVector(0.5, 0.01); // Low variance = tight cluster
+    it("should merge similar dead tokens into same archetype", async () => {
+      const baseVector = generateVector(0.5, 0.01); // Low variance = tight failure pattern
 
-      // Create base cluster
+      // Archive first dead token into archetype
       const result1 = await assignTokenToCluster(
-        "token_test_1",
+        "token_test_dead_2",
         baseVector,
         "dead"
       );
 
-      // Create very similar vector
+      // Archive very similar dead token (same failure pattern)
       const similarVector = generateVector(0.5, 0.01);
       const result2 = await assignTokenToCluster(
-        "token_test_2",
+        "token_test_dead_3",
         similarVector,
         "dead"
       );
 
-      // Should merge into same cluster
+      // Should merge into same archetype cluster
       expect(result2.clusterId).toBe(result1.clusterId);
       expect(result2.sampleCount).toBe(2);
       expect(result2.isNewCluster).toBe(false);
     });
 
-    it("should create new cluster for dissimilar tokens", async () => {
-      const vector1 = generateVector(0.2, 0.01);
-      const vector2 = generateVector(0.8, 0.01);
+    it("should create new archetype for dissimilar dead token patterns", async () => {
+      const vector1 = generateVector(0.2, 0.01); // Slow bleed failure pattern
+      const vector2 = generateVector(0.8, 0.01); // Sudden dump failure pattern
 
       const result1 = await assignTokenToCluster(
-        "token_test_1",
+        "token_test_dead_slow",
         vector1,
         "dead"
       );
       const result2 = await assignTokenToCluster(
-        "token_test_2",
+        "token_test_dead_dump",
         vector2,
         "dead"
       );
 
-      // Should be different clusters
+      // Should be different archetypes (different failure patterns)
       expect(result2.clusterId).not.toBe(result1.clusterId);
       expect(result2.isNewCluster).toBe(true);
     });
@@ -166,39 +179,46 @@ describe("Fingerprint Cluster Management", () => {
       expect(lastResult?.sampleCount).toBe(5);
     });
 
-    it("should separate dead and active tokens into different clusters", async () => {
+    it("should only allow dead tokens (active tokens not archived)", async () => {
+      // This test verifies the design: only dead tokens get archived into archetypes
+      // Active tokens maintain individual trajectories via activeTokenTrajectories table
       const vector = generateVector(0.5);
 
+      // Dead tokens archive into clusters ✓
       const deadResult = await assignTokenToCluster(
-        "token_test_dead",
+        "token_test_dead_policy",
         vector,
         "dead"
       );
+      expect(deadResult.isNewCluster).toBe(true);
 
-      const activeResult = await assignTokenToCluster(
-        "token_test_active",
-        vector,
-        "active"
-      );
-
-      // Same vector but different clusters because different types
-      expect(deadResult.clusterId).not.toBe(activeResult.clusterId);
+      // Active tokens throw error (not archived) ✗
+      try {
+        await assignTokenToCluster(
+          "token_test_active_policy",
+          vector,
+          "active"
+        );
+        expect.fail("Active token should not be clusterable");
+      } catch (error: any) {
+        expect(error.message).toContain("Cannot cluster active token");
+      }
     });
 
-    it("should allow clusters to grow large if cohesion stays high", async () => {
-      const vector = generateVector(0.5, 0.01); // Very tight clustering
+    it("should allow dead token archetypes to grow large if cohesion stays tight", async () => {
+      const vector = generateVector(0.5, 0.01); // Very tight failure pattern
 
-      // Add many similar tokens - should stay in same cluster
+      // Archive 20 similar dead tokens - should all merge into same archetype
       let result = null;
       for (let i = 0; i < 20; i++) {
         result = await assignTokenToCluster(
-          `token_test_tight_${i}`,
+          `token_test_archetype_tight_${i}`,
           vector,
           "dead"
         );
       }
 
-      // All 20 tokens should be in same cluster (tight cohesion allows growth)
+      // All 20 dead tokens should share same archetype (tight cohesion allows growth)
       expect(result?.sampleCount).toBe(20);
       expect(result?.isNewCluster).toBe(false);
     });
