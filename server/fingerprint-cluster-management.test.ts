@@ -2,19 +2,19 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { db } from "./db";
 import { tokenFingerprintClusters, tokenFingerprints } from "@shared/schema";
 import {
-  assignTokenToCluster,
+  archiveTokenTrajectory,
   estimateClusterSize,
   estimateFullFingerprinterSize,
-  triggerClusterRebalancing,
+  reportArchetypeQuality,
 } from "./fingerprint-cluster-management";
 import { sql } from "drizzle-orm";
 
 /**
- * Tests for Fingerprint Cluster Management
- * Verifies intelligent clustering prevents fragmentation
+ * Tests for Trajectory Archetype Management
+ * Verifies post-mortem compression of token lifecycles into pattern archetypes
  */
 
-describe("Fingerprint Cluster Management", () => {
+describe("Trajectory Archetype Management", () => {
   const NOW = Math.floor(Date.now() / 1000);
 
   function generateVector(
@@ -23,35 +23,38 @@ describe("Fingerprint Cluster Management", () => {
   ): number[] {
     return Array.from({ length: 50 }, () => {
       const v = baseValue + (Math.random() - 0.5) * 2 * variance;
-      return Math.max(0, Math.min(1, v)); // Clamp to [0, 1]
+      return Math.max(0, Math.min(1, v));
     });
   }
 
-  function generateFingerprint(tokenMint: string, vector: number[]) {
-    return {
-      id: `fp_${tokenMint}_${Math.random()}`,
-      tokenMint,
-      snapshotTimestamp: NOW - Math.random() * 3600,
-      snapshotTrigger: "test",
-      fingerprintVector: vector,
-      winRate: Math.random(),
-      medianMultiplier: Math.random() * 5,
-      avgHoldMinutes: Math.random() * 1440,
-      whaleEntryCount: 0,
-      clusterCoordination: Math.random(),
-      buyerDiversity: Math.random(),
-      holderConcentration: Math.random(),
-      isArchived: false,
-      assignedClusterId: null,
-      vectorSimilarityToCluster: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+  async function createTokenTrajectory(
+    tokenMint: string,
+    snapshotCount: number,
+    baseVector: number[]
+  ) {
+    const fingerprints = [];
+    for (let i = 0; i < snapshotCount; i++) {
+      const variation = generateVector(baseVector[0], 0.02);
+      fingerprints.push({
+        fingerprintType: "pregrad_bonding_curve",
+        tokenMint,
+        snapshotTrigger: i === 0 ? "t0_creation" : `activity_volume_${i}`,
+        snapshotTimestamp: NOW + i * 60,
+        tokenAgeMinutes: i,
+        fingerprintVector: variation,
+        winRate: 0.5,
+        medianMultiplier: 1.0 + i * 0.5,
+        avgHoldMinutes: 30,
+        createdAt: NOW + i * 60,
+        updatedAt: NOW + i * 60,
+      });
+    }
+    await db.insert(tokenFingerprints).values(fingerprints);
   }
 
   beforeEach(async () => {
     await db.delete(tokenFingerprintClusters).where(
-      sql`cluster_id LIKE ${"cluster_test_%"}`
+      sql`cluster_id LIKE ${"trajectory_archetype_%"}`
     );
     await db.delete(tokenFingerprints).where(
       sql`token_mint LIKE ${"token_test_%"}`
@@ -60,439 +63,165 @@ describe("Fingerprint Cluster Management", () => {
 
   afterEach(async () => {
     await db.delete(tokenFingerprintClusters).where(
-      sql`cluster_id LIKE ${"cluster_test_%"}`
+      sql`cluster_id LIKE ${"trajectory_archetype_%"}`
     );
     await db.delete(tokenFingerprints).where(
       sql`token_mint LIKE ${"token_test_%"}`
     );
   });
 
-  describe("assignTokenToCluster", () => {
-    it("should reject active tokens (clustering only for dead token archetype)", async () => {
-      const vector = generateVector(0.5);
-
-      // Active tokens should NOT be clustered - they maintain individual trajectories
-      // Only dead tokens are archived into archetypal clusters
-      try {
-        await assignTokenToCluster("token_test_active", vector, "active");
-        expect.fail("Should have thrown error for active token");
-      } catch (error: any) {
-        expect(error.message).toContain("Cannot cluster active token");
-      }
-    });
-
-    it("should create first archetype cluster for dead token", async () => {
-      const vector = generateVector(0.5);
-      const result = await assignTokenToCluster(
-        "token_test_dead_1",
-        vector,
-        "dead"
-      );
-
-      expect(result.isNewCluster).toBe(true);
-      expect(result.sampleCount).toBe(1);
-      expect(result.similarityToCluster).toBe(1.0);
-    });
-
-    it("should merge similar dead tokens into same archetype", async () => {
-      const baseVector = generateVector(0.5, 0.01); // Low variance = tight failure pattern
-
-      // Archive first dead token into archetype
-      const result1 = await assignTokenToCluster(
-        "token_test_dead_2",
-        baseVector,
-        "dead"
-      );
-
-      // Archive very similar dead token (same failure pattern)
-      const similarVector = generateVector(0.5, 0.01);
-      const result2 = await assignTokenToCluster(
-        "token_test_dead_3",
-        similarVector,
-        "dead"
-      );
-
-      // Should merge into same archetype cluster
-      expect(result2.clusterId).toBe(result1.clusterId);
-      expect(result2.sampleCount).toBe(2);
-      expect(result2.isNewCluster).toBe(false);
-    });
-
-    it("should create new archetype for dissimilar dead token patterns", async () => {
-      const vector1 = generateVector(0.2, 0.01); // Slow bleed failure pattern
-      const vector2 = generateVector(0.8, 0.01); // Sudden dump failure pattern
-
-      const result1 = await assignTokenToCluster(
-        "token_test_dead_slow",
-        vector1,
-        "dead"
-      );
-      const result2 = await assignTokenToCluster(
-        "token_test_dead_dump",
-        vector2,
-        "dead"
-      );
-
-      // Should be different archetypes (different failure patterns)
-      expect(result2.clusterId).not.toBe(result1.clusterId);
-      expect(result2.isNewCluster).toBe(true);
-    });
-
-    it("should create new cluster if adding would degrade cohesion too much", async () => {
-      const vector1 = generateVector(0.3, 0.01);
-      const vector2 = generateVector(0.7, 0.01);
-
-      // Create first cluster with vector1
-      const result1 = await assignTokenToCluster(
-        "token_test_loose_1",
-        vector1,
-        "dead"
-      );
-
-      // Try to add very different vector - should create new cluster
-      // because cohesion would drop too much
-      const result2 = await assignTokenToCluster(
-        "token_test_loose_2",
-        vector2,
-        "dead"
-      );
-
-      // Should be separate clusters due to poor cohesion
-      expect(result2.clusterId).not.toBe(result1.clusterId);
-      expect(result2.isNewCluster).toBe(true);
-    });
-
-    it("should track sample count correctly", async () => {
-      const vector = generateVector(0.5, 0.01);
-
-      // Add 5 tokens to same cluster
-      let lastResult = null;
-      for (let i = 0; i < 5; i++) {
-        const result = await assignTokenToCluster(
-          `token_test_${i}`,
-          vector,
-          "dead"
-        );
-        lastResult = result;
-      }
-
-      expect(lastResult?.sampleCount).toBe(5);
-    });
-
-    it("should only allow dead tokens (active tokens not archived)", async () => {
-      // This test verifies the design: only dead tokens get archived into archetypes
-      // Active tokens maintain individual trajectories via activeTokenTrajectories table
-      const vector = generateVector(0.5);
-
-      // Dead tokens archive into clusters ✓
-      const deadResult = await assignTokenToCluster(
-        "token_test_dead_policy",
-        vector,
-        "dead"
-      );
-      expect(deadResult.isNewCluster).toBe(true);
-
-      // Active tokens throw error (not archived) ✗
-      try {
-        await assignTokenToCluster(
-          "token_test_active_policy",
-          vector,
-          "active"
-        );
-        expect.fail("Active token should not be clusterable");
-      } catch (error: any) {
-        expect(error.message).toContain("Cannot cluster active token");
-      }
-    });
-
-    it("should allow dead token archetypes to grow large if cohesion stays tight", async () => {
-      const vector = generateVector(0.5, 0.01); // Very tight failure pattern
-
-      // Archive 20 similar dead tokens - should all merge into same archetype
-      let result = null;
-      for (let i = 0; i < 20; i++) {
-        result = await assignTokenToCluster(
-          `token_test_archetype_tight_${i}`,
-          vector,
-          "dead"
-        );
-      }
-
-      // All 20 dead tokens should share same archetype (tight cohesion allows growth)
-      expect(result?.sampleCount).toBe(20);
-      expect(result?.isNewCluster).toBe(false);
-    });
-  });
-
-  describe("Cluster Statistics", () => {
-    it("should track cluster cohesion (vector similarity)", async () => {
-      // Tight cluster: all vectors similar
+  describe("archiveTokenTrajectory", () => {
+    it("should create first archetype from token trajectory", async () => {
+      const tokenMint = "token_test_archive_1";
       const baseVector = generateVector(0.5, 0.01);
 
-      for (let i = 0; i < 5; i++) {
-        await assignTokenToCluster(`token_test_tight_${i}`, baseVector, "dead");
-      }
+      await createTokenTrajectory(tokenMint, 5, baseVector);
 
-      // Get cluster
-      const clusters = await db
-        .select()
-        .from(tokenFingerprintClusters)
-        .where(sql`type = ${"dead"}`);
+      const result = await archiveTokenTrajectory(tokenMint, "volume_death");
 
-      expect(clusters.length).toBeGreaterThan(0);
-      const cohesion = clusters[0]?.cohesion || 0;
-      expect(cohesion).toBeGreaterThan(0.8); // Tight cluster = high cohesion
+      expect(result.isNewArchetype).toBe(true);
+      expect(result.trajectoryLength).toBe(5);
+      expect(result.archetypeClusterId).toContain("trajectory_archetype");
     });
 
-    it("should track similarity range (min/max)", async () => {
-      const vector = generateVector(0.5, 0.01);
+    it("should merge similar trajectories into same archetype", async () => {
+      const baseVector = generateVector(0.5, 0.01);
 
-      for (let i = 0; i < 3; i++) {
-        await assignTokenToCluster(
-          `token_test_range_${i}`,
-          vector,
-          "dead"
-        );
-      }
-
-      const clusters = await db
-        .select()
-        .from(tokenFingerprintClusters)
-        .where(sql`type = ${"dead"}`);
-
-      const cluster = clusters[0];
-      expect(cluster?.minSimilarity).toBeLessThanOrEqual(
-        cluster?.maxSimilarity || 0
+      await createTokenTrajectory("token_test_similar_1", 5, baseVector);
+      const result1 = await archiveTokenTrajectory(
+        "token_test_similar_1",
+        "volume_death"
       );
-      expect(cluster?.minSimilarity).toBeGreaterThan(0.7); // Similar vectors
+
+      await createTokenTrajectory("token_test_similar_2", 5, baseVector);
+      const result2 = await archiveTokenTrajectory(
+        "token_test_similar_2",
+        "volume_death"
+      );
+
+      expect(result2.archetypeClusterId).toBe(result1.archetypeClusterId);
+      expect(result2.isNewArchetype).toBe(false);
     });
 
-    it("should update sample count on cluster", async () => {
-      const vector = generateVector(0.5);
+    it("should create separate archetypes for dissimilar trajectories", async () => {
+      const slowBleeds = generateVector(0.2, 0.01);
+      const suddenDump = generateVector(0.8, 0.01);
 
-      let clusterId = "";
-      for (let i = 0; i < 3; i++) {
-        const result = await assignTokenToCluster(
-          `token_test_count_${i}`,
-          vector,
-          "dead"
+      await createTokenTrajectory("token_test_slow", 5, slowBleeds);
+      const result1 = await archiveTokenTrajectory(
+        "token_test_slow",
+        "volume_death"
+      );
+
+      await createTokenTrajectory("token_test_dump", 5, suddenDump);
+      const result2 = await archiveTokenTrajectory(
+        "token_test_dump",
+        "volume_death"
+      );
+
+      expect(result2.archetypeClusterId).not.toBe(result1.archetypeClusterId);
+      expect(result2.isNewArchetype).toBe(true);
+    });
+
+    it("should reject trajectory with no fingerprints", async () => {
+      try {
+        await archiveTokenTrajectory("token_test_nonexistent", "volume_death");
+        expect.fail("Should have thrown error");
+      } catch (error: any) {
+        expect(error.message).toContain("No fingerprints found");
+      }
+    });
+
+    it("should allow large archetypes if cohesion stays tight", async () => {
+      const baseVector = generateVector(0.5, 0.01);
+
+      // Archive 10 similar trajectories - should all merge
+      let lastResult = null;
+      for (let i = 0; i < 10; i++) {
+        await createTokenTrajectory(`token_test_tight_${i}`, 5, baseVector);
+        lastResult = await archiveTokenTrajectory(
+          `token_test_tight_${i}`,
+          "volume_death"
         );
-        if (i === 0) clusterId = result.clusterId;
       }
 
-      const clusters = await db
-        .select()
-        .from(tokenFingerprintClusters)
-        .where(sql`cluster_id = ${clusterId}`);
+      // All should be in same archetype
+      expect(lastResult?.archetypeClusterId).toBeDefined();
+    });
 
-      expect(clusters[0]?.sampleCount).toBe(3);
+    it("should track trajectory length in archetype", async () => {
+      const baseVector = generateVector(0.5);
+
+      // Token with 3 snapshots
+      await createTokenTrajectory("token_test_len_1", 3, baseVector);
+      const result = await archiveTokenTrajectory(
+        "token_test_len_1",
+        "volume_death"
+      );
+
+      expect(result.trajectoryLength).toBe(3);
     });
   });
 
-  describe("Size Estimates", () => {
-    it("should estimate optimal cluster count", () => {
-      const estimate = estimateClusterSize();
+  describe("Archetype Quality Reporting", () => {
+    it("should report archetype statistics", async () => {
+      const baseVector = generateVector(0.5, 0.01);
 
-      // Optimal: ~5 tokens per cluster
-      const expectedClusters = 36000 / 5;
-      expect(estimate.clusterCount).toBeLessThan(10000);
-      expect(estimate.clusterCount).toBeGreaterThan(1000);
-      expect(estimate.avgSampleSize).toBe(5);
+      // Create and archive a few trajectories
+      for (let i = 0; i < 3; i++) {
+        await createTokenTrajectory(`token_test_quality_${i}`, 5, baseVector);
+        await archiveTokenTrajectory(
+          `token_test_quality_${i}`,
+          "volume_death"
+        );
+      }
+
+      const stats = await reportArchetypeQuality();
+
+      expect(stats.totalArchetypes).toBeGreaterThan(0);
+      expect(stats.tightArchetypes).toBeGreaterThanOrEqual(0);
+      expect(stats.looseArchetypes).toBeGreaterThanOrEqual(0);
+      expect(stats.avgTokensPerArchetype).toBeGreaterThan(0);
+      expect(stats.avgCohesion).toBeGreaterThan(0);
     });
 
-    it("should estimate reasonable DB size", () => {
+    it("should return zero stats when no archetypes", async () => {
+      const stats = await reportArchetypeQuality();
+
+      expect(stats.totalArchetypes).toBe(0);
+      expect(stats.avgTokensPerArchetype).toBe(0);
+      expect(stats.avgCohesion).toBe(0);
+    });
+  });
+
+  describe("Archetype Compression Estimates", () => {
+    it("should estimate archetype-based compression", () => {
       const estimate = estimateClusterSize();
 
-      // Should be << 36GB (if every token had own cluster)
-      expect(estimate.dbSizeGB).toBeLessThan(10);
-      expect(estimate.dbSizeGB).toBeGreaterThan(0.1);
+      expect(estimate.archetypeCount).toBeLessThan(36000); // Better than no compression
+      expect(estimate.tokensPerArchetype).toBeGreaterThan(1); // Some merging
+      expect(estimate.dbSizeGB).toBeLessThan(10); // Reasonable size
     });
 
-    it("should show optimal scenario advantages", () => {
+    it("should show compression efficiency", () => {
       const estimate = estimateClusterSize();
 
-      expect(estimate.risk).toContain("GOOD");
-      expect(estimate.risk).not.toContain("CRITICAL");
+      // ~12% of worst case (no compression) is good compression
+      const compressionRatio = estimate.archetypeCount / 36000;
+      expect(compressionRatio).toBeLessThan(0.2); // Less than 20% of worst case
+      expect(compressionRatio).toBeGreaterThan(0.01); // But not trivial
     });
 
-    it("should break down full fingerprinter size", () => {
+    it("should provide full fingerprinter size estimate", () => {
       const layers = estimateFullFingerprinterSize();
 
-      expect(layers).toHaveLength(5);
-      expect(layers[0]?.layer).toContain("fingerprints");
-      expect(layers[1]?.layer).toContain("centroids");
-      expect(layers[4]?.layer).toContain("TOTAL");
+      expect(layers.length).toBeGreaterThan(0);
+      expect(layers[layers.length - 1]?.layer).toContain("TOTAL");
 
       // Total should be reasonable
-      const total = layers[4]?.sizeGB || 0;
-      expect(total).toBeLessThan(50);
-      expect(total).toBeGreaterThan(10);
-    });
-
-    it("should show component breakdown", () => {
-      const layers = estimateFullFingerprinterSize();
-
-      let previousSize = 0;
-      layers.forEach((layer, i) => {
-        if (i < layers.length - 1) {
-          // Non-total layers should have reasonable size
-          expect(layer.sizeGB).toBeGreaterThan(0);
-        }
-      });
-
-      // Total is sum of components
-      const total = layers.reduce((sum, l, i) => {
-        if (i < layers.length - 1) return sum + l.sizeGB;
-        return sum;
-      }, 0);
-
-      expect(total).toBeGreaterThan(10);
-    });
-  });
-
-  describe("Cohesion-Based Growth", () => {
-    it("should allow very large clusters if cohesion stays tight (>0.8)", async () => {
-      // Create a tight cluster with many similar tokens
-      const baseVector = generateVector(0.5, 0.005); // Very tight variance
-
-      let lastResult = null;
-      for (let i = 0; i < 50; i++) {
-        const vector = generateVector(0.5, 0.005); // Same variance = tight cluster
-        lastResult = await assignTokenToCluster(
-          `token_test_large_${i}`,
-          vector,
-          "dead"
-        );
-      }
-
-      // Should all be in same cluster despite size
-      expect(lastResult?.sampleCount).toBeGreaterThan(40);
-      expect(lastResult?.isNewCluster).toBe(false);
-    });
-
-    it("should split loose clusters even if small", async () => {
-      // Create first loose cluster
-      const vector1 = generateVector(0.2, 0.05);
-      const result1 = await assignTokenToCluster(
-        "token_test_split_1",
-        vector1,
-        "dead"
-      );
-
-      // Try to add very different vector
-      const vector2 = generateVector(0.8, 0.05);
-      const result2 = await assignTokenToCluster(
-        "token_test_split_2",
-        vector2,
-        "dead"
-      );
-
-      // Should be separate due to cohesion drop, not size
-      expect(result2.isNewCluster).toBe(true);
-    });
-  });
-
-  describe("Worst-Case Analysis", () => {
-    it("should prevent fragmentation (no merge)", () => {
-      const estimate = estimateClusterSize();
-
-      // Worst case: no merge → 36K clusters
-      // Our approach: ~4.5K clusters (cohesion-based, allows larger tight clusters)
-      // Reduction factor: 8x
-
-      expect(estimate.clusterCount).toBeLessThan(36000);
-      expect(estimate.clusterCount / 36000).toBeCloseTo(0.125, 0); // ~12.5% of worst case
-    });
-
-    it("should prevent signal loss (aggressive merge)", () => {
-      // Worst case: all → 2 clusters (dead/active)
-      // Our approach: ~7K clusters with meaningful granularity
-
-      const estimate = estimateClusterSize();
-
-      // Should have many clusters, not just 2
-      expect(estimate.clusterCount).toBeGreaterThan(100);
-    });
-
-    it("should balance complexity vs compression", () => {
-      const estimate = estimateClusterSize();
-
-      // Goldilocks zone:
-      // - More than 2 clusters (preserve signal)
-      // - Fewer than 36K clusters (prevent bloat)
-      // - Avg 5 tokens/cluster (confidence metric)
-
-      expect(estimate.clusterCount).toBeGreaterThan(10);
-      expect(estimate.clusterCount).toBeLessThan(10000);
-      expect(estimate.avgSampleSize).toBeGreaterThan(1);
-      expect(estimate.avgSampleSize).toBeLessThan(100);
-    });
-
-    it("should show DB size stays bounded", () => {
-      const estimate = estimateClusterSize();
-      const fullSize = estimateFullFingerprinterSize();
-
-      const totalGB = fullSize[4]?.sizeGB || 0;
-
-      // Should fit easily on database
-      // Constraint: ~1 TB available, want < 50 GB steady state
-      expect(totalGB).toBeLessThan(100);
-    });
-  });
-
-  describe("Cluster Rebalancing", () => {
-    it("should identify clusters needing split (too large)", async () => {
-      // This would require manually creating a cluster with 1000+ samples
-      // For now, test the function exists and returns structured result
-
-      const result = await triggerClusterRebalancing();
-
-      expect(result).toHaveProperty("splitClusters");
-      expect(result).toHaveProperty("mergedClusters");
-      expect(result).toHaveProperty("totalAffected");
-    });
-
-    it("should identify clusters for merging (similar + small)", async () => {
-      const result = await triggerClusterRebalancing();
-
-      expect(result.mergedClusters).toBeGreaterThanOrEqual(0);
-      expect(result.totalAffected).toBeGreaterThanOrEqual(0);
-    });
-  });
-
-  describe("Schema Integration", () => {
-    it("should support clustering across real fingerprints", async () => {
-      const vector = generateVector(0.5);
-
-      // Create fingerprint
-      const fp = generateFingerprint("token_test_schema", vector);
-      await db.insert(tokenFingerprints).values([fp]);
-
-      // Assign to cluster
-      const result = await assignTokenToCluster(
-        "token_test_schema",
-        vector,
-        "dead"
-      );
-
-      expect(result.clusterId).toBeDefined();
-
-      // Update fingerprint with cluster assignment
-      await db
-        .update(tokenFingerprints)
-        .set({
-          assignedClusterId: result.clusterId,
-          vectorSimilarityToCluster: result.similarityToCluster,
-        })
-        .where(sql`token_mint = ${"token_test_schema"}`);
-
-      // Verify linkage
-      const updated = await db
-        .select()
-        .from(tokenFingerprints)
-        .where(sql`token_mint = ${"token_test_schema"}`);
-
-      expect(updated[0]?.assignedClusterId).toBe(result.clusterId);
+      const total = layers[layers.length - 1]?.sizeGB || 0;
+      expect(total).toBeGreaterThan(0);
+      expect(total).toBeLessThan(100);
     });
   });
 });

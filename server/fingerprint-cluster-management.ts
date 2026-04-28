@@ -3,17 +3,21 @@ import { tokenFingerprintClusters, tokenFingerprints } from "@shared/schema";
 import { eq, and, gte, lt, sql } from "drizzle-orm";
 
 /**
- * Intelligent Cluster Management: Avoid Fragmentation
+ * Trajectory Archetype Management: Post-Mortem Clustering
  *
- * Problem: With deathbread strategy, risk of over-clustering:
- * - No merging: 36K tokens/month → 36K clusters (bloat!)
- * - Naive merging: All tokens → 2 clusters (loss of signal!)
+ * Key Insight: All tokens eventually reach a final state (archived).
+ * The distinction between "winning" and "losing" is temporal—even winners
+ * become archived. Compression happens post-mortem on complete trajectories.
  *
- * Solution: Hierarchical clustering with sample tracking
- * - Track sampleCount in each cluster (confidence metric)
- * - Split when cluster grows too large or heterogeneous
- * - Merge when clusters small and very similar
- * - Balance: ~7K clusters/month (optimal granularity)
+ * Architecture:
+ * 1. Active phase: Tokens evolve naturally, snapshots captured via activity-gating
+ *    (T0, per-minute for 10min, per-50-trades after, per-multiplier at graduation)
+ * 2. Archive phase: Token reaches final state, complete trajectory sequence captured
+ * 3. Compression phase: Trajectory signature computed and merged into archetype
+ *    (similar evolution patterns cluster together)
+ *
+ * Result: ~4,300 archetypes for 36K tokens/month (12% of no-merge bloat)
+ * Each archetype represents a trajectory pattern, not an outcome class.
  */
 
 /**
@@ -74,257 +78,297 @@ function averageVectors(vectors: number[][]): {
 }
 
 /**
- * Archive dead token's trajectory into archetypal cluster
+ * Archive complete token trajectory into archetype cluster
  *
- * IMPORTANT: Only call for DEAD tokens being archived.
- * Active tokens maintain individual fingerprint trajectories (no clustering).
+ * Called when token reaches final state (volume death, graduation, rugpull, etc.)
+ * Compresses the complete fingerprint sequence into a trajectory archetype.
  *
- * Archiving logic:
- * 1. Token created → T0 fingerprint (captured immediately)
- * 2. Token trading → Multiple snapshots (activity-gated)
- * 3. Token dies → Deathbread fingerprint (final state)
- * 4. Archive → Merge (T0 + deathbread) into archetypal cluster
+ * Process:
+ * 1. Fetch all fingerprints for token (complete trajectory in order)
+ * 2. Compute trajectory signature (sequence compression)
+ * 3. Find similar trajectory archetypes (other tokens with same evolution pattern)
+ * 4. Merge into archetype cluster (represents "tokens that evolved like this")
  *
- * This creates anti-pattern clusters for ANN negative training labels,
- * while preserving complete trajectories for active tokens.
+ * All tokens eventually reach this phase (all tokens look like losers eventually).
+ * Clustering happens post-mortem on complete lifecycle, not during active trading.
  */
-export async function assignTokenToCluster(
+export async function archiveTokenTrajectory(
   tokenMint: string,
-  fingerprintVector: number[],
-  tokenType: "dead" | "active"
+  archiveReason: string
 ): Promise<{
-  clusterId: string;
-  sampleCount: number;
-  similarityToCluster: number;
-  isNewCluster: boolean;
+  archetypeClusterId: string;
+  trajectoryLength: number;
+  similarityToArchetype: number;
+  isNewArchetype: boolean;
 }> {
-  // VALIDATION: Only archive dead tokens
-  // Active tokens should NOT go through clustering - they maintain trajectory
-  if (tokenType === "active") {
-    throw new Error(
-      `[ClusterMgmt] Cannot cluster active token ${tokenMint}. ` +
-      `Active tokens maintain individual fingerprint trajectories. ` +
-      `Only archive dead tokens into clusters.`
+  // Fetch complete trajectory (all fingerprints for this token in sequence)
+  const trajectoryFPs = await db
+    .select()
+    .from(tokenFingerprints)
+    .where(eq(tokenFingerprints.tokenMint, tokenMint))
+    .orderBy(tokenFingerprints.snapshotTimestamp);
+
+  if (trajectoryFPs.length === 0) {
+    throw new Error(`[ArchiveTrajectory] No fingerprints found for token ${tokenMint}`);
+  }
+
+  // Compute trajectory signature from complete fingerprint sequence
+  // For now: average of all fingerprints (later: could use dynamic time warping or other sequence metrics)
+  const trajectoryVectors = trajectoryFPs
+    .map((fp) => fp.fingerprintVector as number[])
+    .filter((v): v is number[] => v !== null && v.length > 0);
+
+  if (trajectoryVectors.length === 0) {
+    throw new Error(`[ArchiveTrajectory] No valid vectors in trajectory for ${tokenMint}`);
+  }
+
+  const { centroid: trajectorySignature, cohesion: trajectoryQuality } =
+    averageVectors(trajectoryVectors);
+
+  // Find most similar trajectory archetype
+  const allArchetypes = await db
+    .select()
+    .from(tokenFingerprintClusters)
+    .where(eq(tokenFingerprintClusters.type, "dead"));
+
+  if (allArchetypes.length === 0) {
+    // Create first trajectory archetype
+    return createTrajectoryArchetype(
+      tokenMint,
+      trajectorySignature,
+      trajectoryFPs.length,
+      archiveReason
     );
   }
 
-  // Find most similar DEAD token cluster
-  const allClusters = await db
-    .select()
-    .from(tokenFingerprintClusters)
-    .where(eq(tokenFingerprintClusters.type, "dead")); // Only dead clusters
-
-  if (allClusters.length === 0) {
-    // Create first archetype cluster for dead patterns
-    return createNewCluster(tokenMint, fingerprintVector, "dead");
-  }
-
-  // Find best archetype match (most similar dead token pattern)
-  let bestCluster = allClusters[0];
+  // Find best matching archetype (similar trajectory evolution)
+  let bestArchetype = allArchetypes[0];
   let bestSimilarity = -1;
 
-  for (const cluster of allClusters) {
-    const centroid = cluster.centroid as number[];
-    const similarity = cosineSimilarity(fingerprintVector, centroid);
+  for (const archetype of allArchetypes) {
+    const archetypeCentroid = archetype.centroid as number[];
+    const similarity = cosineSimilarity(trajectorySignature, archetypeCentroid);
 
     if (similarity > bestSimilarity) {
       bestSimilarity = similarity;
-      bestCluster = cluster;
+      bestArchetype = archetype;
     }
   }
 
-  // Archetype matching thresholds
+  // Archetype matching thresholds (trajectory-based)
   const thresholds = {
-    mergeDeadTokens: 0.80, // Very similar dead patterns → merge (lower than active)
-    minArchetypeCohesion: 0.70, // Dead cluster must stay tight >0.70
-    cohesionDropTolerance: 0.08, // Allow max 8% cohesion drop when adding dead token
+    mergeTrajectories: 0.80, // Similar trajectory shapes → merge
+    minArchetypeCohesion: 0.70, // Archetype must stay tight
+    cohesionDropTolerance: 0.08, // Allow max 8% cohesion drop
   };
 
-  // Too dissimilar to existing archetype → create new pattern
-  if (bestSimilarity < thresholds.mergeDeadTokens) {
-    return createNewCluster(tokenMint, fingerprintVector, "dead");
+  // Too different trajectory → create new archetype
+  if (bestSimilarity < thresholds.mergeTrajectories) {
+    return createTrajectoryArchetype(
+      tokenMint,
+      trajectorySignature,
+      trajectoryFPs.length,
+      archiveReason
+    );
   }
 
-  // Check if adding this dead token would degrade archetype cohesion
-  if (bestCluster.sampleCount > 50) { // Archetype threshold (smaller than active)
-    if (bestCluster.cohesion < thresholds.minArchetypeCohesion) {
-      // Archetype pattern already loose, create new pattern
-      return createNewCluster(tokenMint, fingerprintVector, "dead");
+  // Check if merging would degrade archetype cohesion
+  if (bestArchetype.sampleCount > 50) {
+    if (bestArchetype.cohesion < thresholds.minArchetypeCohesion) {
+      // Archetype already loose, create new one
+      return createTrajectoryArchetype(
+        tokenMint,
+        trajectorySignature,
+        trajectoryFPs.length,
+        archiveReason
+      );
     }
   }
 
-  // All checks passed → merge dead token into archetype
-
-  const updated = await addTokenToCluster(
-    bestCluster.clusterId,
-    fingerprintVector,
+  // Merge trajectory into archetype
+  const updated = await mergeTrajectoryIntoArchetype(
+    bestArchetype.clusterId,
+    trajectorySignature,
     tokenMint
   );
 
   return {
-    clusterId: bestCluster.clusterId,
-    sampleCount: updated.sampleCount,
-    similarityToCluster: bestSimilarity,
-    isNewCluster: false,
+    archetypeClusterId: bestArchetype.clusterId,
+    trajectoryLength: trajectoryFPs.length,
+    similarityToArchetype: bestSimilarity,
+    isNewArchetype: false,
   };
 }
 
 /**
- * Create new cluster for token
+ * Create new trajectory archetype
  */
-async function createNewCluster(
+async function createTrajectoryArchetype(
   tokenMint: string,
-  vector: number[],
-  tokenType: "dead" | "active"
+  trajectorySignature: number[],
+  trajectoryLength: number,
+  archiveReason: string
 ): Promise<{
-  clusterId: string;
-  sampleCount: number;
-  similarityToCluster: number;
-  isNewCluster: boolean;
+  archetypeClusterId: string;
+  trajectoryLength: number;
+  similarityToArchetype: number;
+  isNewArchetype: boolean;
 }> {
   const now = Math.floor(Date.now() / 1000);
-  const clusterId = `cluster_${tokenType}_${tokenMint}_${now}`;
+  const archetypeId = `trajectory_archetype_${archiveReason}_${now}`;
 
   await db.insert(tokenFingerprintClusters).values({
-    clusterId,
-    sampleCount: 1,
-    centroid: vector,
-    cohesion: 1.0, // Single token = perfect cohesion
+    clusterId: archetypeId,
+    type: "dead",
+    centroid: trajectorySignature,
+    sampleCount: 1, // One token (this trajectory) in archetype
+    archivedTokenMints: [tokenMint],
+    cohesion: 1.0, // Single trajectory = perfect cohesion
     minSimilarity: 1.0,
     maxSimilarity: 1.0,
-    type: tokenType,
     createdAt: now,
     updatedAt: now,
     lastRebalancedAt: now,
   });
 
   return {
-    clusterId,
-    sampleCount: 1,
-    similarityToCluster: 1.0,
-    isNewCluster: true,
+    archetypeClusterId: archetypeId,
+    trajectoryLength,
+    similarityToArchetype: 1.0,
+    isNewArchetype: true,
   };
 }
 
 /**
- * Add token to existing cluster (recompute centroid)
+ * Merge trajectory into existing archetype (recompute centroid with new trajectory signature)
  */
-async function addTokenToCluster(
-  clusterId: string,
-  vector: number[],
+async function mergeTrajectoryIntoArchetype(
+  archetypeId: string,
+  trajectorySignature: number[],
   tokenMint: string
 ): Promise<{
   sampleCount: number;
   newCohesion: number;
 }> {
-  // Get cluster and all members
-  const cluster = await db
+  // Get archetype
+  const archetype = await db
     .select()
     .from(tokenFingerprintClusters)
-    .where(eq(tokenFingerprintClusters.clusterId, clusterId))
+    .where(eq(tokenFingerprintClusters.clusterId, archetypeId))
     .limit(1);
 
-  if (cluster.length === 0) {
-    throw new Error(`Cluster ${clusterId} not found`);
+  if (archetype.length === 0) {
+    throw new Error(`Archetype ${archetypeId} not found`);
   }
 
-  const current = cluster[0];
-  const memberFPs = await db
-    .select()
-    .from(tokenFingerprints)
-    .where(eq(tokenFingerprints.assignedClusterId, clusterId));
+  const current = archetype[0];
+  const currentMints = (current.archivedTokenMints as string[]) || [];
 
-  // Recompute centroid with new vector
-  const allVectors = [
-    ...memberFPs.map((fp) => fp.fingerprintVector as number[]),
-    vector,
-  ];
+  // Recompute archetype centroid including new trajectory signature
+  // Collect all trajectory signatures from archived mints
+  const allTrajectorySignatures: number[][] = [];
 
-  const { centroid, cohesion } = averageVectors(allVectors);
+  // Add existing archetype centroid as representative
+  if (current.centroid) {
+    allTrajectorySignatures.push(current.centroid as number[]);
+  }
 
-  // Calculate similarity range
+  // Add new trajectory signature
+  allTrajectorySignatures.push(trajectorySignature);
+
+  const { centroid: newCentroid, cohesion: newCohesion } =
+    averageVectors(allTrajectorySignatures);
+
+  // Calculate similarity range among trajectories
   let minSim = 1,
     maxSim = 0;
-  for (let i = 0; i < allVectors.length; i++) {
-    for (let j = i + 1; j < allVectors.length; j++) {
-      const sim = cosineSimilarity(allVectors[i], allVectors[j]);
+  for (let i = 0; i < allTrajectorySignatures.length; i++) {
+    for (let j = i + 1; j < allTrajectorySignatures.length; j++) {
+      const sim = cosineSimilarity(allTrajectorySignatures[i], allTrajectorySignatures[j]);
       minSim = Math.min(minSim, sim);
       maxSim = Math.max(maxSim, sim);
     }
   }
 
-  // Update cluster
+  // Update archetype
   const now = Math.floor(Date.now() / 1000);
   await db
     .update(tokenFingerprintClusters)
     .set({
       sampleCount: current.sampleCount + 1,
-      centroid: centroid,
-      cohesion,
+      archivedTokenMints: [...currentMints, tokenMint],
+      centroid: newCentroid,
+      cohesion: newCohesion,
       minSimilarity: minSim,
       maxSimilarity: maxSim,
       updatedAt: now,
     })
-    .where(eq(tokenFingerprintClusters.clusterId, clusterId));
+    .where(eq(tokenFingerprintClusters.clusterId, archetypeId));
 
   return {
     sampleCount: current.sampleCount + 1,
-    newCohesion: cohesion,
+    newCohesion,
   };
 }
 
 /**
- * Estimate worst-case DB size for fingerprint clusters
+ * Estimate DB size for trajectory archetype compression
+ *
+ * All tokens eventually reach a final state (archival).
+ * Compression happens post-mortem when complete trajectory is known.
  *
  * Scenarios:
- * 1. No merging (bad): Every token → own cluster = bloat
- * 2. Perfect merging (bad): All tokens → 1 cluster = loss of signal
- * 3. Cohesion-based growth (good): Allow large tight clusters = meaningful archetypes
+ * 1. No archetype merging (bad): Every token → own archetype = bloat
+ * 2. Perfect merging (bad): All tokens → 1 archetype = loss of signal
+ * 3. Trajectory-based (good): Similar evolution patterns merge = meaningful archetypes
  */
 export function estimateClusterSize(): {
   scenario: string;
   tokensPerMonth: number;
-  clusterCount: number;
-  avgSampleSize: number;
+  archetypeCount: number;
+  tokensPerArchetype: number;
   dbSizeGB: number;
   risk: string;
 } {
   const tokensPerMonth = 36000; // 100/hr × 24h × 30d
 
   const scenarios = {
-    worst_no_merge: {
-      clusterCount: tokensPerMonth, // Each token = cluster
-      avgSampleSize: 1,
-      risk: "CRITICAL: 36K clusters, each 600B = 21.6 GB/month, defeats compression",
+    worst_no_compression: {
+      archetypeCount: tokensPerMonth, // Each token = own archetype
+      tokensPerArchetype: 1,
+      risk: "CRITICAL: 36K archetypes, defeats compression, no learning",
     },
-    worst_aggressive_merge: {
-      clusterCount: 2, // All dead + all active
-      avgSampleSize: tokensPerMonth / 2,
-      risk: "CRITICAL: Loss of signal, can't distinguish failure patterns",
+    worst_over_compression: {
+      archetypeCount: 2, // All tokens merged (impossible to distinguish)
+      tokensPerArchetype: tokensPerMonth / 2,
+      risk: "CRITICAL: Loss of signal, can't identify trajectory patterns",
     },
-    optimal_cohesion_based: {
-      clusterCount: Math.round(tokensPerMonth / 8), // Avg 8 tokens per cluster (tighter is better)
-      avgSampleSize: 8,
-      risk: "GOOD: Cohesion-based growth allows large archetypal clusters if tight (0.8+)",
+    trajectory_based: {
+      // Similar trajectories merge, different ones stay separate
+      // Estimate: ~10-15% of tokens share trajectory archetypes
+      archetypeCount: Math.round(tokensPerMonth * 0.12), // ~4,300 archetypes
+      tokensPerArchetype: 8, // Avg 8 tokens per archetype
+      risk: "GOOD: Trajectory-based clustering preserves pattern diversity while compressing similar evolutions",
     },
   };
 
-  const scenario = scenarios.optimal_cohesion_based;
+  const scenario = scenarios.trajectory_based;
 
-  // Size calculation per cluster:
-  // - centroid: 50 × 8 bytes = 400B
-  // - metadata: ~200B (sampleCount, cohesion, timestamps, etc)
+  // Size per archetype:
+  // - trajectory signature (centroid): 50 × 8 bytes = 400B
+  // - token mints array: 8 × 44 bytes = 352B
+  // - metadata: ~300B (cohesion, similarities, timestamps, etc)
   // - overhead: ~100B
-  const bytesPerCluster = 700;
+  const bytesPerArchetype = 1200;
 
   const dbSizeGB =
-    (scenario.clusterCount * bytesPerCluster) / 1_000_000_000;
+    (scenario.archetypeCount * bytesPerArchetype) / 1_000_000_000;
 
   return {
-    scenario: "Optimal: Smart split/merge with sample tracking",
+    scenario: "Trajectory-based archetype clustering (post-mortem compression)",
     tokensPerMonth,
-    clusterCount: scenario.clusterCount,
-    avgSampleSize: scenario.avgSampleSize,
+    archetypeCount: scenario.archetypeCount,
+    tokensPerArchetype: scenario.tokensPerArchetype,
     dbSizeGB: parseFloat(dbSizeGB.toFixed(2)),
     risk: scenario.risk,
   };
@@ -377,57 +421,49 @@ export function estimateFullFingerprinterSize(): {
 }
 
 /**
- * Rebalancing logic: prevent pathological clustering
+ * Post-archive trajectory archetype rebalancing (optional optimization)
  *
- * Triggers:
- * - Cluster cohesion drops < 0.5 (heterogeneous, split regardless of size)
- * - Clusters very similar + small (merge if <100 samples each)
- * - Cluster grows but stays tight >0.8 (allowed, represents archetypal pattern)
+ * Called periodically to:
+ * - Identify loose/degraded archetypes (cohesion < 0.5) for analysis
+ * - Suggest very similar small archetypes for manual merger
+ * - Report archetype quality metrics
+ *
+ * Note: Archetypes are created at archive time and generally stable.
+ * Rebalancing is optional, mainly for insights.
  */
-export async function triggerClusterRebalancing(): Promise<{
-  splitClusters: number;
-  mergedClusters: number;
-  totalAffected: number;
+export async function reportArchetypeQuality(): Promise<{
+  totalArchetypes: number;
+  tightArchetypes: number; // cohesion > 0.75
+  looseArchetypes: number; // cohesion < 0.5
+  avgTokensPerArchetype: number;
+  avgCohesion: number;
 }> {
-  let splitCount = 0;
-  let mergeCount = 0;
-
-  // Find clusters to split (cohesion degraded, not just large)
-  const clustersLooseCohesion = await db
+  const archetypes = await db
     .select()
     .from(tokenFingerprintClusters)
-    .where(sql`cohesion < 0.5`);
+    .where(eq(tokenFingerprintClusters.type, "dead"));
 
-  for (const cluster of clustersLooseCohesion) {
-    // Split logic would go here
-    // Only split if cohesion bad enough, regardless of size
-    splitCount++;
+  if (archetypes.length === 0) {
+    return {
+      totalArchetypes: 0,
+      tightArchetypes: 0,
+      looseArchetypes: 0,
+      avgTokensPerArchetype: 0,
+      avgCohesion: 0,
+    };
   }
 
-  // Find clusters to merge (small + similar)
-  const clustersSmall = await db
-    .select()
-    .from(tokenFingerprintClusters)
-    .where(sql`sample_count < 100`);
-
-  // Check pairwise similarity
-  for (let i = 0; i < clustersSmall.length; i++) {
-    for (let j = i + 1; j < clustersSmall.length; j++) {
-      const sim = cosineSimilarity(
-        clustersSmall[i].centroid as number[],
-        clustersSmall[j].centroid as number[]
-      );
-
-      if (sim > 0.9 && clustersSmall[i].type === clustersSmall[j].type) {
-        // Merge logic would go here
-        mergeCount++;
-      }
-    }
-  }
+  const tightCount = archetypes.filter((a) => (a.cohesion ?? 0) > 0.75).length;
+  const looseCount = archetypes.filter((a) => (a.cohesion ?? 0) < 0.5).length;
+  const totalTokens = archetypes.reduce((sum, a) => sum + (a.sampleCount ?? 0), 0);
+  const avgCohesion =
+    archetypes.reduce((sum, a) => sum + (a.cohesion ?? 0), 0) / archetypes.length;
 
   return {
-    splitClusters: splitCount,
-    mergedClusters: mergeCount,
-    totalAffected: splitCount + mergeCount,
+    totalArchetypes: archetypes.length,
+    tightArchetypes: tightCount,
+    looseArchetypes: looseCount,
+    avgTokensPerArchetype: totalTokens / archetypes.length,
+    avgCohesion: parseFloat(avgCohesion.toFixed(3)),
   };
 }
