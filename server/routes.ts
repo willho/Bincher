@@ -76,6 +76,7 @@ import { getNetworkMode, setNetworkMode, getSolanaFaucetUrl, type NetworkMode } 
 import { markSignalWalletSold, updateScoreOnWhaleActivity, resolvePositionScoreSnapshots } from "./position-score";
 import { recordWhaleActivity, checkForFamiliarWhalesInToken, type FamiliarWhaleAlert } from "./familiar-whales";
 import { registerDiagnosticEndpoints } from "./diagnostic-endpoints";
+import { registerFingerprinterDiagnosticEndpoints } from "./fingerprinter-diagnostic-endpoints";
 
 let wss: WebSocketServer;
 
@@ -8671,6 +8672,9 @@ export async function registerRoutes(
 
   // Register diagnostic logging endpoints
   registerDiagnosticEndpoints(app);
+
+  // Register fingerprinting & clustering diagnostic endpoints
+  registerFingerprinterDiagnosticEndpoints(app);
 
   return httpServer;
 }
