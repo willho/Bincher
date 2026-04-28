@@ -268,9 +268,9 @@ export function getQuotaUtilizationReport() {
     directCalls: direct,
     quotaStrategy: {
       proxies:
-        "4 instances × separate API keys = 4× quota multiplication (Chainstack: 4M credits/month total)",
+        "3 proxies × separate API keys = 3× quota multiplication (Chainstack: 3M credits/month total)",
       pincher2:
-        "Reserve quota for critical analytical calls (retrolearner, safety checks, rare lookups)",
+        "Delegates high-frequency calls to proxies. Optional: reserve small quota for critical analytical calls",
       webSockets:
         "Proxies manage independent streams (PumpPortal, DexPaprika SSE) with separate connections",
     },

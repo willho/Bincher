@@ -11,9 +11,10 @@
  *
  * Example capacity multiplication:
  * - 1 Chainstack key: 1M credits/month
- * - 4 Chainstack keys (Pincher2 + 3 proxies): 4M credits/month combined
+ * - 3 Chainstack keys (Proxy-1/2/3): 3M credits/month combined
+ * - Pincher2 delegates high-frequency calls to proxies
  * - Each instance independently limited by token bucket
- * - No shared queue: proxies don't compete with Pincher2 or each other
+ * - No shared queue: proxies don't compete with each other
  */
 
 interface RateLimitConfig {
