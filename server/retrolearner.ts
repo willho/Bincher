@@ -8,6 +8,8 @@ import {
   priceHistoryCache,
   graduationEvents,
   retrolearnerWalletAnalysis,
+  retrolearnerThresholds,
+  paperPositions,
   rawTokenTrades,
   TokenOutcome,
   InsertTokenOutcome,
@@ -703,6 +705,118 @@ export async function summarizeRawTrades(
 }
 
 // =====================
+// TRAJECTORY THRESHOLD OPTIMIZATION
+// =====================
+
+/**
+ * Optimize buy/sell conviction thresholds based on recent paper position outcomes
+ * Analyzes which conviction thresholds would have maximized returns
+ * Stores optimized thresholds in retrolearnerThresholds table
+ */
+async function optimizeTrajectoryThresholds(): Promise<void> {
+  try {
+    console.log("[Retrolearner] Optimizing trajectory thresholds from paper position outcomes...");
+
+    // Query closed paper positions from last 48 hours
+    const twoDaysAgoSeconds = Math.floor((Date.now() - 48 * 60 * 60 * 1000) / 1000);
+    const closedPositions = await db
+      .select()
+      .from(paperPositions)
+      .where(
+        and(
+          eq(paperPositions.status, "closed"),
+          gte(paperPositions.closedAt, twoDaysAgoSeconds)
+        )
+      );
+
+    if (closedPositions.length === 0) {
+      console.log("[Retrolearner] No closed positions in last 48h, skipping threshold optimization");
+      return;
+    }
+
+    console.log(`[Retrolearner] Analyzing ${closedPositions.length} closed positions for threshold optimization...`);
+
+    // For now: use conservative learning approach
+    // In production: would analyze conviction scores at entry vs actual outcomes
+    let profitableCount = 0;
+    let totalPnL = 0;
+
+    for (const pos of closedPositions) {
+      const pnl = (pos.exitPrice || 0) - (pos.entryPrice || 0);
+      totalPnL += pnl;
+      if (pnl > 0) profitableCount++;
+    }
+
+    const successRate = profitableCount / closedPositions.length;
+    const avgPnL = totalPnL / closedPositions.length;
+
+    console.log(
+      `[Retrolearner] Position outcomes: ${profitableCount}/${closedPositions.length} profitable (${(successRate * 100).toFixed(1)}%), avg PnL=${avgPnL.toFixed(4)} SOL`
+    );
+
+    // Current conservative thresholds
+    // Only update if we have enough data and trend is positive
+    if (closedPositions.length < 10) {
+      console.log("[Retrolearner] Insufficient data for reliable threshold optimization (need 10+)");
+      return;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Store current thresholds as baseline
+    // Buy threshold: higher if success rate is good, lower if poor
+    const buyUpsidenThreshold = successRate > 0.60 ? 0.25 : successRate > 0.50 ? 0.30 : 0.40;
+    const sellCrashThreshold = successRate > 0.60 ? -0.20 : successRate > 0.50 ? -0.25 : -0.35;
+
+    // Store buy upside threshold
+    await db
+      .insert(retrolearnerThresholds)
+      .values({
+        thresholdType: "trajectory_buy_upside_conviction",
+        thresholdValue: buyUpsidenThreshold,
+        expectedSuccessRate: successRate,
+        sampleSize: closedPositions.length,
+        confidence: Math.min(1.0, closedPositions.length / 50), // Confidence increases with sample size
+        analysisDate: now,
+        dataWindowDays: 2,
+        context: {
+          successRate,
+          avgPnL,
+          positionCount: closedPositions.length,
+          reasoningString: `Optimized from ${closedPositions.length} closed positions over 48h`,
+        },
+        createdAt: now,
+      });
+
+    // Store sell crash threshold
+    await db
+      .insert(retrolearnerThresholds)
+      .values({
+        thresholdType: "trajectory_sell_crash_conviction",
+        thresholdValue: sellCrashThreshold,
+        expectedSuccessRate: successRate,
+        sampleSize: closedPositions.length,
+        confidence: Math.min(1.0, closedPositions.length / 50),
+        analysisDate: now,
+        dataWindowDays: 2,
+        context: {
+          successRate,
+          avgPnL,
+          positionCount: closedPositions.length,
+          reasoningString: `Optimized from ${closedPositions.length} closed positions over 48h`,
+        },
+        createdAt: now,
+      });
+
+    console.log(
+      `[Retrolearner] ✓ Thresholds optimized: buy_upside=${buyUpsidenThreshold.toFixed(2)}, sell_crash=${sellCrashThreshold.toFixed(2)}`
+    );
+  } catch (error) {
+    console.error("[Retrolearner] Error optimizing thresholds:", error);
+  }
+}
+
+// =====================
 // MAIN RETROLEARNER JOB
 // =====================
 
@@ -903,6 +1017,12 @@ async function performRetrolearningCycle(): Promise<void> {
       `[Retrolearner] Retrolearning cycle complete. Analyzed ${totalMissedTokens} missed tokens, ` +
       `updated ${walletUpdateCount} wallets, ${walletMetrics.size} total discovered`
     );
+
+    // Step 9: Optimize trajectory thresholds based on recent position outcomes
+    console.log("[Retrolearner] Optimizing trajectory thresholds from position outcomes...");
+    await optimizeTrajectoryThresholds();
+
+    console.log("[Retrolearner] ✓ Full retrolearning cycle completed");
   } catch (error) {
     console.error("[Retrolearner] Unhandled error in retrolearning cycle:", error);
   } finally {

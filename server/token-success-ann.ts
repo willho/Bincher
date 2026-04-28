@@ -17,9 +17,9 @@ interface ANNConfig {
 }
 
 const ANN_CONFIG: ANNConfig = {
-  inputShape: 50, // 50 early-dynamics features
-  hiddenUnits: [128, 128],
-  outputShape: 1, // Binary: success probability
+  inputShape: 26, // 26 refined early-dynamics features (price, volume, whale, holder, creator, timing)
+  hiddenUnits: [128, 64],
+  outputShape: 1, // Binary: success probability (0.0-1.0)
   learningRate: 0.001,
   epochs: 10,
   batchSize: 32,
@@ -30,55 +30,50 @@ const ANN_CONFIG: ANNConfig = {
 // =====================
 
 interface TokenEarlyDynamics {
-  // Price dynamics (first 10 min)
-  priceOpen: number;
+  // Price dynamics (first 10 min) - 4 dims
   priceHigh: number;
   priceLow: number;
   priceClose: number;
-  volumeTotal: number;
-  volatility: number;
-  priceSlope: number;
+  priceSlope: number; // Linear regression of close prices
 
-  // Volume trajectory
+  // Volume trajectory - 4 dims
+  volumeTotal: number;
   volumeAcceleration: number;
   volumeInFirstMin: number;
   volumeInFirst5Min: number;
 
-  // Whale patterns
+  // Whale patterns - 3 dims
   whaleEntryCount: number;
   whaleEntryTiming: number; // Seconds from launch to first whale entry
   whaleClusteringScore: number; // 0-1, how coordinated are whale entries
 
-  // Holder distribution
-  holderCount: number;
+  // Holder distribution - 2 dims
   holderConcentration: number; // % held by top 10
-  uniqueBuyerCount: number;
-  buyerDiversityScore: number; // 0-1, how spread out are buyers
+  buyerDiversityScore: number; // 0-1, normalized entropy of buyer distribution
 
-  // Cluster activity
-  clusterActivityCount: number;
-  clusterActivityTiming: number;
-  clusterCoordinationScore: number; // 0-1, synchronization level
-
-  // Discovery source
-  isPumpFun: number; // 1 or 0
-  isDirectRaydium: number; // 1 or 0
-  isTrendingSource: number; // 1 or 0
-
-  // Bonding curve specifics (if pre-grad)
-  bondingCurveProgress: number; // 0-1
-  bondingBuyerGrowthRate: number;
-  bondingVelocity: number;
-
-  // Additional technical metrics
-  priceChangePercent: number;
+  // Buyer metrics - 3 dims
   volumePerBuyer: number;
   entriesPerBuyer: number;
   spreadBetweenEntries: number; // Price range across entries
+
+  // Price movement - 1 dim
+  priceChangePercent: number;
+
+  // Creator signals - 2 dims
+  creatorSuccessRate: number; // 0.0-1.0, win rate on previous tokens
+  creatorTokenLockPercent: number; // 0-100, % of supply locked
+
+  // Liquidity - 1 dim
+  liquidityDepthMetric: number; // Normalized measure of available liquidity
+
+  // Launch timing - 2 dims
+  launchHourOfDay: number; // 0-23
+  launchDayOfWeek: number; // 0-6
 }
 
 /**
- * Extract 50 features from token early dynamics (first 10 minutes)
+ * Extract 26 core features from token early dynamics (first 10 minutes)
+ * Matches refined fingerprint dimensions optimized for archetype clustering
  * Sources: priceHistoryCache, swaps, tokenDataPool
  */
 export async function extractEarlyDynamicsFeatures(
@@ -114,138 +109,140 @@ export async function extractEarlyDynamicsFeatures(
 
   const features: number[] = [];
 
-  // === PRICE DYNAMICS ===
+  // === PRICE DYNAMICS (4 features) ===
+  let priceHigh = 0, priceLow = Infinity, priceClose = 0, priceSlope = 0;
+
   if (candles.length > 0) {
-    const firstCandle = candles[0];
-    const lastCandle = candles[candles.length - 1];
+    priceHigh = Math.max(...candles.map(c => c.high ?? 0));
+    priceLow = Math.min(...candles.map(c => c.low ?? 0));
+    priceClose = candles[candles.length - 1].close ?? 0;
 
-    features.push(firstCandle.open ?? 0); // priceOpen
-    features.push(Math.max(...candles.map(c => c.high ?? 0))); // priceHigh
-    features.push(Math.min(...candles.map(c => c.low ?? 0))); // priceLow
-    features.push(lastCandle.close ?? 0); // priceClose
-
-    const totalVolume = candles.reduce((sum, c) => sum + (c.volume ?? 0), 0);
-    features.push(totalVolume); // volumeTotal
-
-    // Volatility = std dev of close prices
+    // Price slope via linear regression
     const closes = candles.map(c => c.close ?? 0);
-    const meanClose = closes.reduce((a, b) => a + b) / closes.length;
-    const variance = closes.reduce((sum, c) => sum + Math.pow(c - meanClose, 2), 0) / closes.length;
-    features.push(Math.sqrt(variance)); // volatility
-
-    // Price slope (linear regression)
     const xValues = closes.map((_, i) => i);
-    const slope = calculateLinearSlope(xValues, closes);
-    features.push(slope); // priceSlope
+    priceSlope = calculateLinearSlope(xValues, closes);
   } else {
-    // Pad with zeros if no candles
-    for (let i = 0; i < 7; i++) features.push(0);
+    priceLow = 0;
   }
 
-  // === VOLUME TRAJECTORY ===
-  if (candles.length > 1) {
-    const firstVolume = candles[0].volume ?? 0;
+  features.push(priceHigh, priceLow, priceClose, priceSlope);
+
+  // === VOLUME TRAJECTORY (4 features) ===
+  let volumeTotal = 0, volumeAcceleration = 0, volumeFirstMin = 0, volumeFirst5Min = 0;
+
+  if (candles.length > 0) {
     const volumes = candles.map(c => c.volume ?? 0);
-    const lastVolume = volumes[volumes.length - 1];
-    const acceleration = lastVolume / (firstVolume + 0.0001); // Avoid division by zero
-    features.push(acceleration); // volumeAcceleration
+    volumeTotal = volumes.reduce((a, b) => a + b, 0);
+    volumeFirstMin = volumes[0] ?? 0;
+    volumeFirst5Min = volumes.slice(0, 5).reduce((a, b) => a + b, 0);
 
-    // Volume in specific time windows
-    const firstMinuteVolume = candles[0].volume ?? 0;
-    const first5MinVolume = volumes.slice(0, 5).reduce((a, b) => a + b, 0);
-    features.push(firstMinuteVolume); // volumeInFirstMin
-    features.push(first5MinVolume); // volumeInFirst5Min
-  } else {
-    features.push(0, 0, 0);
+    if (volumes.length > 1) {
+      const firstVol = volumes[0] ?? 0.0001;
+      const lastVol = volumes[volumes.length - 1] ?? 0;
+      volumeAcceleration = lastVol / firstVol;
+    }
   }
 
-  // === WHALE PATTERNS ===
-  const largeTrades = trades.filter(t => (t.fromAmount ?? 0) > 0.1); // Arbitrary whale threshold
-  features.push(largeTrades.length); // whaleEntryCount
+  features.push(volumeTotal, volumeAcceleration, volumeFirstMin, volumeFirst5Min);
 
-  if (largeTrades.length > 0) {
+  // === WHALE PATTERNS (3 features) ===
+  const largeTrades = trades.filter(t => (t.fromAmount ?? 0) > 0.1); // 0.1 SOL threshold
+  const whaleCount = largeTrades.length;
+  let whaleEntryTiming = 0, whaleClusteringScore = 0;
+
+  if (whaleCount > 0) {
     const firstWhaleTime = largeTrades[0].timestamp;
-    features.push(firstWhaleTime - launchTimestamp); // whaleEntryTiming
+    whaleEntryTiming = firstWhaleTime - launchTimestamp;
 
-    // Clustering: are whales entering at same time?
+    // Clustering: std dev of whale entry timings
     const whaleTimings = largeTrades.map(t => t.timestamp - launchTimestamp);
     const timingStdDev = calculateStdDev(whaleTimings);
-    const clusteringScore = 1 - Math.min(1, timingStdDev / 60); // Lower stddev = higher clustering
-    features.push(clusteringScore); // whaleClusteringScore
-  } else {
-    features.push(0, 0);
+    // Normalize: lower stddev = higher clustering (tighter timing)
+    whaleClusteringScore = Math.max(0, 1 - (timingStdDev / 60)); // 60s normalization window
   }
 
-  // === HOLDER DISTRIBUTION ===
-  const uniqueHolders = new Set(trades.map(t => t.source));
-  features.push(uniqueHolders.size); // holderCount
+  features.push(whaleCount, whaleEntryTiming, whaleClusteringScore);
 
-  // Holder concentration: top 10 holders / total volume
+  // === HOLDER DISTRIBUTION (2 features) ===
   const holderVolumes = new Map<string, number>();
   trades.forEach(t => {
     const holder = t.source;
     holderVolumes.set(holder, (holderVolumes.get(holder) ?? 0) + (t.fromAmount ?? 0));
   });
 
-  const topHolderVolumes = Array.from(holderVolumes.values())
-    .sort((a, b) => b - a)
-    .slice(0, 10)
-    .reduce((a, b) => a + b, 0);
-  const totalVolume = Array.from(holderVolumes.values()).reduce((a, b) => a + b, 0);
-  const concentration = totalVolume > 0 ? topHolderVolumes / totalVolume : 0;
-  features.push(concentration); // holderConcentration
-
-  // Unique buyers (different from total swaps)
-  features.push(uniqueHolders.size); // uniqueBuyerCount
-
-  // Buyer diversity: entropy of distribution
-  const buyerDiversity = calculateEntropy(Array.from(holderVolumes.values()));
-  features.push(buyerDiversity); // buyerDiversityScore (0-1 normalized)
-
-  // === CLUSTER ACTIVITY ===
-  // (This would require cluster detection data - placeholder for now)
-  features.push(0); // clusterActivityCount (TODO: integrate with cluster detection)
-  features.push(0); // clusterActivityTiming
-  features.push(0); // clusterCoordinationScore
-
-  // === DISCOVERY SOURCE ===
-  // (Would need metadata - placeholder)
-  features.push(0); // isPumpFun
-  features.push(0); // isDirectRaydium
-  features.push(0); // isTrendingSource
-
-  // === BONDING CURVE SPECIFICS ===
-  // (Would need bonding curve data)
-  features.push(0); // bondingCurveProgress
-  features.push(0); // bondingBuyerGrowthRate
-  features.push(0); // bondingVelocity
-
-  // === ADDITIONAL METRICS ===
-  if (candles.length > 0 && candles[0].open) {
-    const priceChange = ((candles[candles.length - 1].close ?? 0) - candles[0].open) / candles[0].open;
-    features.push(priceChange); // priceChangePercent
-  } else {
-    features.push(0);
+  let holderConcentration = 0;
+  if (holderVolumes.size > 0) {
+    const topHolderVols = Array.from(holderVolumes.values())
+      .sort((a, b) => b - a)
+      .slice(0, 10)
+      .reduce((a, b) => a + b, 0);
+    const totalHolderVol = Array.from(holderVolumes.values()).reduce((a, b) => a + b, 0);
+    holderConcentration = totalHolderVol > 0 ? topHolderVols / totalHolderVol : 0;
   }
 
-  const avgVolumePerBuyer = totalVolume / (uniqueHolders.size + 1);
-  features.push(avgVolumePerBuyer);
+  const buyerDiversityScore = calculateEntropy(Array.from(holderVolumes.values()));
+  features.push(holderConcentration, buyerDiversityScore);
 
-  const avgEntriesPerBuyer = trades.length / (uniqueHolders.size + 1);
-  features.push(avgEntriesPerBuyer);
+  // === BUYER METRICS (3 features) ===
+  const buyerCount = holderVolumes.size;
+  const volumePerBuyer = volumeTotal / (buyerCount + 1);
+  const entriesPerBuyer = trades.length / (buyerCount + 1);
 
-  // Spread between entries
+  // Spread: price range across all trades as % of min price
+  let spreadBetweenEntries = 0;
   const tradePrices = candles.map(c => c.close ?? 0).filter(p => p > 0);
-  const spread = tradePrices.length > 0 ? (Math.max(...tradePrices) - Math.min(...tradePrices)) / Math.min(...tradePrices) : 0;
-  features.push(spread);
-
-  // Pad to exactly 50 features
-  while (features.length < 50) {
-    features.push(0);
+  if (tradePrices.length > 0) {
+    const minPrice = Math.min(...tradePrices);
+    const maxPrice = Math.max(...tradePrices);
+    spreadBetweenEntries = minPrice > 0 ? (maxPrice - minPrice) / minPrice : 0;
   }
 
-  // Trim if necessary
-  return features.slice(0, 50);
+  features.push(volumePerBuyer, entriesPerBuyer, spreadBetweenEntries);
+
+  // === PRICE MOVEMENT (1 feature) ===
+  let priceChangePercent = 0;
+  if (candles.length > 0 && candles[0].open) {
+    const firstPrice = candles[0].open;
+    const finalPrice = candles[candles.length - 1].close ?? candles[0].open;
+    priceChangePercent = (finalPrice - firstPrice) / (firstPrice + 0.00001);
+  }
+
+  features.push(priceChangePercent);
+
+  // === CREATOR SIGNALS (2 features) ===
+  // TODO: Query creator_stats table for success rate and lock %
+  // For now: placeholder values (system will learn zero weight if not informative)
+  const creatorSuccessRate = 0.5; // Unknown creator = neutral
+  const creatorTokenLockPercent = 50; // Unknown = assume moderate lock
+
+  features.push(creatorSuccessRate, creatorTokenLockPercent);
+
+  // === LIQUIDITY (1 feature) ===
+  // TODO: Query for pool depth, orderbook spread, or volume/mcap ratio
+  // For now: placeholder based on volume metrics
+  const liquidityDepthMetric = Math.min(1.0, volumeTotal / 1_000_000); // Normalize to 1M SOL equiv
+
+  features.push(liquidityDepthMetric);
+
+  // === LAUNCH TIMING (2 features) ===
+  const launchDate = new Date(launchTimestamp * 1000);
+  const launchHourOfDay = launchDate.getUTCHours(); // 0-23
+  const launchDayOfWeek = launchDate.getUTCDay(); // 0-6 (Sun-Sat)
+
+  features.push(launchHourOfDay, launchDayOfWeek);
+
+  // === DELTA DIMENSIONS (4 features - tracked on subsequent snapshots) ===
+  // Reserved for: volume momentum, price momentum, holder concentration trend, whale velocity trend
+  // On initial 0-10min extraction: all zeros (no history yet)
+  // Populated by trajectory tracker on subsequent fingerprints
+  features.push(0, 0, 0, 0);
+
+  // Ensure exactly 26 features
+  if (features.length !== 26) {
+    console.warn(`[ANN] Feature extraction returned ${features.length} features, expected 26`);
+  }
+
+  return features.slice(0, 26);
 }
 
 // =====================

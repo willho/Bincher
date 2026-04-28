@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex, index, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex, index, unique, vector } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // Token metadata schema (from DexScreener)
@@ -4435,7 +4435,7 @@ export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   lifecycleStage: text("lifecycle_stage"), // Derived from snapshot age/multiplier/concentration
 
   // Centroid vector (average of all snapshots in this archetype)
-  centroid: jsonb("centroid").$type<number[]>().notNull(), // 50-dim fingerprint vector
+  centroid: vector("centroid", 26).notNull(), // 26-dim fingerprint vector for fast similarity search
 
   // Outcome probability distribution (verified from completed tokens)
   // { "pump_100x": 0.60, "slow_bleed": 0.25, "crash_fast": 0.15 }
@@ -4460,6 +4460,8 @@ export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   index("idx_outcome_distribution").on(table.outcomeDistribution),
   index("idx_archetype_cohesion").on(table.cohesion),
   index("idx_archetype_sample_count").on(table.sampleCount),
+  // Vector similarity index for fast archetype matching (created separately via migration)
+  // CREATE INDEX idx_centroid_hnsw ON token_fingerprint_clusters USING hnsw (centroid vector_cosine_ops);
 ]);
 
 export const insertTokenFingerprintClustersSchema = createInsertSchema(tokenFingerprintClusters).omit({ id: true, createdAt: true });
@@ -4483,8 +4485,8 @@ export const activeTokenTrajectories = pgTable("active_token_trajectories", {
   snapshotTrigger: text("snapshot_trigger").notNull(), // "t0_creation" | "activity_volume_since_last"
   triggerContext: jsonb("trigger_context").$type<Record<string, any>>(), // volume count, time elapsed, etc.
 
-  // Fingerprint vector (50-dim)
-  fingerprintVector: jsonb("fingerprint_vector").$type<number[]>().notNull(),
+  // Fingerprint vector (26-dim) - matches archetype centroids for fast similarity matching
+  fingerprintVector: vector("fingerprint_vector", 26).notNull(),
 
   // State at snapshot time
   currentMultiplier: real("current_multiplier"), // Price relative to entry
@@ -4504,6 +4506,8 @@ export const activeTokenTrajectories = pgTable("active_token_trajectories", {
   index("idx_snapshot_timestamp").on(table.snapshotTimestamp),
   index("idx_archived_at").on(table.archivedAt), // NULL = still active
   index("idx_current_multiplier").on(table.currentMultiplier),
+  // Vector similarity index for fast trajectory matching (created separately via migration)
+  // CREATE INDEX idx_fingerprint_vector_hnsw ON active_token_trajectories USING hnsw (fingerprint_vector vector_cosine_ops);
 ]);
 
 export const insertActiveTokenTrajectoriesSchema = createInsertSchema(activeTokenTrajectories).omit({ id: true, createdAt: true });

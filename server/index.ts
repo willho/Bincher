@@ -67,6 +67,18 @@ app.use((req, res, next) => {
     console.log("Database initialized");
     dbAvailable = true;
 
+    // Setup pgvector extension and HNSW indexes (for fast fingerprint matching)
+    try {
+      const { setupPgvector, checkPgvectorStatus } = await import("./run-pgvector-migration");
+      await setupPgvector();
+      const status = await checkPgvectorStatus();
+      if (status.readyForProduction) {
+        console.log("✓ pgvector ready for production");
+      }
+    } catch (error) {
+      console.warn("pgvector setup warning (non-blocking):", error instanceof Error ? error.message : error);
+    }
+
     // Run startup wizard - verify proxies and APIs
     const { runStartupWizard } = await import("./startup-wizard");
     const wizardSuccess = await runStartupWizard();
