@@ -2347,6 +2347,15 @@ export const tokenDataPool = pgTable("token_data_pool", {
   deathbedSnapshotCreated: boolean("deathbed_snapshot_created").default(false), // Final snapshot taken?
   trajectoryOutcomeLabel: text("trajectory_outcome_label"), // "pump_100x" | "slow_bleed" | "crash_fast" (backfilled by retrolearner)
   snapshotsCount: integer("snapshots_count").default(0), // How many snapshots exist for this token
+
+  // Composite scoring for pool management
+  lastAnnScore: real("last_ann_score"), // ANN success probability [0.0, 1.0] from token-success-ann
+  compositeScore: real("composite_score"), // Composite ranking score (ANN × expected_multiplier)
+  isMonitored: boolean("is_monitored").default(false), // Token is in active monitoring pool
+  addedToPoolAt: integer("added_to_pool_at"), // When token was added to pool
+  evictedFromPoolAt: integer("evicted_from_pool_at"), // When token was removed from pool
+  evictionReason: text("eviction_reason"), // "zero_volume" | "low_score" | "manual" | etc.
+  volume24hSol: real("volume_24h_sol"), // 24h volume in SOL (for eviction logic)
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
