@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import { tokenDataPool, graduationEvents } from "@shared/schema";
 import { getTokenData, upsertTokenData } from "./data-pool";
 import { emit } from "./discovery-event-bus";
-import { enforceRateLimit } from "./api-rate-limits";
+import { canMakeApiCall } from "./api-rate-limits";
 import axios from "axios";
 
 interface PumpSwapPoolInfo {
@@ -27,7 +27,11 @@ let processedGraduations = new Set<string>();
  */
 async function findPumpSwapPool(tokenMint: string): Promise<PumpSwapPoolInfo | null> {
   try {
-    await enforceRateLimit("dexScreener");
+    const rateCheck = canMakeApiCall("dexScreener", 1);
+    if (!rateCheck.allowed) {
+      console.warn(`[GraduationTracker] Rate limit hit for DexScreener: ${rateCheck.reason}`);
+      return null;
+    }
 
     const response = await axios.get(
       `https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`,

@@ -1405,6 +1405,37 @@ export const tradeLogs = pgTable("trade_logs", {
   createdAt: integer("created_at").notNull(),
 });
 
+// Raw on-chain trades for fingerprinting (short retention, then deleted)
+export const rawTokenTrades = pgTable("raw_token_trades", {
+  id: serial("id").primaryKey(),
+
+  // Trade identification
+  tokenMint: text("token_mint").notNull(),
+  signature: text("signature").notNull().unique(), // Prevents duplicates from multiple sources
+
+  // Trade details
+  walletAddress: text("wallet_address").notNull(),
+  amountSol: real("amount_sol").notNull(),
+  amountTokens: real("amount_tokens").notNull(),
+  direction: text("direction").notNull(), // "buy" | "sell"
+  price: real("price"), // SOL per token
+
+  // Metadata
+  source: text("source"), // "pumpportal" | "pumpdev" | "dexpaprika"
+  timestamp: integer("timestamp").notNull(),
+  discoveredAt: integer("discovered_at").notNull(), // When we first saw this trade
+
+  // Retention control (auto-delete after 1 day via cron job)
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_token_mint_recent").on(table.tokenMint, table.discoveredAt),
+  index("idx_created_at").on(table.createdAt), // For deletion job
+]);
+
+export const insertRawTokenTradesSchema = createInsertSchema(rawTokenTrades).omit({ id: true, createdAt: true });
+export type RawTokenTrade = typeof rawTokenTrades.$inferSelect;
+export type InsertRawTokenTrade = z.infer<typeof insertRawTokenTradesSchema>;
+
 export const insertTradeLogSchema = createInsertSchema(tradeLogs).omit({ id: true });
 export type TradeLog = typeof tradeLogs.$inferSelect;
 export type InsertTradeLog = z.infer<typeof insertTradeLogSchema>;
@@ -3992,9 +4023,15 @@ export const tokenFingerprints = pgTable("token_fingerprints", {
   // Fingerprint identification
   fingerprintType: text("fingerprint_type").notNull(), // "pregrad_bonding_curve" | "postgrad_raydium"
   clusterId: text("cluster_id").notNull(), // Links to strategy cluster (same cluster = similar trading style)
+  snapshotTrigger: text("snapshot_trigger"), // "time_1min", "trade_count_50", "milestone_100_traders", etc.
 
   // Reference
   tokenMint: text("token_mint"), // Example token this fingerprint is based on
+  creatorAddress: text("creator_address"), // Token creator for early buying decisions
+
+  // Snapshot timing
+  snapshotTimestamp: integer("snapshot_timestamp"), // Unix timestamp when snapshot was taken
+  tokenAgeMinutes: real("token_age_minutes"), // Token age at snapshot time
 
   // Win/loss metrics
   winRate: real("win_rate"), // % of trades that were profitable (> 1x)
@@ -4018,8 +4055,25 @@ export const tokenFingerprints = pgTable("token_fingerprints", {
   avgHoldMinutes: real("avg_hold_minutes"), // Average hold duration
   medianHoldMinutes: integer("median_hold_minutes"), // Median hold duration
 
+  // Whale entry detection (for smart money triggers)
+  whaleEntered1Sol: integer("whale_entered_1sol").default(0), // 0=no, 1=yes, detected by T+snapshot
+  whaleEntered5Sol: integer("whale_entered_5sol").default(0),
+  whaleEntered10Sol: integer("whale_entered_10sol").default(0),
+  timeSinceFirstWhale1Sol: integer("time_since_first_whale_1sol"), // Seconds from launch to first 1 SOL whale
+  timeSinceFirstWhale5Sol: integer("time_since_first_whale_5sol"), // Seconds from launch to first 5 SOL whale
+
+  // Fingerprint vector (50-dim, stored as JSON for pgvector compatibility)
+  fingerprintVector: jsonb("fingerprint_vector").$type<number[]>(), // 50 floats for similarity matching
+
   // Confidence in this fingerprint
   confidence: real("confidence").default(0.5), // 0-1 confidence score
+
+  // Outcome tracking (backfilled when token graduates)
+  finalMultiplier: real("final_multiplier"), // Peak multiplier achieved
+  finalTimestamp: integer("final_timestamp"), // When token peaked or outcome determined
+
+  // Archive flag (for clustering)
+  isArchived: boolean("is_archived").default(false), // Marked for compression into cluster
 
   // Timestamps
   createdAt: integer("created_at").notNull(),
@@ -4027,6 +4081,11 @@ export const tokenFingerprints = pgTable("token_fingerprints", {
 }, (table) => [
   index("idx_fingerprint_type_cluster").on(table.fingerprintType, table.clusterId),
   index("idx_cluster").on(table.clusterId),
+  index("idx_snapshot_trigger").on(table.snapshotTrigger),
+  index("idx_token_mint_snapshots").on(table.tokenMint),
+  index("idx_creator_address").on(table.creatorAddress),
+  index("idx_whale_entries").on(table.whaleEntered5Sol, table.tokenAgeMinutes),
+  index("idx_is_archived").on(table.isArchived),
 ]);
 
 export const insertTokenFingerprintsSchema = createInsertSchema(tokenFingerprints).omit({ id: true });
@@ -4270,163 +4329,115 @@ export const insertRetrolearnerWalletAnalysisSchema = createInsertSchema(retrole
 export type RetrolearnerWalletAnalysis = typeof retrolearnerWalletAnalysis.$inferSelect;
 export type InsertRetrolearnerWalletAnalysis = z.infer<typeof insertRetrolearnerWalletAnalysisSchema>;
 
-// Server subscriptions - DB-driven 2/3 mesh coverage assignment
-export const serverSubscriptions = pgTable("server_subscriptions", {
-  id: serial("id").primaryKey(),
-  serverName: text("server_name").notNull(), // "pincher2", "proxy-1", "proxy-2"
-  tokenMint: text("token_mint"), // May be null for wallet-only subscriptions
-  walletAddress: text("wallet_address"), // May be null for token-only subscriptions
-  subscriptionType: text("subscription_type").notNull(), // "newtoken", "migration", "wallet_trade"
-  assignedAt: integer("assigned_at").notNull(),
-  status: text("status").notNull().default("active"), // "active", "reconnecting", "paused", "failed"
-  consecutiveFailures: integer("consecutive_failures").default(0),
-  lastFailureAt: integer("last_failure_at"),
-  circuitBreakerUntil: integer("circuit_breaker_until"), // Timestamp when circuit breaker resets
-  retryCount: integer("retry_count").default(0),
-  lastRetryAt: integer("last_retry_at"),
-  deduplicationKey: text("deduplication_key").unique(), // Prevent duplicate subscriptions: "${serverName}|${tokenMint}|${walletAddress}|${subscriptionType}"
-}, (table) => ({
-  serverIdx: index("idx_server_subscriptions_server").on(table.serverName),
-  statusIdx: index("idx_server_subscriptions_status").on(table.status),
-  tokenIdx: index("idx_server_subscriptions_token").on(table.tokenMint),
-  walletIdx: index("idx_server_subscriptions_wallet").on(table.walletAddress),
-  typeIdx: index("idx_server_subscriptions_type").on(table.subscriptionType),
-}));
-
-export const insertServerSubscriptionsSchema = createInsertSchema(serverSubscriptions).omit({ id: true, assignedAt: true });
-export type ServerSubscription = typeof serverSubscriptions.$inferSelect;
-export type InsertServerSubscription = z.infer<typeof insertServerSubscriptionsSchema>;
-
-// Good traders - identified wallets with profitable trades
-export const goodTraders = pgTable("good_traders", {
-  id: serial("id").primaryKey(),
-  walletAddress: text("wallet_address").notNull().unique(),
-
-  // Discovery context
-  discoveredFromTokenMint: text("discovered_from_token_mint"), // Token where wallet was first identified
-  discoveredAt: integer("discovered_at").notNull(),
-  discoveryMethod: text("discovery_method"), // "profit_sell", "swap_detection", "cluster_analysis"
-
-  // Profitability metrics
-  totalProfitUsd: real("total_profit_usd").default(0),
-  totalTradesCount: integer("total_trades_count").default(0),
-  winningTradesCount: integer("winning_trades_count").default(0),
-  winRate: real("win_rate").default(0), // 0-1 fraction
-  avgHoldMinutes: real("avg_hold_minutes"),
-  avgMultiplier: real("avg_multiplier"), // Average exit multiplier across trades
-
-  // Trader characteristics
-  isBot: boolean("is_bot").default(false), // Flagged as bot if shows MEV/sandwich patterns
-  tradingStyle: text("trading_style"), // "insider", "degen", "quality", "whale", "unknown"
-  styleConfidence: real("style_confidence"), // 0-1 confidence in classification
-
-  // Tokens traded
-  tokensMinted: integer("tokens_minted").default(0), // How many unique tokens wallet has traded
-  singleTokenOnly: boolean("single_token_only").default(false), // Only trades one token (should be filtered)
-
-  // Activity tracking
-  lastTradeAt: integer("last_trade_at"),
-  isActive: boolean("is_active").default(true),
-
-  // Timestamps
-  createdAt: integer("created_at").notNull(),
-  updatedAt: integer("updated_at").notNull(),
-}, (table) => ({
-  walletIdx: index("idx_good_traders_wallet").on(table.walletAddress),
-  activeIdx: index("idx_good_traders_active").on(table.isActive),
-  botIdx: index("idx_good_traders_bot").on(table.isBot),
-  styleIdx: index("idx_good_traders_style").on(table.tradingStyle),
-}));
-
-export const insertGoodTradersSchema = createInsertSchema(goodTraders).omit({ id: true, createdAt: true, updatedAt: true });
-export type GoodTrader = typeof goodTraders.$inferSelect;
-export type InsertGoodTrader = z.infer<typeof insertGoodTradersSchema>;
-
-// Wallet clusters - buyer clustering analysis
-export const walletClusters = pgTable("wallet_clusters", {
+// Creator Reputation - Track creator success metrics for early buying decisions
+export const creatorReputation = pgTable("creator_reputation", {
   id: serial("id").primaryKey(),
 
-  // Cluster identification
-  clusterId: text("cluster_id").notNull().unique(), // UUID for this cluster
-  tokenMint: text("token_mint").notNull(), // Token this cluster traded
+  // Creator identification
+  creatorAddress: text("creator_address").notNull().unique(),
+  creatorName: text("creator_name"), // If metadata available
 
-  // Cluster composition
-  walletCount: integer("wallet_count").notNull(), // Number of wallets in cluster
-  walletAddresses: jsonb("wallet_addresses").$type<string[]>().notNull(), // Array of wallet addresses
+  // Performance metrics
+  totalLaunches: integer("total_launches").default(0),
+  successfulLaunches: integer("successful_launches").default(0), // Launches that achieved 2x+
+  rugCount: integer("rug_count").default(0), // Launches that crashed <0.5x
 
-  // Cluster characteristics
-  entryTimeCluster: boolean("entry_time_cluster").default(false), // Wallets entered at similar times
-  entryPriceCluster: boolean("entry_price_cluster").default(false), // Wallets entered at similar prices
-  coordinationScore: real("coordination_score").default(0), // 0-1 likelihood of coordination
-  isLikelyInsider: boolean("is_likely_insider").default(false), // Suspected insider/coordinated group
+  // Win rate metrics
+  winRate: real("win_rate"), // successful / total
+  rugRate: real("rug_rate"), // rug_count / total
+  avgMultiplier: real("avg_multiplier"), // Average peak multiplier across launches
+  medianMultiplier: real("median_multiplier"), // Median multiplier
 
-  // Timeline
-  earliestEntryTime: integer("earliest_entry_time"),
-  latestEntryTime: integer("latest_entry_time"),
-  entryTimeRangeMinutes: integer("entry_time_range_minutes"), // Range from earliest to latest
+  // Time-based cohort analysis
+  avgTimeToX2: real("avg_time_to_2x"), // Minutes from launch to 2x
+  avgTimeToPeak: real("avg_time_to_peak"), // Minutes from launch to peak
+  avgHoldDuration: real("avg_hold_duration"), // Avg duration early buyers held
 
-  // Cluster performance
-  commonExitPrice: real("common_exit_price"), // If exited together
-  profitAbility: real("profit_ability").default(0), // Fraction that profited
-  avgMultiplierInCluster: real("avg_multiplier_in_cluster"),
-
-  // Detection timestamp
-  detectedAt: integer("detected_at").notNull(),
-  analysisCompletedAt: integer("analysis_completed_at"),
-}, (table) => ({
-  tokenIdx: index("idx_wallet_clusters_token").on(table.tokenMint),
-  clusterIdx: index("idx_wallet_clusters_cluster").on(table.clusterId),
-  insiderIdx: index("idx_wallet_clusters_insider").on(table.isLikelyInsider),
-}));
-
-export const insertWalletClustersSchema = createInsertSchema(walletClusters).omit({ id: true, analysisCompletedAt: true });
-export type WalletCluster = typeof walletClusters.$inferSelect;
-export type InsertWalletCluster = z.infer<typeof insertWalletClustersSchema>;
-
-// Milestone snapshots - token lifecycle fingerprints at key moments
-export const milestoneSnapshots = pgTable("milestone_snapshots", {
-  id: serial("id").primaryKey(),
-
-  // Token and milestone identification
-  tokenMint: text("token_mint").notNull(),
-  milestone: text("milestone").notNull(), // "early" (0-10min), "migration", "peak", "deathbed"
-  milestoneTime: integer("milestone_time").notNull(), // Unix timestamp of milestone
-
-  // Early dynamics (0-10 minutes)
-  priceOhlc: jsonb("price_ohlc").$type<{ open: number; high: number; low: number; close: number }>(),
-  volume: real("volume"),
-  buysCount: integer("buys_count"),
-  sellsCount: integer("sells_count"),
-
-  // Whale entry patterns
-  whaleEntryCount: integer("whale_entry_count"), // Number of whale entries at this milestone
-  largestWhaleEntry: real("largest_whale_entry"), // Size of largest whale buy
-  whaleCoordination: boolean("whale_coordination").default(false), // Multiple whales entering together
-
-  // Holder distribution
-  holderCount: integer("holder_count"),
-  topHolderPercent: real("top_holder_percent"), // % held by top holder
-  concentration: real("concentration"), // Gini coefficient-like measure (0-1)
-
-  // Cluster activity
-  clusterDetected: boolean("cluster_detected").default(false),
-  clusterSize: integer("cluster_size"), // Number of wallets in detected cluster
-  clusterCoordination: boolean("cluster_coordination").default(false),
-
-  // Outcome tracking (filled during/after milestone)
-  outcomeMultiplier: real("outcome_multiplier"), // Exit multiplier from this point
-  outcomeTime: integer("outcome_time"), // When outcome was achieved/known
-  isSuccessful: boolean("is_successful"), // true if multiplier > some threshold
+  // Confidence (0-1) based on sample size
+  confidence: real("confidence"), // Higher with more launches
 
   // Metadata
-  capturedAt: integer("captured_at").notNull(), // When this snapshot was taken
-  dataQuality: text("data_quality").default("good"), // "good", "partial", "poor"
-}, (table) => ({
-  tokenIdx: index("idx_milestone_snapshots_token").on(table.tokenMint),
-  milestoneIdx: index("idx_milestone_snapshots_milestone").on(table.milestone),
-  timeIdx: index("idx_milestone_snapshots_time").on(table.milestoneTime),
-}));
+  lastAnalyzedAt: integer("last_analyzed_at"),
+  firstLaunchAt: integer("first_launch_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_creator_win_rate").on(table.winRate),
+  index("idx_creator_samples").on(table.totalLaunches),
+]);
 
-export const insertMilestoneSnapshotsSchema = createInsertSchema(milestoneSnapshots).omit({ id: true, capturedAt: true });
-export type MilestoneSnapshot = typeof milestoneSnapshots.$inferSelect;
-export type InsertMilestoneSnapshot = z.infer<typeof insertMilestoneSnapshotsSchema>;
+export const insertCreatorReputationSchema = createInsertSchema(creatorReputation).omit({ id: true, createdAt: true });
+export type CreatorReputation = typeof creatorReputation.$inferSelect;
+export type InsertCreatorReputation = z.infer<typeof insertCreatorReputationSchema>;
+
+// Token Fingerprint Clusters - Compressed historical fingerprints via k-means clustering
+export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
+  id: serial("id").primaryKey(),
+
+  // Cluster metadata
+  clusterId: text("cluster_id").notNull().unique(), // "time_1min_20260427_0"
+  snapshotTrigger: text("snapshot_trigger").notNull(), // "time_1min", "trade_count_50", etc.
+
+  // Centroid vector (50-dim fingerprint)
+  centroidVector: jsonb("centroid_vector").$type<number[]>().notNull(), // 50 floats
+
+  // Cluster statistics
+  sampleCount: integer("sample_count").notNull(), // How many tokens in this cluster
+  ageRangeStart: real("age_range_start"), // Min token age (minutes)
+  ageRangeEnd: real("age_range_end"), // Max token age (minutes)
+  cohesion: real("cohesion"), // Cluster cohesion metric (0-1)
+
+  // Outcome statistics (aggregated from cluster members)
+  avgWinRate: real("avg_win_rate"),
+  avgFinalMultiplier: real("avg_final_multiplier"),
+  avgHoldMinutes: real("avg_hold_minutes"),
+
+  // Compression metadata
+  compressedAt: integer("compressed_at").notNull(),
+  archivedSnapshotCount: integer("archived_snapshot_count"), // How many snapshots compressed
+
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_cluster_trigger").on(table.snapshotTrigger),
+  index("idx_cluster_age").on(table.ageRangeStart, table.ageRangeEnd),
+  index("idx_cluster_compressed").on(table.compressedAt),
+]);
+
+export const insertTokenFingerprintClustersSchema = createInsertSchema(tokenFingerprintClusters).omit({ id: true, createdAt: true });
+export type TokenFingerprintCluster = typeof tokenFingerprintClusters.$inferSelect;
+export type InsertTokenFingerprintCluster = z.infer<typeof insertTokenFingerprintClustersSchema>;
+
+// Retrolearner Thresholds - Learned buying thresholds per condition type
+export const retrolearnerThresholds = pgTable("retrolearner_thresholds", {
+  id: serial("id").primaryKey(),
+
+  // Threshold identification
+  thresholdType: text("threshold_type").notNull(),
+    // "creator_launch_buy" - buy at T+0 if creator_win_rate >= threshold
+    // "whale_t3_buy" - buy at T+3 if whale_amount >= threshold
+    // "ann_score_buy" - buy if ANN score >= threshold
+    // "milestone_100_traders_buy" - buy if N traders hit && conditions met
+
+  // Learned values
+  thresholdValue: real("threshold_value").notNull(), // e.g., creator_win_rate >= 0.55
+  expectedSuccessRate: real("expected_success_rate").notNull(), // e.g., 62% go 2x+
+  sampleSize: integer("sample_size"), // Basis for learning
+  confidence: real("confidence"), // 0-1 confidence in threshold
+
+  // Cohort info
+  analysisDate: integer("analysis_date").notNull(),
+  dataWindowDays: integer("data_window_days"), // How many days of data analyzed
+
+  // Additional context
+  context: jsonb("context").$type<Record<string, any>>(), // Extra metadata
+
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_threshold_type").on(table.thresholdType),
+  index("idx_threshold_confidence").on(table.confidence),
+]);
+
+export const insertRetrolearnerThresholdsSchema = createInsertSchema(retrolearnerThresholds).omit({ id: true, createdAt: true });
+export type RetrolearnerThreshold = typeof retrolearnerThresholds.$inferSelect;
+export type InsertRetrolearnerThreshold = z.infer<typeof insertRetrolearnerThresholdsSchema>;
