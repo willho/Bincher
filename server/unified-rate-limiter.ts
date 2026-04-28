@@ -1,9 +1,19 @@
 /**
- * Unified Rate Limiter
+ * Unified Rate Limiter (Per-Instance)
+ *
+ * Each server instance (Pincher2, Proxy-1, Proxy-2, Proxy-3) has its own API keys
+ * and therefore its own independent rate limits. This limiter enforces limits
+ * for a single instance's keys.
  *
  * Strategy: Identify strictest limit per API (monthly, weekly, per-min, etc)
  * Convert to per-second rate, enforce via token bucket.
  * Result: Mathematically impossible to exceed any limit.
+ *
+ * Example capacity multiplication:
+ * - 1 Chainstack key: 1M credits/month
+ * - 4 Chainstack keys (Pincher2 + 3 proxies): 4M credits/month combined
+ * - Each instance independently limited by token bucket
+ * - No shared queue: proxies don't compete with Pincher2 or each other
  */
 
 interface RateLimitConfig {
@@ -79,15 +89,20 @@ class TokenBucketLimiter {
 }
 
 /**
- * Unified limiter for all APIs
+ * Per-service rate limiter (for Pincher2's own keys)
  */
 export class UnifiedRateLimiter {
   private limiters: Map<string, TokenBucketLimiter> = new Map();
+  private serverId: string; // "pincher2", "proxy-1", "proxy-2", "proxy-3", etc.
 
-  constructor() {
+  constructor(serverId: string = "pincher2") {
+    this.serverId = serverId;
+
     // Configure each API with its strictest limit
+    // Each server instance (Pincher2 or proxy) has its own rate limits
     const configs: RateLimitConfig[] = [
       // Monthly limits (convert to daily to be conservative)
+      // Each Chainstack API key has 1M credits/month
       {
         name: "chainstack",
         strictestLimit: 1_000_000 / 30, // 1M/month → daily limit
@@ -101,6 +116,7 @@ export class UnifiedRateLimiter {
         maxBurstTokens: 5,
       },
       // Per-minute limits
+      // Each service has its own limit; proxies with separate IPs don't share
       {
         name: "dexPaprika",
         strictestLimit: 200,
@@ -123,13 +139,13 @@ export class UnifiedRateLimiter {
       // Special cases
       {
         name: "shyftHttp",
-        strictestLimit: Number.MAX_SAFE_INTEGER, // Unlimited
+        strictestLimit: Number.MAX_SAFE_INTEGER, // Unlimited free tier
         timeWindowMs: 1000,
         maxBurstTokens: Number.MAX_SAFE_INTEGER,
       },
       {
         name: "shyftGrpc",
-        strictestLimit: 1, // Only 1 concurrent connection
+        strictestLimit: 1, // Only 1 concurrent connection per API key
         timeWindowMs: Number.MAX_SAFE_INTEGER,
         maxBurstTokens: 1,
       },

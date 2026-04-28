@@ -10,7 +10,6 @@ import {
   getProxyConfigs,
   selectHealthyProxy,
 } from "./proxy-config";
-import { rateLimiter } from "./unified-rate-limiter";
 
 export interface ProxyRequestOptions {
   service: "shyft" | "chainstack" | "dexpaprika"; // Service to route through
@@ -44,8 +43,9 @@ export async function requestViaProxy<T = any>(
   }
 
   try {
-    // Enforce rate limit for the service being called
-    await rateLimiter.waitUntilAllowed(options.service);
+    // Note: Rate limiting happens on proxy side (proxy has its own keys/limits)
+    // Pincher2 enforces limits only on direct API calls, not through proxy
+    // TODO: Could add request queue limiting here to avoid proxy overload
 
     // Build proxy URL
     const proxyUrl = `${healthyProxy.url}/api/proxy-forward`;
