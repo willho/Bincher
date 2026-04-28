@@ -75,6 +75,7 @@ import { isAIAvailable } from "./ai-health";
 import { getNetworkMode, setNetworkMode, getSolanaFaucetUrl, type NetworkMode } from "./network-mode";
 import { markSignalWalletSold, updateScoreOnWhaleActivity, resolvePositionScoreSnapshots } from "./position-score";
 import { recordWhaleActivity, checkForFamiliarWhalesInToken, type FamiliarWhaleAlert } from "./familiar-whales";
+import { registerDiagnosticEndpoints } from "./diagnostic-endpoints";
 
 let wss: WebSocketServer;
 
@@ -8667,6 +8668,9 @@ export async function registerRoutes(
     const status = proxyRegistry.getStatus();
     res.json(status);
   });
+
+  // Register diagnostic logging endpoints
+  registerDiagnosticEndpoints(app);
 
   return httpServer;
 }

@@ -147,6 +147,10 @@ app.use((req, res, next) => {
     const { initializeWhaleTracker } = await import("./whale-tracker");
     initializeWhaleTracker();
 
+    // Start log maintenance (hourly bucket compaction and pruning)
+    const { startLogMaintenance } = await import("./log-buckets");
+    startLogMaintenance(60 * 60 * 1000); // Run every hour
+
     // Initialize Pump SDK for graduation detection
     const { initializePumpSdk } = await import("./pump-sdk-client");
     await initializePumpSdk();
