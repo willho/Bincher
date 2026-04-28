@@ -3,44 +3,25 @@ import { tokenFingerprintClusters, tokenFingerprints } from "@shared/schema";
 import { eq, and, gte, lt, sql } from "drizzle-orm";
 
 /**
- * Lifecycle Stage Archetype Management
+ * Lifecycle Stage + Outcome Probability Clustering
  *
- * Key Insight: All tokens eventually reach a final state.
- * Each snapshot is a moment in the token's lifecycle with specific characteristics.
- * Snapshots cluster independently by STAGE, not by token.
+ * Key insight: All tokens eventually reach a final state (crash).
+ * Prediction isn't about outcome (binary) but trajectory shape.
+ * Snapshots cluster by lifecycle stage + verified outcome distributions.
  *
- * Architecture:
- * 1. Snapshot capture (existing): Activity-gated fingerprints at T0, per-min for 10min,
- *    per-50-trades after, per-multiplier at graduation
- * 2. Snapshot clustering: Each fingerprint independently clusters to lifecycle archetype
- *    based on its state (age, multiplier, holder concentration, etc.)
- *    - Snapshot 4 of Token X (1hr, 5x, tight holders) → archetype "pump_early_concentrated"
- *    - Snapshot 8 of Token X (6hr, 2x, dispersed) → archetype "crash_dispersed"
- *    - Snapshot 4 of Token Y (45min, 2x, tight) → SAME archetype "pump_early_concentrated"
- * 3. Trajectory emerges: Sequence of archetypes a token traverses (not averaged)
+ * Real-time flow:
+ * 1. Snapshot created (activity-gated, no time gates)
+ * 2. Match to archetype → get outcome probability distribution
+ * 3. Track probability vector over time as token evolves
+ * 4. Divergence in probabilities = branching signal
  *
- * Result: ~2-5K archetypes represent all lifecycle stages/patterns.
- * Same archetype can contain snapshots from different tokens at different times.
- * Preserves complete trajectory while clustering similar states together.
+ * Daily retrolearner flow:
+ * 1. Identify archived tokens
+ * 2. Backfill all snapshots with trajectoryOutcome (shape they followed)
+ * 3. Cluster snapshots into outcome archetypes with probability distributions
+ * 4. Update archetype centroids and outcome probabilities
+ * 5. Next day's matching uses improved distributions
  */
-
-/**
- * Cluster statistics - track what's in each cluster
- */
-export interface ClusterStatistics {
-  clusterId: string;
-  sampleCount: number; // ← KEY: how many tokens averaged
-  centroid: number[]; // 50-dim averaged vector
-  cohesion: number; // 0-1: how similar are tokens in cluster (variance)
-  minSimilarity: number; // Lowest cosine sim among members
-  maxSimilarity: number; // Highest cosine sim among members
-  tokenType: "dead" | "active"; // Cluster purpose
-  minAge: number; // Timestamp of oldest token
-  maxAge: number; // Timestamp of newest token
-  createdAt: number;
-  updatedAt: number;
-  lastRebalancedAt: number;
-}
 
 /**
  * Vector similarity (cosine distance)
@@ -58,7 +39,7 @@ function cosineSimilarity(v1: number[], v2: number[]): number {
 }
 
 /**
- * Average multiple vectors and calculate cohesion
+ * Average vectors and calculate cohesion
  */
 function averageVectors(vectors: number[][]): {
   centroid: number[];
@@ -67,14 +48,12 @@ function averageVectors(vectors: number[][]): {
   const dim = vectors[0]?.length || 50;
   const centroid = Array(dim).fill(0);
 
-  // Average
   vectors.forEach((v) => {
     for (let i = 0; i < dim; i++) {
       centroid[i] += v[i] / vectors.length;
     }
   });
 
-  // Cohesion: how similar are all vectors to centroid
   const similarities = vectors.map((v) => cosineSimilarity(v, centroid));
   const cohesion = similarities.reduce((a, b) => a + b, 0) / vectors.length;
 
@@ -82,18 +61,10 @@ function averageVectors(vectors: number[][]): {
 }
 
 /**
- * Cluster a single snapshot into lifecycle stage archetype
+ * Cluster snapshot to lifecycle stage + outcome archetype
  *
- * Called whenever a fingerprint is created (activity-gated).
- * Snapshots cluster independently based on their STAGE characteristics,
- * not the complete token trajectory.
- *
- * Examples:
- * - Token X snapshot 4 (1hr, 5x, tight holders) → "pump_early_concentrated"
- * - Token Y snapshot 4 (45min, 2x, tight) → SAME "pump_early_concentrated"
- * - Token X snapshot 8 (6hr, 2x, dispersed) → "crash_dispersed"
- *
- * The trajectory emerges as the sequence of archetypes visited.
+ * Called as each fingerprint is created (activity-gated).
+ * Returns archetype with outcome probability distribution for prediction.
  */
 export async function clusterSnapshotToArchetype(
   fingerprint: {
@@ -101,28 +72,27 @@ export async function clusterSnapshotToArchetype(
     fingerprintVector: number[];
     tokenAgeMinutes: number;
     medianMultiplier: number;
-    holderConcentration?: number;
-    buyerDiversity?: number;
   }
 ): Promise<{
   archetypeClusterId: string;
+  outcomeDistribution: Record<string, number>;
   similarityToArchetype: number;
   isNewArchetype: boolean;
 }> {
   const vector = fingerprint.fingerprintVector;
 
-  // Find all existing archetypes (lifecycle stage patterns)
+  // Find all existing archetypes
   const allArchetypes = await db
     .select()
     .from(tokenFingerprintClusters)
     .where(eq(tokenFingerprintClusters.type, "dead"));
 
   if (allArchetypes.length === 0) {
-    // Create first archetype for this stage
+    // Create first archetype for this lifecycle stage
     return createStageArchetype(fingerprint);
   }
 
-  // Find most similar archetype (same lifecycle stage/characteristics)
+  // Find most similar archetype
   let bestArchetype = allArchetypes[0];
   let bestSimilarity = -1;
 
@@ -136,42 +106,46 @@ export async function clusterSnapshotToArchetype(
     }
   }
 
-  // Snapshot matching thresholds (stage-based)
   const thresholds = {
-    mergeSimilarity: 0.80, // Similar lifecycle stages → merge
-    minArchetypeCohesion: 0.70, // Archetype must stay tight
-    cohesionDropTolerance: 0.08, // Allow max 8% cohesion drop
+    mergeSimilarity: 0.80,
+    minArchetypeCohesion: 0.70,
+    cohesionDropTolerance: 0.08,
   };
 
-  // Too different stage → create new archetype
+  // Too dissimilar → create new archetype
   if (bestSimilarity < thresholds.mergeSimilarity) {
     return createStageArchetype(fingerprint);
   }
 
-  // Check if merging would degrade archetype cohesion
+  // Check if merging would degrade cohesion
   if (bestArchetype.sampleCount > 50) {
     if (bestArchetype.cohesion < thresholds.minArchetypeCohesion) {
-      // Archetype already loose, create new one
       return createStageArchetype(fingerprint);
     }
   }
 
-  // Merge snapshot into archetype
+  // Merge snapshot into archetype (but don't update outcome distribution yet)
+  // Outcome distribution only updates when tokens are archived (daily retrolearner)
   const updated = await mergeSnapshotIntoArchetype(
     bestArchetype.clusterId,
     vector,
     fingerprint.tokenMint
   );
 
+  const outcomeDistribution =
+    (bestArchetype.outcomeDistribution as Record<string, number>) || {};
+
   return {
     archetypeClusterId: bestArchetype.clusterId,
+    outcomeDistribution,
     similarityToArchetype: bestSimilarity,
     isNewArchetype: false,
   };
 }
 
 /**
- * Create new lifecycle stage archetype
+ * Create new lifecycle stage archetype (initialized without outcome distribution)
+ * Outcome distribution gets populated by retrolearner as tokens complete
  */
 async function createStageArchetype(fingerprint: {
   tokenMint: string;
@@ -180,20 +154,23 @@ async function createStageArchetype(fingerprint: {
   medianMultiplier: number;
 }): Promise<{
   archetypeClusterId: string;
+  outcomeDistribution: Record<string, number>;
   similarityToArchetype: number;
   isNewArchetype: boolean;
 }> {
   const now = Math.floor(Date.now() / 1000);
-  const stageDesc = `stage_age${Math.round(fingerprint.tokenAgeMinutes)}_mul${Math.round(fingerprint.medianMultiplier * 10) / 10}_${now}`;
-  const archetypeId = `lifecycle_${stageDesc}`;
+  const stageDesc = `age${Math.round(fingerprint.tokenAgeMinutes)}_mul${Math.round(fingerprint.medianMultiplier * 10) / 10}`;
+  const archetypeId = `lifecycle_${stageDesc}_${now}`;
 
   await db.insert(tokenFingerprintClusters).values({
     clusterId: archetypeId,
     type: "dead",
+    lifecycleStage: stageDesc,
     centroid: fingerprint.fingerprintVector,
-    sampleCount: 1, // One snapshot (this fingerprint) in archetype
-    archivedTokenMints: [fingerprint.tokenMint],
-    cohesion: 1.0, // Single snapshot = perfect cohesion
+    outcomeDistribution: {}, // Empty until retrolearner populates
+    sampleCount: 1,
+    snapshotTokenMints: [fingerprint.tokenMint],
+    cohesion: 1.0,
     minSimilarity: 1.0,
     maxSimilarity: 1.0,
     createdAt: now,
@@ -203,13 +180,15 @@ async function createStageArchetype(fingerprint: {
 
   return {
     archetypeClusterId: archetypeId,
+    outcomeDistribution: {},
     similarityToArchetype: 1.0,
     isNewArchetype: true,
   };
 }
 
 /**
- * Merge snapshot into existing lifecycle archetype (recompute centroid with new snapshot)
+ * Merge snapshot into existing archetype
+ * Does not update outcome distribution (that's done by retrolearner)
  */
 async function mergeSnapshotIntoArchetype(
   archetypeId: string,
@@ -219,7 +198,6 @@ async function mergeSnapshotIntoArchetype(
   sampleCount: number;
   newCohesion: number;
 }> {
-  // Get archetype
   const archetype = await db
     .select()
     .from(tokenFingerprintClusters)
@@ -231,23 +209,19 @@ async function mergeSnapshotIntoArchetype(
   }
 
   const current = archetype[0];
-  const currentMints = (current.archivedTokenMints as string[]) || [];
+  const currentMints = (current.snapshotTokenMints as string[]) || [];
 
-  // Recompute archetype centroid with new snapshot vector
+  // Recompute centroid
   const allVectors: number[][] = [];
-
-  // Add existing archetype centroid as representative
   if (current.centroid) {
     allVectors.push(current.centroid as number[]);
   }
-
-  // Add new snapshot vector
   allVectors.push(snapshotVector);
 
   const { centroid: newCentroid, cohesion: newCohesion } =
     averageVectors(allVectors);
 
-  // Calculate similarity range among snapshots
+  // Calculate similarity range
   let minSim = 1,
     maxSim = 0;
   for (let i = 0; i < allVectors.length; i++) {
@@ -258,13 +232,12 @@ async function mergeSnapshotIntoArchetype(
     }
   }
 
-  // Update archetype
   const now = Math.floor(Date.now() / 1000);
   await db
     .update(tokenFingerprintClusters)
     .set({
       sampleCount: current.sampleCount + 1,
-      archivedTokenMints: [...currentMints, tokenMint],
+      snapshotTokenMints: [...currentMints, tokenMint],
       centroid: newCentroid,
       cohesion: newCohesion,
       minSimilarity: minSim,
@@ -280,131 +253,196 @@ async function mergeSnapshotIntoArchetype(
 }
 
 /**
- * Estimate DB size for trajectory archetype compression
- *
- * All tokens eventually reach a final state (archival).
- * Compression happens post-mortem when complete trajectory is known.
- *
- * Scenarios:
- * 1. No archetype merging (bad): Every token → own archetype = bloat
- * 2. Perfect merging (bad): All tokens → 1 archetype = loss of signal
- * 3. Trajectory-based (good): Similar evolution patterns merge = meaningful archetypes
+ * Determine trajectory outcome shape for archived token
+ * Called by retrolearner to backfill trajectoryOutcome
  */
-export function estimateClusterSize(): {
-  scenario: string;
-  tokensPerMonth: number;
-  archetypeCount: number;
-  tokensPerArchetype: number;
-  dbSizeGB: number;
-  risk: string;
-} {
-  const tokensPerMonth = 36000; // 100/hr × 24h × 30d
+function determineTrajectoryOutcome(
+  finalMultiplier: number,
+  tokenAgeMinutes: number,
+  maxMultiplierReached: number
+): string {
+  // Outcome shapes based on trajectory characteristics
+  if (maxMultiplierReached >= 100) {
+    return "pump_100x_plus";
+  } else if (maxMultiplierReached >= 10) {
+    return "pump_10x";
+  } else if (maxMultiplierReached >= 5) {
+    return "pump_5x";
+  } else if (maxMultiplierReached >= 2) {
+    if (tokenAgeMinutes > 60) {
+      return "pump_2x_sustained";
+    }
+    return "pump_2x_quick";
+  } else if (maxMultiplierReached >= 1.1) {
+    return "pump_minor";
+  } else if (finalMultiplier < 0.1) {
+    return "crash_fast";
+  } else {
+    return "slow_bleed";
+  }
+}
 
-  const scenarios = {
-    worst_no_compression: {
-      archetypeCount: tokensPerMonth, // Each token = own archetype
-      tokensPerArchetype: 1,
-      risk: "CRITICAL: 36K archetypes, defeats compression, no learning",
-    },
-    worst_over_compression: {
-      archetypeCount: 2, // All tokens merged (impossible to distinguish)
-      tokensPerArchetype: tokensPerMonth / 2,
-      risk: "CRITICAL: Loss of signal, can't identify trajectory patterns",
-    },
-    trajectory_based: {
-      // Similar trajectories merge, different ones stay separate
-      // Estimate: ~10-15% of tokens share trajectory archetypes
-      archetypeCount: Math.round(tokensPerMonth * 0.12), // ~4,300 archetypes
-      tokensPerArchetype: 8, // Avg 8 tokens per archetype
-      risk: "GOOD: Trajectory-based clustering preserves pattern diversity while compressing similar evolutions",
-    },
-  };
+/**
+ * Retrolearner: Backfill archived token snapshots with outcome, cluster them
+ * Called daily by retrolearner after identifying archived tokens
+ */
+export async function archiveTokenAndUpdateOutcomes(
+  tokenMint: string,
+  finalMultiplier: number,
+  maxMultiplierReached: number,
+  tokenAgeMinutes: number
+): Promise<{
+  snapshotCount: number;
+  archetypesUpdated: number;
+  trajectoryOutcome: string;
+}> {
+  // Determine trajectory outcome shape
+  const trajectoryOutcome = determineTrajectoryOutcome(
+    finalMultiplier,
+    tokenAgeMinutes,
+    maxMultiplierReached
+  );
 
-  const scenario = scenarios.trajectory_based;
+  // Fetch all fingerprints for this token
+  const fingerprints = await db
+    .select()
+    .from(tokenFingerprints)
+    .where(eq(tokenFingerprints.tokenMint, tokenMint))
+    .orderBy(tokenFingerprints.snapshotTimestamp);
 
-  // Size per archetype:
-  // - trajectory signature (centroid): 50 × 8 bytes = 400B
-  // - token mints array: 8 × 44 bytes = 352B
-  // - metadata: ~300B (cohesion, similarities, timestamps, etc)
-  // - overhead: ~100B
-  const bytesPerArchetype = 1200;
+  if (fingerprints.length === 0) {
+    throw new Error(`[ArchiveToken] No fingerprints found for ${tokenMint}`);
+  }
 
-  const dbSizeGB =
-    (scenario.archetypeCount * bytesPerArchetype) / 1_000_000_000;
+  // Backfill all fingerprints with trajectory outcome
+  await db
+    .update(tokenFingerprints)
+    .set({ trajectoryOutcome })
+    .where(eq(tokenFingerprints.tokenMint, tokenMint));
+
+  // Cluster each fingerprint into archetype, updating outcome distribution
+  const archetypesSet = new Set<string>();
+
+  for (const fp of fingerprints) {
+    const vector = fp.fingerprintVector as number[];
+    if (!vector || vector.length === 0) continue;
+
+    // Find best matching archetype
+    const allArchetypes = await db
+      .select()
+      .from(tokenFingerprintClusters)
+      .where(eq(tokenFingerprintClusters.type, "dead"));
+
+    let bestArchetype = allArchetypes[0];
+    let bestSimilarity = -1;
+
+    for (const archetype of allArchetypes) {
+      const archetypeCentroid = archetype.centroid as number[];
+      const similarity = cosineSimilarity(vector, archetypeCentroid);
+      if (similarity > bestSimilarity) {
+        bestSimilarity = similarity;
+        bestArchetype = archetype;
+      }
+    }
+
+    if (bestSimilarity < 0.75) {
+      // Create new archetype for this outcome
+      const now = Math.floor(Date.now() / 1000);
+      const stageDesc = `age${Math.round(fp.tokenAgeMinutes || 0)}_outcome${trajectoryOutcome}`;
+      const archetypeId = `lifecycle_${stageDesc}_${now}`;
+
+      await db.insert(tokenFingerprintClusters).values({
+        clusterId: archetypeId,
+        type: "dead",
+        lifecycleStage: stageDesc,
+        centroid: vector,
+        outcomeDistribution: { [trajectoryOutcome]: 1.0 },
+        sampleCount: 1,
+        snapshotTokenMints: [tokenMint],
+        cohesion: 1.0,
+        minSimilarity: 1.0,
+        maxSimilarity: 1.0,
+        createdAt: now,
+        updatedAt: now,
+        lastRebalancedAt: now,
+      });
+
+      archetypesSet.add(archetypeId);
+    } else {
+      // Merge into best archetype, update outcome distribution
+      const currentMints = (bestArchetype.snapshotTokenMints as string[]) || [];
+      const currentOutcomes = (bestArchetype.outcomeDistribution as Record<
+        string,
+        number
+      >) || {};
+
+      // Recompute centroid
+      const allVectors: number[][] = [];
+      if (bestArchetype.centroid) {
+        allVectors.push(bestArchetype.centroid as number[]);
+      }
+      allVectors.push(vector);
+      const { centroid: newCentroid, cohesion: newCohesion } =
+        averageVectors(allVectors);
+
+      // Update outcome distribution
+      const newOutcomes = { ...currentOutcomes };
+      const totalCount = bestArchetype.sampleCount + 1;
+      for (const outcome of Object.keys(newOutcomes)) {
+        newOutcomes[outcome] =
+          (newOutcomes[outcome] * bestArchetype.sampleCount) / totalCount;
+      }
+      newOutcomes[trajectoryOutcome] =
+        ((newOutcomes[trajectoryOutcome] || 0) * bestArchetype.sampleCount +
+          1) /
+        totalCount;
+
+      // Calculate similarity range
+      let minSim = 1,
+        maxSim = 0;
+      for (let i = 0; i < allVectors.length; i++) {
+        for (let j = i + 1; j < allVectors.length; j++) {
+          const sim = cosineSimilarity(allVectors[i], allVectors[j]);
+          minSim = Math.min(minSim, sim);
+          maxSim = Math.max(maxSim, sim);
+        }
+      }
+
+      const now = Math.floor(Date.now() / 1000);
+      await db
+        .update(tokenFingerprintClusters)
+        .set({
+          sampleCount: totalCount,
+          snapshotTokenMints: [...currentMints, tokenMint],
+          centroid: newCentroid,
+          outcomeDistribution: newOutcomes,
+          cohesion: newCohesion,
+          minSimilarity: minSim,
+          maxSimilarity: maxSim,
+          updatedAt: now,
+        })
+        .where(eq(tokenFingerprintClusters.clusterId, bestArchetype.clusterId));
+
+      archetypesSet.add(bestArchetype.clusterId);
+    }
+  }
 
   return {
-    scenario: "Trajectory-based archetype clustering (post-mortem compression)",
-    tokensPerMonth,
-    archetypeCount: scenario.archetypeCount,
-    tokensPerArchetype: scenario.tokensPerArchetype,
-    dbSizeGB: parseFloat(dbSizeGB.toFixed(2)),
-    risk: scenario.risk,
+    snapshotCount: fingerprints.length,
+    archetypesUpdated: archetypesSet.size,
+    trajectoryOutcome,
   };
 }
 
 /**
- * Full database size estimate: fingerprints + clusters
- *
- * Combined storage:
- * - Fingerprints (2 per dead, 5-15 per active)
- * - Clusters (aggregated fingerprints)
- * - Mappings (token → cluster)
- */
-export function estimateFullFingerprinterSize(): {
-  layer: string;
-  description: string;
-  sizeGB: number;
-}[] {
-  const tokensPerMonth = 36000;
-  const deadTokens = Math.round(tokensPerMonth * 0.7);
-  const activeTokens = Math.round(tokensPerMonth * 0.3);
-
-  return [
-    {
-      layer: "Raw fingerprints (0-30d)",
-      description: `${deadTokens * 2 + activeTokens * 8} total fingerprints (2 per dead, 8 per active)`,
-      sizeGB: ((deadTokens * 2 + activeTokens * 8) * 500) / 1_000_000_000,
-    },
-    {
-      layer: "Cluster centroids",
-      description: `~${Math.round(tokensPerMonth / 5)} clusters (avg 5 tokens/cluster) with metadata`,
-      sizeGB: (Math.round(tokensPerMonth / 5) * 700) / 1_000_000_000,
-    },
-    {
-      layer: "Cluster statistics",
-      description: "Sample counts, cohesion, similarity ranges, timestamps",
-      sizeGB: (Math.round(tokensPerMonth / 5) * 200) / 1_000_000_000,
-    },
-    {
-      layer: "Archive (30-365d)",
-      description: "Compressed clusters, sampled fingerprints",
-      sizeGB: 15.0,
-    },
-    {
-      layer: "TOTAL STEADY STATE",
-      description: "Fingerprints + clusters + archives",
-      sizeGB: 35.0, // Rounded up
-    },
-  ];
-}
-
-/**
- * Post-archive trajectory archetype rebalancing (optional optimization)
- *
- * Called periodically to:
- * - Identify loose/degraded archetypes (cohesion < 0.5) for analysis
- * - Suggest very similar small archetypes for manual merger
- * - Report archetype quality metrics
- *
- * Note: Archetypes are created at archive time and generally stable.
- * Rebalancing is optional, mainly for insights.
+ * Get archetype quality stats
  */
 export async function reportArchetypeQuality(): Promise<{
   totalArchetypes: number;
-  tightArchetypes: number; // cohesion > 0.75
-  looseArchetypes: number; // cohesion < 0.5
-  avgTokensPerArchetype: number;
-  avgCohesion: number;
+  tightArchetypes: number;
+  looseArchetypes: number;
+  avgSnapshotsPerArchetype: number;
+  archetypesWithOutcomeData: number;
 }> {
   const archetypes = await db
     .select()
@@ -416,22 +454,97 @@ export async function reportArchetypeQuality(): Promise<{
       totalArchetypes: 0,
       tightArchetypes: 0,
       looseArchetypes: 0,
-      avgTokensPerArchetype: 0,
-      avgCohesion: 0,
+      avgSnapshotsPerArchetype: 0,
+      archetypesWithOutcomeData: 0,
     };
   }
 
   const tightCount = archetypes.filter((a) => (a.cohesion ?? 0) > 0.75).length;
   const looseCount = archetypes.filter((a) => (a.cohesion ?? 0) < 0.5).length;
-  const totalTokens = archetypes.reduce((sum, a) => sum + (a.sampleCount ?? 0), 0);
-  const avgCohesion =
-    archetypes.reduce((sum, a) => sum + (a.cohesion ?? 0), 0) / archetypes.length;
+  const totalSnapshots = archetypes.reduce((sum, a) => sum + (a.sampleCount ?? 0), 0);
+  const withOutcome = archetypes.filter(
+    (a) => a.outcomeDistribution && Object.keys(a.outcomeDistribution).length > 0
+  ).length;
 
   return {
     totalArchetypes: archetypes.length,
     tightArchetypes: tightCount,
     looseArchetypes: looseCount,
-    avgTokensPerArchetype: totalTokens / archetypes.length,
-    avgCohesion: parseFloat(avgCohesion.toFixed(3)),
+    avgSnapshotsPerArchetype: Math.round(totalSnapshots / archetypes.length),
+    archetypesWithOutcomeData: withOutcome,
   };
+}
+
+/**
+ * Estimate cluster size with outcome distribution
+ */
+export function estimateClusterSize(): {
+  scenario: string;
+  tokensPerMonth: number;
+  archetypeCount: number;
+  snapshotsPerArchetype: number;
+  dbSizeGB: number;
+  risk: string;
+} {
+  const tokensPerMonth = 36000;
+
+  const scenario = {
+    archetypeCount: Math.round(tokensPerMonth * 0.12), // ~4.3K archetypes
+    snapshotsPerArchetype: 8,
+    risk: "GOOD: Lifecycle stage + outcome distribution enables probability-based prediction",
+  };
+
+  // Size per archetype:
+  // - centroid: 50 × 8 = 400B
+  // - outcome distribution: ~200B (5-10 outcomes × 50B each)
+  // - metadata: 300B
+  // - overhead: 100B
+  const bytesPerArchetype = 1200;
+
+  const dbSizeGB =
+    (scenario.archetypeCount * bytesPerArchetype) / 1_000_000_000;
+
+  return {
+    scenario:
+      "Lifecycle stage + outcome probability distribution (daily retrolearner updates)",
+    tokensPerMonth,
+    archetypeCount: scenario.archetypeCount,
+    snapshotsPerArchetype: scenario.snapshotsPerArchetype,
+    dbSizeGB: parseFloat(dbSizeGB.toFixed(2)),
+    risk: scenario.risk,
+  };
+}
+
+/**
+ * Full database size estimate
+ */
+export function estimateFullFingerprinterSize(): {
+  layer: string;
+  description: string;
+  sizeGB: number;
+}[] {
+  const tokensPerMonth = 36000;
+
+  return [
+    {
+      layer: "Raw fingerprints (active + completing)",
+      description: `~${tokensPerMonth * 8} total snapshots (8 avg per token) = full trajectories`,
+      sizeGB: ((tokensPerMonth * 8) * 500) / 1_000_000_000,
+    },
+    {
+      layer: "Lifecycle stage + outcome archetypes",
+      description: `~${Math.round(tokensPerMonth * 0.12)} archetypes with outcome probability distributions`,
+      sizeGB: (Math.round(tokensPerMonth * 0.12) * 1200) / 1_000_000_000,
+    },
+    {
+      layer: "Archetype outcome history (weekly rollup)",
+      description: "Compressed weekly archetype state snapshots for trend analysis",
+      sizeGB: 2.0,
+    },
+    {
+      layer: "TOTAL STEADY STATE",
+      description: "Active fingerprints + archetypes + outcome history",
+      sizeGB: 35.0,
+    },
+  ];
 }

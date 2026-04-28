@@ -5,6 +5,7 @@ import { runDailyAggregation, runWeeklyReview } from "./timeframe-analysis";
 import { runBestTheoryValidationCycle } from "./paper-experiments";
 import { runFundingRelationshipDetection } from "./funding-relationship-detector";
 import { mergeFundingLinksIntoClusters } from "./cluster-detection";
+import { checkAndManageCapacity } from "./monitoring-capacity-manager";
 import { db } from "./db";
 import { monitoredWallets, userTokenViews } from "@shared/schema";
 import { eq, and, lt } from "drizzle-orm";
@@ -30,6 +31,7 @@ const JOB_INTERVALS = {
   vectorAggregation: 8 * 3600 * 1000,
   fundingRelationshipDetection: 24 * 3600 * 1000, // Daily
   viewCleanup: 10 * 60 * 1000, // 10 minutes
+  capacityManagement: 10 * 60 * 1000, // 10 minutes - monitor and manage monitoring capacity
 };
 
 // Cleanup constants
@@ -231,9 +233,14 @@ export function startBackgroundJobs(): void {
     run8HourJobs().catch(console.error);
   }, 8 * 3600 * 1000);
   
-  // Cleanup runs every 10 minutes
-  cleanupInterval = setInterval(() => {
-    runJobWithTracking("viewCleanup", runViewCleanup).catch(console.error);
+  // Cleanup and capacity check run every 10 minutes
+  cleanupInterval = setInterval(async () => {
+    try {
+      await runJobWithTracking("viewCleanup", runViewCleanup);
+      await runJobWithTracking("capacityManagement", () => checkAndManageCapacity());
+    } catch (error) {
+      console.error("[BackgroundJobs] Error in cleanup/capacity check:", error);
+    }
   }, JOB_INTERVALS.viewCleanup);
   
   setTimeout(() => {

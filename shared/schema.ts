@@ -2319,6 +2319,20 @@ export const tokenDataPool = pgTable("token_data_pool", {
   raydiumHolderConcentration: real("raydium_holder_concentration"), // % held by top 10
   isDirectRaydiumLaunch: boolean("is_direct_raydium_launch").default(false), // true if launched directly on Raydium
   poolOriginType: text("pool_origin_type"), // "pumpfun_graduated" | "direct_raydium" | "other_dex"
+
+  // Snapshot tracking for activity-gated fingerprinting
+  lastSnapshotAt: integer("last_snapshot_at"), // Timestamp of last fingerprint snapshot created
+  lastSnapshotTradeCount: integer("last_snapshot_trade_count").default(0), // Trade count at last snapshot
+  totalTradeCount: integer("total_trade_count").default(0), // Total trades seen for this token
+  triggeredMilestones: jsonb("triggered_milestones").$type<Record<string, boolean>>().default({}), // {price_2x: true, price_0.5x_down: false, ...}
+  lastMilestoneMultiplier: real("last_milestone_multiplier"), // Last multiplier checked for milestone triggers
+
+  // Deathbed tracking
+  isDeathbed: boolean("is_deathbed").default(false), // Token reached end-of-life (volume crash, no trades)
+  deathbedDetectedAt: integer("deathbed_detected_at"), // When deathbed was detected
+  deathbedSnapshotCreated: boolean("deathbed_snapshot_created").default(false), // Final snapshot taken?
+  trajectoryOutcomeLabel: text("trajectory_outcome_label"), // "pump_100x" | "slow_bleed" | "crash_fast" (backfilled by retrolearner)
+  snapshotsCount: integer("snapshots_count").default(0), // How many snapshots exist for this token
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
@@ -4071,7 +4085,8 @@ export const tokenFingerprints = pgTable("token_fingerprints", {
   // Confidence in this fingerprint
   confidence: real("confidence").default(0.5), // 0-1 confidence score
 
-  // Outcome tracking (backfilled when token graduates)
+  // Outcome tracking (backfilled daily by retrolearner when token is archived)
+  trajectoryOutcome: text("trajectory_outcome"), // "pump_100x", "slow_bleed", "crash_fast", etc.
   finalMultiplier: real("final_multiplier"), // Peak multiplier achieved
   finalTimestamp: integer("final_timestamp"), // When token peaked or outcome determined
 
@@ -4368,32 +4383,37 @@ export const insertCreatorReputationSchema = createInsertSchema(creatorReputatio
 export type CreatorReputation = typeof creatorReputation.$inferSelect;
 export type InsertCreatorReputation = z.infer<typeof insertCreatorReputationSchema>;
 
-// Token Fingerprint Archetypes - Dead token patterns archived for ANN anti-pattern learning
-// Created when dead tokens are archived (T0 + deathbread fingerprints merged into shared cluster)
-// NOT used for active token clustering (active tokens maintain individual trajectories)
+// Lifecycle Stage + Outcome Archetypes
+// Snapshots cluster by stage characteristics + verified outcome distributions
+// Real-time: match active token snapshots to archetypes for probability-based prediction
+// Daily: retrolearner backfills completed token snapshots with trajectoryOutcome, clusters them
+// Prediction uses outcome probability distribution to track trajectory through probability space
 export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   id: serial("id").primaryKey(),
 
-  // Archetype cluster identification
-  clusterId: text("cluster_id").notNull().unique(), // "dead_archetype_crash_20260428_0"
-  type: text("type").notNull().default("dead"), // "dead" = archetype cluster for failed tokens only
+  // Archetype identification
+  clusterId: text("cluster_id").notNull().unique(),
+  type: text("type").notNull().default("dead"), // "dead" = lifecycle stage + outcome archetype
 
-  // Centroid vector (averaged T0 + deathbread vectors from member tokens)
+  // Lifecycle stage characteristics (implicit in centroid, explicit in naming)
+  // Example: "stage_t0_to_10min_early_pump" or "stage_t0_1hr_slow_bleed"
+  lifecycleStage: text("lifecycle_stage"), // Derived from snapshot age/multiplier/concentration
+
+  // Centroid vector (average of all snapshots in this archetype)
   centroid: jsonb("centroid").$type<number[]>().notNull(), // 50-dim fingerprint vector
 
+  // Outcome probability distribution (verified from completed tokens)
+  // { "pump_100x": 0.60, "slow_bleed": 0.25, "crash_fast": 0.15 }
+  outcomeDistribution: jsonb("outcome_distribution").$type<Record<string, number>>(), // Outcome shape probabilities
+
   // Archetype statistics
-  sampleCount: integer("sample_count").notNull(), // How many dead tokens merged into this archetype
-  archivedTokenMints: jsonb("archived_token_mints").$type<string[]>(), // Token mints in this archetype
+  sampleCount: integer("sample_count").notNull(), // Snapshots in archetype
+  snapshotTokenMints: jsonb("snapshot_token_mints").$type<string[]>(), // Tokens that contributed snapshots
 
-  // Cohesion metric (0-1: how similar are the archived dead tokens?)
-  cohesion: real("cohesion").notNull(), // Higher = tighter archetype pattern
-  minSimilarity: real("min_similarity"), // Lowest similarity among members
-  maxSimilarity: real("max_similarity"), // Highest similarity among members
-
-  // Anti-pattern characteristics (what made these tokens fail?)
-  avgWinRate: real("avg_win_rate"), // Win rate of wallets that traded these tokens (usually low)
-  avgFinalMultiplier: real("avg_final_multiplier"), // Peak multiplier before crash
-  avgHoldMinutes: real("avg_hold_minutes"), // How long holders stayed in losing trade
+  // Cohesion metric (0-1: how similar are snapshots in this archetype?)
+  cohesion: real("cohesion").notNull(),
+  minSimilarity: real("min_similarity"),
+  maxSimilarity: real("max_similarity"),
 
   // Metadata
   createdAt: integer("created_at").notNull(),
@@ -4401,6 +4421,8 @@ export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   lastRebalancedAt: integer("last_rebalanced_at"),
 }, (table) => [
   index("idx_archetype_type").on(table.type),
+  index("idx_lifecycle_stage").on(table.lifecycleStage),
+  index("idx_outcome_distribution").on(table.outcomeDistribution),
   index("idx_archetype_cohesion").on(table.cohesion),
   index("idx_archetype_sample_count").on(table.sampleCount),
 ]);
