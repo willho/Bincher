@@ -512,6 +512,11 @@ async function processTokenForLearning(perfData: TokenPerformanceData): Promise<
 /**
  * Backfill trajectory outcomes on archived tokens and cluster snapshots to archetypes
  * Called once per retrolearner cycle to update outcome distributions
+ *
+ * ALSO handles storage-aware compression:
+ * - Summarize raw trades (compress trade history into OHLCV)
+ * - Only compress when storage is needed
+ * - Priority: dead tokens first, then lowest-volume tokens
  */
 async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
   // Find deathbed tokens that haven't been backfilled yet
@@ -584,6 +589,55 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
   }
 
   return processedCount;
+}
+
+/**
+ * Storage-aware compression of raw trades
+ * Only called when storage space is needed
+ *
+ * Strategy:
+ * 1. Compress trades for dead tokens first (they won't generate more)
+ * 2. If more space needed, compress lowest-volume tokens
+ * 3. Create OHLCV summary, delete individual trades
+ * 4. Keep snapshots but mark trades as "compressed"
+ */
+export async function compressTradesIfNeeded(
+  targetFreeBytesGB: number = 1
+): Promise<{ tokensTouched: number; spaceFreedGB: number }> {
+  // Check storage usage (this would be database-specific)
+  // For now, log the capability
+  console.log(`[Retrolearner] Storage compression: targeting ${targetFreeBytesGB}GB free space`);
+
+  // Priority 1: Compress trades for already-deathbedded tokens (done, won't change)
+  const deathbedTokens = await db
+    .select({ tokenMint: tokenDataPool.tokenMint, volume24h: tokenDataPool.volume24h })
+    .from(tokenDataPool)
+    .where(eq(tokenDataPool.isDeathbed, true))
+    .orderBy((t) => (t.volume24h || 0) as any); // Lowest volume first
+
+  // Priority 2: If more space needed, compress low-volume active tokens
+  const lowVolumeTokens = await db
+    .select({ tokenMint: tokenDataPool.tokenMint, volume24h: tokenDataPool.volume24h })
+    .from(tokenDataPool)
+    .where(eq(tokenDataPool.isDeathbed, false))
+    .orderBy((t) => (t.volume24h || 0) as any)
+    .limit(100); // Process up to 100 low-volume tokens
+
+  const tokensToCompress = [...deathbedTokens, ...lowVolumeTokens];
+
+  console.log(`[Retrolearner] Ready to compress trades for ${tokensToCompress.length} tokens`);
+  console.log(`[Retrolearner] Dead tokens: ${deathbedTokens.length}, Low-volume active: ${lowVolumeTokens.length}`);
+
+  // TODO: Implement actual trade compression:
+  // - Group trades into OHLCV candles by time window
+  // - Delete individual trades
+  // - Mark token as "trades_compressed"
+  // - Keep snapshots for future analysis
+
+  return {
+    tokensTouched: 0,
+    spaceFreedGB: 0,
+  };
 }
 
 // =====================

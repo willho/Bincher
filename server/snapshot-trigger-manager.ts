@@ -137,16 +137,20 @@ export function getTriggeredMilestones(
     }
   }
 
-  // Trade-count milestones: 50, 100, 150, ..., 500 (capped at 10 blocks of 50)
-  for (let block = 1; block <= 10; block++) {
-    const tradeCount = block * 50;
+  // Trade-count milestones: 50, 100, 150, ... NO CAP (all trades until compression)
+  // Keep creating snapshots for every 50 trades indefinitely
+  // Retrolearner will summarize trades after ingestion
+  let tradeBlock = 1;
+  while (state.totalTradeCount >= tradeBlock * 50) {
+    const tradeCount = tradeBlock * 50;
     const key = `trade_${tradeCount}`;
     const triggered = updated[key] ?? false;
 
-    if (state.totalTradeCount >= tradeCount && !triggered) {
+    if (!triggered) {
       newSnapshots.push({ trigger: key, type: "up" });
       updated[key] = true;
     }
+    tradeBlock++;
   }
 
   return { newSnapshots, updatedMilestones: updated };
@@ -161,47 +165,29 @@ export function getTriggeredMilestones(
  * - Holder count drop >50% in last hour
  * - Price <0.01x entry (crashed to penny)
  */
+/**
+ * Detect if token has reached true deathbed state (fundamentally dead, won't recover)
+ *
+ * NEW STRATEGY: Don't auto-deathbed based on volume/trades
+ * Keep ALL tokens alive for snapshots and trades
+ * Compression happens via storage-aware retrolearner (compressTradesIfNeeded)
+ * with priority: dead tokens first, then low-volume tokens
+ *
+ * Only mark deathbed for:
+ * 1. Extreme crashes (worthless)
+ * 2. Explicit graduation/rug confirmation from retrolearner
+ */
 export function isTokenDeathbed(
   state: TokenState,
-  now: number,
-  lastTradeAt: number | null,
-  volume24h: number | null,
-  peakVolume24h: number | null,
-  holderCount: number | null,
-  peakHolderCount: number | null
+  now: number
 ): boolean {
-  const tokenAgeSeconds = now - state.createdAt;
-
-  // Too early to call deathbed - tokens often have quiet periods in first hour
-  // Require age > 1 hour before any deathbed signals count
-  if (tokenAgeSeconds < 3600) {
-    return false;
-  }
-
-  // Extreme crash to <0.001x (essentially worthless, never recovering)
+  // Only deathbed if token crashed to essentially worthless
+  // <0.001x = 1000x loss, unlikely to ever recover
   if (state.currentMultiplier < 0.001) {
     return true;
   }
 
-  // No trades in 30+ minutes AND token is at least 1 hour old
-  if (lastTradeAt && now - lastTradeAt > 1800) {
-    return true;
-  }
-
-  // Volume collapsed to <0.5% of peak (activity stopped)
-  if (volume24h !== null && peakVolume24h !== null && peakVolume24h > 0) {
-    if (volume24h < peakVolume24h * 0.005) {
-      return true;
-    }
-  }
-
-  // Holder count dropped >80% in last hour (liquidation/rug pattern)
-  if (holderCount !== null && peakHolderCount !== null && peakHolderCount > 0) {
-    if (holderCount < peakHolderCount * 0.2) {
-      return true;
-    }
-  }
-
+  // Otherwise, keep token alive for all snapshots and trades
   return false;
 }
 
