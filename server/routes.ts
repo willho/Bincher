@@ -7396,6 +7396,86 @@ export async function registerRoutes(
   });
 
   // =====================
+  // PAPER TRADING SIMULATION & VALIDATION
+  // =====================
+
+  /**
+   * POST /api/paper/validate-position
+   * Simulate trade on Jupiter and calculate exit strategy before opening position
+   * Uses retrolearner outcomes to set dynamic exit strategies
+   */
+  app.post("/api/paper/validate-position", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { tokenMint, entrySol, strategyTheory } = req.body;
+
+      if (!tokenMint || !entrySol) {
+        return res.status(400).json({ error: "Missing required fields: tokenMint, entrySol" });
+      }
+
+      const { validateAndOpenPaperPosition } = await import("./paper-trading-simulation");
+
+      const validation = await validateAndOpenPaperPosition({
+        userId: req.userId!,
+        tokenMint,
+        entrySol,
+        strategyTheory: strategyTheory || "retrolearner_guided_entry",
+      });
+
+      res.json(validation);
+    } catch (error: any) {
+      console.error("Error validating position:", error);
+      res.status(500).json({ error: error.message || "Failed to validate position" });
+    }
+  });
+
+  /**
+   * GET /api/paper/validation-stats
+   * Get strategy validation success rates and prediction accuracy
+   */
+  app.get("/api/paper/validation-stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { strategyTheory } = req.query;
+      const lookbackHours = parseInt((req.query.lookbackHours as string) || "24");
+
+      const { getStrategyValidationRate } = await import("./paper-trading-simulation");
+
+      const stats = await getStrategyValidationRate(
+        (strategyTheory as string) || "retrolearner_guided_entry",
+        lookbackHours
+      );
+
+      res.json({
+        strategyTheory: strategyTheory || "retrolearner_guided_entry",
+        lookbackHours,
+        ...stats,
+      });
+    } catch (error: any) {
+      console.error("Error getting validation stats:", error);
+      res.status(500).json({ error: error.message || "Failed to get validation stats" });
+    }
+  });
+
+  /**
+   * GET /api/paper/exit-strategies/:tokenMint
+   * Get calculated exit strategy for a token based on retrolearner patterns
+   */
+  app.get("/api/paper/exit-strategies/:tokenMint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { calculateDynamicExitStrategy } = await import("./paper-trading-simulation");
+
+      const strategy = await calculateDynamicExitStrategy(req.params.tokenMint, 1.0);
+
+      res.json({
+        tokenMint: req.params.tokenMint,
+        exitStrategy: strategy,
+      });
+    } catch (error: any) {
+      console.error("Error calculating exit strategy:", error);
+      res.status(500).json({ error: error.message || "Failed to calculate exit strategy" });
+    }
+  });
+
+  // =====================
   // DISCOVERY ENGINE API ROUTES
   // =====================
   

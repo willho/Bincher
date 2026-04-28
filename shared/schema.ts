@@ -2676,6 +2676,41 @@ export const insertStrategyExperimentsSchema = createInsertSchema(strategyExperi
 export type StrategyExperiment = typeof strategyExperiments.$inferSelect;
 export type InsertStrategyExperiment = z.infer<typeof insertStrategyExperimentsSchema>;
 
+// Strategy validation records - track predictions vs actual outcomes
+export const strategyValidations = pgTable("strategy_validations", {
+  id: serial("id").primaryKey(),
+
+  // Position reference
+  positionId: integer("position_id").notNull(),
+
+  // Strategy being tested
+  strategyTheory: text("strategy_theory").notNull(), // e.g., "retrolearner_guided_entry", "wallet_copy"
+
+  // Prediction
+  expectedOutcome: real("expected_outcome").notNull(), // Predicted multiplier from retrolearner
+
+  // Result (filled when position closes)
+  actualOutcome: real("actual_outcome"), // Actual multiplier achieved
+  actualExitReason: text("actual_exit_reason"), // take_profit, stop_loss, trailing_stop, time_based, manual
+
+  // Validation status
+  simulationPassed: boolean("simulation_passed").default(true), // Did Jupiter simulation pass?
+  validationStatus: text("validation_status").notNull().default("pending"), // pending, confirmed, refuted
+  // confirmed: actualOutcome > (expectedOutcome * 0.5)
+  // refuted: actualOutcome < (expectedOutcome * 0.1)
+
+  // Latency measurement
+  latencyMs: integer("latency_ms").notNull(), // Time from validation to position open
+
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  confirmedAt: integer("confirmed_at"), // When position closed
+});
+
+export const insertStrategyValidationsSchema = createInsertSchema(strategyValidations).omit({ id: true });
+export type StrategyValidation = typeof strategyValidations.$inferSelect;
+export type InsertStrategyValidation = z.infer<typeof insertStrategyValidationsSchema>;
+
 // =============================================
 // PHASE E: DISCOVERY & AI LEARNING
 // =============================================
