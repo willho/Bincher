@@ -4089,6 +4089,42 @@ export type InsertIndicatorVector = z.infer<typeof insertIndicatorVectorSchema>;
 // Retrolearner - Token Fingerprints
 // Learned patterns per fingerprint type (pregrad bonding curve vs postgrad Raydium)
 // Used to match new tokens against proven playbooks and predict outcomes
+// Fingerprint snapshots - trade-gated, trajectory-aware snapshots capturing token evolution
+export const tokenFingerprintSnapshots = pgTable("token_fingerprint_snapshots", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull(),
+
+  // Snapshot timing & position
+  timestamp: integer("timestamp").notNull(), // Unix timestamp when snapshot taken
+  tokenAgeSeconds: integer("token_age_seconds").notNull(), // Seconds since token creation
+  snapshotNumber: integer("snapshot_number").notNull(), // Sequential snapshot count (1, 2, 3...)
+  positionInArc: real("position_in_arc"), // snapshotNumber / totalSnapshots (calculated at deathbed)
+
+  // Snapshot trigger
+  snapshotTrigger: text("snapshot_trigger").notNull(), // "creation" | "time_based" | "price_milestone" | "trade_volume"
+  triggerValue: text("trigger_value"), // e.g., "+30%" for price move, "250_trades" for volume
+
+  // Two trajectory slots
+  trajectoryAnchored: jsonb("trajectory_anchored").notNull(), // Arc from 0 → this snapshot (locked)
+  trajectoryCurrent: jsonb("trajectory_current").notNull(), // Arc from 0 → now (updates via backfill)
+
+  // Snapshot data (55-dimensional feature vector)
+  features: jsonb("features").notNull(), // Early dynamics + holder metrics
+  top20HolderMetrics: jsonb("top20_holder_metrics"), // { medianMultiplier, profitableCount, ... }
+
+  // Metadata
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+}, (table) => [
+  index("idx_token_mint_timestamp").on(table.tokenMint, table.timestamp),
+  index("idx_token_mint_snapshot_number").on(table.tokenMint, table.snapshotNumber),
+  index("idx_position_in_arc").on(table.positionInArc),
+]);
+
+export const insertTokenFingerprintSnapshotSchema = createInsertSchema(tokenFingerprintSnapshots).omit({ id: true });
+export type TokenFingerprintSnapshot = typeof tokenFingerprintSnapshots.$inferSelect;
+export type InsertTokenFingerprintSnapshot = z.infer<typeof insertTokenFingerprintSnapshotSchema>;
+
 export const tokenFingerprints = pgTable("token_fingerprints", {
   id: serial("id").primaryKey(),
 
