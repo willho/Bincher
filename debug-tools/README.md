@@ -11,6 +11,27 @@
 
 **Conclusion**: External website scraping is not feasible from this deployment environment. All web resources block requests from this IP with host/CORS restrictions.
 
+## Test Results Summary
+
+Command executed:
+```
+curl -I https://pump.fun
+curl -I https://solscan.io
+npm install puppeteer
+node debug-tools/count-launches.js
+```
+
+**Outcomes**:
+1. ✗ `curl -I https://pump.fun` → `HTTP 403 host_not_allowed`
+2. ✗ `curl -I https://solscan.io` → `HTTP 403 host_not_allowed`
+3. ✓ Puppeteer installed successfully
+4. ✗ Puppeteer launch → `net::ERR_CERT_AUTHORITY_INVALID` (SSL bypass attempts failed)
+5. ✗ Direct API calls → All return 403 (CORS/IP blocked)
+
+**Conclusion**: External website/API access is completely blocked from this environment. Host-level firewall restrictions prevent any connection to Pump.fun, Solscan, DexScreener, etc.
+
+---
+
 ## Available Debug Approaches
 
 ### 1. Internal Data Validation (`compare-data-sources.ts`)
@@ -38,22 +59,32 @@ Query Solana blockchain directly via RPC to verify:
 - Trade signatures exist on-chain for recorded trades
 - Holder addresses are legitimate
 
-## Setup
+## Quick Start
 
-### Prerequisites
-1. Database connection (set `DATABASE_URL`)
-2. Solana RPC endpoint (use existing Helius/Chainstack config)
-
-### NPM Scripts
+### 1. Check System Status
 ```bash
-# Compare internal vs RPC state
+npm run debug:status
+```
+Shows: Version, token metrics, API quotas, system health.
+Works without database access.
+
+### 2. Setup Database (Optional)
+For full validation, set your database connection:
+```bash
+export DATABASE_URL="postgresql://user:pass@localhost/penny_pincher"
+npm run debug:compare
+```
+
+### Available Scripts
+```bash
+# Display system status (no DB required)
+npm run debug:status
+
+# Compare internal DB vs RPC state (requires DATABASE_URL)
 npm run debug:compare
 
-# Inspect token snapshots (once implemented)
-npm run debug:snapshots
-
-# Query blockchain state (once implemented)
-npm run debug:rpc-state
+# Scrape Pump.fun (requires external internet access)
+npm run debug:scrape-pump
 ```
 
 ## Example: Validating Token Discovery
