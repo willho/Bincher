@@ -2,6 +2,7 @@ import { db } from "./db";
 import { eq, and, gte, desc } from "drizzle-orm";
 import { tokenFingerprintSnapshots } from "@shared/schema";
 import { getTopHoldersWithPnL } from "./snapshot-holder-pnl-calculator";
+import { latencyMonitor } from "./latency-monitor";
 
 /**
  * Fingerprint Snapshot Manager
@@ -136,6 +137,10 @@ export async function createFingerprintSnapshot(
     maxMultiplier: Math.max(...holderMultipliers),
   };
 
+  // Get worst-case latency and slippage from last 3 seconds
+  const { worstLatencyMs, worstSlippagePercent } =
+    latencyMonitor.getWorstInWindow(3);
+
   // Build trajectory anchored (arc from 0 to this snapshot)
   const trajectoryAnchored = {
     priceChange: ((currentPrice / getPriceAtCreation(tokenMint)) - 1) * 100, // TODO: fetch creation price
@@ -162,6 +167,8 @@ export async function createFingerprintSnapshot(
       trajectoryCurrent: JSON.stringify(trajectoryAnchored), // Starts same as anchored
       features: JSON.stringify(features),
       top20HolderMetrics: JSON.stringify(top20HolderMetrics),
+      worstLatencyMs, // Worst Jupiter quote latency in last 3 sec
+      worstSlippagePercent, // Worst slippage in last 3 sec
       createdAt: now,
       updatedAt: now,
     })

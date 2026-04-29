@@ -167,6 +167,11 @@ app.use((req, res, next) => {
     const { initializePumpSdk } = await import("./pump-sdk-client");
     await initializePumpSdk();
 
+    // Start latency monitor (Jupiter swap simulation sampling)
+    const { latencyMonitor } = await import("./latency-monitor");
+    await latencyMonitor.start();
+    console.log("✓ Latency monitor started (Jupiter sampling every 1s)");
+
     const { startPumpFunMonitoring } = await import("./pumpfun-bonding-curve");
     startPumpFunMonitoring();
 

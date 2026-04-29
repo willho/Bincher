@@ -4112,6 +4112,10 @@ export const tokenFingerprintSnapshots = pgTable("token_fingerprint_snapshots", 
   features: jsonb("features").notNull(), // Early dynamics + holder metrics
   top20HolderMetrics: jsonb("top20_holder_metrics"), // { medianMultiplier, profitableCount, ... }
 
+  // Execution environment at snapshot time (last 3 seconds, worst-case)
+  worstLatencyMs: integer("worst_latency_ms"), // Worst Jupiter quote latency in last 3 sec
+  worstSlippagePercent: real("worst_slippage_percent"), // Worst slippage in last 3 sec
+
   // Metadata
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
