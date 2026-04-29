@@ -824,7 +824,31 @@ export async function registerRoutes(
                 priceUsd: priceUsdW,
               }, 'whale_swap');
             }
-            
+
+            // Re-activate archived tokens if high-performing whale buys them
+            if (whaleIsBuy) {
+              try {
+                const archivedToken = await db
+                  .select()
+                  .from(tokenDataPool)
+                  .where(and(eq(tokenDataPool.tokenMint, whaleTokenMint), eq(tokenDataPool.isDeathbed, true)))
+                  .limit(1);
+
+                if (archivedToken.length > 0) {
+                  await db
+                    .update(tokenDataPool)
+                    .set({
+                      isDeathbed: false,
+                      deathbedDetectedAt: null,
+                      deathbedSnapshotCreated: false,
+                    })
+                    .where(eq(tokenDataPool.tokenMint, whaleTokenMint));
+
+                  console.log(`[WhaleReactivation] Whale ${swapWalletAddress.slice(0, 8)} reactivated archived token ${whaleTokenMint.slice(0, 8)}`);
+                }
+              } catch (_) {}
+            }
+
             // Whale-sourced token discovery
             try {
               const { processWhaleTokenDiscovery, discoverNewWhalesFromToken } = await import("./whale-discovery");
