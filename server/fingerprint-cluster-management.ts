@@ -475,16 +475,20 @@ function determineTrajectoryOutcome(
 
 /**
  * Calculate whale quality score for a token (0.2-1.0)
- * Scores the top 20 holders to determine outcome weight
+ * Scores the top 20 holders AT SNAPSHOT TIME to determine outcome weight
  *
- * High quality (0.8-1.0) = active/watch-tier whales with high success rate
- * Low quality (0.2-0.4) = unknown wallets, snipers, bots
+ * IMPORTANT: This evaluates whale judgment at the snapshot moment, not post-death state.
+ * A token that did 5x at snapshot then crashed is still a success (pump_5x outcome).
+ * Don't penalize outcomes just because token died naturally afterward.
  *
- * Used to weight outcome contributions: high-quality whale backing = higher impact on cluster
+ * High quality (0.8-1.0) = many profitable whales, high median multiplier at snapshot
+ * Low quality (0.2-0.4) = few profitable whales, unknown/sniper holdings at snapshot
+ *
+ * Used to weight outcome contributions: strong whale backing = higher cluster impact
  */
 async function getWhaleQualityScore(tokenMint: string): Promise<number> {
   try {
-    // Get latest snapshot with holder metrics
+    // Get latest snapshot with holder metrics (captured AT that moment in time)
     const snapshot = await db.query.tokenFingerprintSnapshots.findFirst({
       where: eq(tokenFingerprintSnapshots.tokenMint, tokenMint),
       orderBy: desc(tokenFingerprintSnapshots.timestamp),
@@ -494,24 +498,24 @@ async function getWhaleQualityScore(tokenMint: string): Promise<number> {
 
     const metrics = snapshot.top20HolderMetrics as any;
 
-    // Use holder concentration as quality proxy:
-    // If top 20 median multiplier > 1.5x, they made good decisions
-    // If profitable count > 15, the token has strong whale support
+    // Score based on snapshot state, not post-death state
+    // If 15+ whales profitable at snapshot = pattern was recognizable by quality wallets
+    // If median multiplier > 2x at snapshot = whales got in early
     const medianMultiplier = metrics.medianMultiplier || 1;
     const profitableCount = metrics.profitableCount || 0;
 
     let score = 0.5; // Start neutral
 
-    // Profitable whales = good token quality
+    // Strong whale backing (many profitable at snapshot moment)
     if (profitableCount >= 15) {
-      score += 0.3; // Strong whale backing
+      score += 0.3;
     } else if (profitableCount >= 10) {
       score += 0.15;
     }
 
-    // Median multiplier shows whale judgment
+    // Early recognition (high multiplier at snapshot = whales caught early)
     if (medianMultiplier > 2) {
-      score += 0.2; // Whales knew early
+      score += 0.2;
     } else if (medianMultiplier > 1.5) {
       score += 0.1;
     }
