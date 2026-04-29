@@ -40,6 +40,13 @@ const SYSTEM_PICKS_CONFIG = {
 
   // Jupiter validation
   jupiterSimulateTimeoutMs: 10000,
+
+  // Rug wariness (conservative baseline)
+  minProfitWindowMinutes: 5, // Buffer: skip if <5min remaining
+  minRugSampleSize: 10, // Require 10+ rug records before trading
+  rugWarinessHigh: 0.40, // >40% rugs = don't trade
+  rugWarinessMedium: 0.20, // >20% rugs = 3x conviction penalty
+  convictionPenaltyMultiplier: 3.0, // For rug-prone clusters
 };
 
 interface SystemPick {
@@ -88,6 +95,75 @@ export async function initializeSystemPicksFund(): Promise<void> {
   });
 
   console.log(`[SystemPicks] Fund session started: ${currentFundSession.sessionId}`);
+}
+
+// =====================
+// RUG WARINESS ASSESSMENT
+// =====================
+
+/**
+ * Calculate rug outcome percentage in cluster
+ */
+function calculateClusterRugRate(outcomeDistribution: Record<string, number>): number {
+  const rugOutcomes = ['crash_90', 'crash_95', 'crash_99', 'rug_pull'];
+  const totalOutcomes = Object.values(outcomeDistribution).reduce((a, b) => a + b, 0);
+  if (totalOutcomes === 0) return 0;
+
+  const rugCount = rugOutcomes.reduce((sum, outcome) => sum + (outcomeDistribution[outcome] || 0), 0);
+  return rugCount / totalOutcomes;
+}
+
+/**
+ * Assess cluster wariness level and determine if tradeable
+ * Returns: { level: 'safe'|'medium'|'high', rugRate: number, canTrade: boolean, reason?: string }
+ */
+function assessClusterWariness(
+  metadata: Record<string, any>,
+  outcomeDistribution: Record<string, number>
+): {
+  level: 'safe' | 'medium' | 'high';
+  rugRate: number;
+  canTrade: boolean;
+  reason?: string;
+} {
+  const rugRate = calculateClusterRugRate(outcomeDistribution);
+  const rugSampleSize = (metadata?.rugProfitWindows?.length || 0);
+
+  // Require minimum sample size before trading
+  if (rugSampleSize < SYSTEM_PICKS_CONFIG.minRugSampleSize) {
+    return {
+      level: 'high',
+      rugRate,
+      canTrade: false,
+      reason: `Untested cluster (${rugSampleSize}/${SYSTEM_PICKS_CONFIG.minRugSampleSize} rug samples)`,
+    };
+  }
+
+  // High rug rate = don't trade
+  if (rugRate >= SYSTEM_PICKS_CONFIG.rugWarinessHigh) {
+    return {
+      level: 'high',
+      rugRate,
+      canTrade: false,
+      reason: `High rug rate (${(rugRate * 100).toFixed(0)}% >= ${(SYSTEM_PICKS_CONFIG.rugWarinessHigh * 100).toFixed(0)}%)`,
+    };
+  }
+
+  // Medium rug rate = require higher conviction
+  if (rugRate >= SYSTEM_PICKS_CONFIG.rugWarinessMedium) {
+    return {
+      level: 'medium',
+      rugRate,
+      canTrade: true,
+      reason: `Medium rug rate (${(rugRate * 100).toFixed(0)}%) - conviction penalty applied`,
+    };
+  }
+
+  return {
+    level: 'safe',
+    rugRate,
+    canTrade: true,
+  };
 }
 
 // =====================
@@ -140,9 +216,19 @@ async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick 
       return null;
     }
 
-    // Check profit window: skip tokens where rug window has likely passed
+    // ===== RUG WARINESS CHECKS =====
     const primaryCluster = clusterResult.matches[0];
     const clusterMetadata = primaryCluster.metadata || {};
+    const clusterOutcomes = clusterResult.blendedOutcomes;
+
+    // 1. ASSESS CLUSTER WARINESS
+    const wariness = assessClusterWariness(clusterMetadata, clusterOutcomes);
+    if (!wariness.canTrade) {
+      console.log(`[SystemPicks] Token ${tokenMint.slice(0, 8)} blocked: ${wariness.reason}`);
+      return null;
+    }
+
+    // 2. CHECK PROFIT WINDOW (with higher buffer)
     const { getClusterAverageProfitWindow } = await import("./fingerprint-cluster-management");
     const avgProfitWindowMinutes = getClusterAverageProfitWindow(clusterMetadata);
 
@@ -150,11 +236,12 @@ async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick 
       const tokenAgeMinutes = snapshot.tokenAgeSeconds / 60;
       const remainingWindow = avgProfitWindowMinutes - tokenAgeMinutes;
 
-      // Skip if less than 2 minutes of profit window remaining
-      if (remainingWindow < 2) {
+      // Skip if less than configurable profit window remaining (default 5 min)
+      if (remainingWindow < SYSTEM_PICKS_CONFIG.minProfitWindowMinutes) {
         console.log(
           `[SystemPicks] Token ${tokenMint.slice(0, 8)} past profit window ` +
-          `(age=${tokenAgeMinutes.toFixed(0)}min, window=${avgProfitWindowMinutes}min)`
+          `(age=${tokenAgeMinutes.toFixed(0)}min, remaining=${remainingWindow.toFixed(0)}min, ` +
+          `required=${SYSTEM_PICKS_CONFIG.minProfitWindowMinutes}min)`
         );
         return null;
       }
@@ -175,14 +262,21 @@ async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick 
     const clusterConfidence = clusterResult.matches[0].similarity;
     const { exitScore, recommendation } = calculateExitSignal(clusterConfidence, whaleSignal);
 
-    // Adjust confidence for blending
-    const adjustedConfidence = clusterConfidence * (1 - clusterResult.confidencePenalty);
+    // 3. APPLY RUG CONFIDENCE PENALTY
+    let adjustedConfidence = clusterConfidence * (1 - clusterResult.confidencePenalty);
+    let adjustedOutcomeSuccess = outcomesSuccess;
+
+    if (wariness.level === 'medium') {
+      // Medium rug rate: require 3x higher conviction - penalize both confidence and outcome success
+      adjustedConfidence = adjustedConfidence / SYSTEM_PICKS_CONFIG.convictionPenaltyMultiplier;
+      adjustedOutcomeSuccess = outcomesSuccess / SYSTEM_PICKS_CONFIG.convictionPenaltyMultiplier;
+    }
 
     const pick: SystemPick = {
       tokenMint,
       tokenSymbol: tokenData?.tokenSymbol || tokenMint.slice(0, 8),
       clusterConfidence: adjustedConfidence,
-      clusterOutcomeSuccess: outcomesSuccess,
+      clusterOutcomeSuccess: adjustedOutcomeSuccess,
       whaleConsensus: whaleSignal.exitConsensus,
       whaleWeight: getWhaleWeightMetrics().currentWeight,
       exitScore,
