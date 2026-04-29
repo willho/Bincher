@@ -572,17 +572,17 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
         tokenAgeSeconds
       );
 
-      // Backfill all snapshots with trajectory outcome
-      await db
-        .update(tokenFingerprints)
-        .set({ trajectoryOutcome })
-        .where(eq(tokenFingerprints.tokenMint, token.tokenMint));
-
       // Store outcome label on token
       await setTokenTrajectoryOutcome(token.tokenMint, trajectoryOutcome);
 
       // Cluster all snapshots into archetypes, updating outcome distributions
-      await archiveTokenAndUpdateOutcomes(token.tokenMint, trajectoryOutcome);
+      const tokenAgeMinutes = Math.floor(tokenAgeSeconds / 60);
+      await archiveTokenAndUpdateOutcomes(
+        token.tokenMint,
+        finalMultiplier,
+        maxMultiplier,
+        tokenAgeMinutes
+      );
 
       processedCount++;
     } catch (error) {
