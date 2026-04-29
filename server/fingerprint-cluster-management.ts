@@ -41,6 +41,56 @@ function cosineSimilarity(v1: number[], v2: number[]): number {
 }
 
 /**
+ * Detect when a rug pull started by analyzing snapshot progression
+ * Returns timestamp when price declined >50% from peak (or null if no clear rug)
+ */
+function detectRugOnsetFromSnapshots(snapshots: Array<{
+  timestamp: number;
+  trajectoryAnchored?: { priceChange: number };
+  trajectoryCurrent?: { priceChange: number };
+}>): number | null {
+  if (snapshots.length < 2) return null;
+
+  const priceProgression = snapshots.map(s => ({
+    timestamp: s.timestamp,
+    priceChange: s.trajectoryCurrent?.priceChange || s.trajectoryAnchored?.priceChange || 0,
+  })).sort((a, b) => a.timestamp - b.timestamp);
+
+  let peakPrice = 1;
+  let peakTimestamp = priceProgression[0].timestamp;
+
+  for (const snap of priceProgression) {
+    if (snap.priceChange > peakPrice) {
+      peakPrice = snap.priceChange;
+      peakTimestamp = snap.timestamp;
+    }
+  }
+
+  // Find first point where price dropped 50%+ from peak
+  for (const snap of priceProgression) {
+    if (snap.timestamp <= peakTimestamp) continue; // Skip before peak
+    const decline = (peakPrice - snap.priceChange) / peakPrice;
+    if (decline >= 0.5) {
+      return snap.timestamp; // Rug onset
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Calculate profit window in minutes: time from token creation to rug onset
+ * If no rug detected, returns null
+ */
+function calculateProfitWindowMinutes(
+  tokenCreatedAt: number,
+  rugOnsetTimestamp: number | null
+): number | null {
+  if (!rugOnsetTimestamp) return null;
+  return Math.floor((rugOnsetTimestamp - tokenCreatedAt) / 60);
+}
+
+/**
  * ALGORITHM 1: Snapshot Lifecycle-Weighted Averaging
  * Weight snapshots by lifecycle phase: early (1.0x) → mid (0.8x) → late (0.5x) → deathbed (0.2x)
  * Prevents deathbed noise from biasing cluster centroid
@@ -173,6 +223,7 @@ export interface ClusterMatch {
   clusterId: string;
   similarity: number;
   outcomeDistribution: Record<string, number>;
+  metadata?: Record<string, any>;
 }
 
 export function computeBlendWeights(matches: ClusterMatch[]): Record<string, number> {
@@ -298,6 +349,7 @@ export async function clusterSnapshotToArchetype(
         clusterId: cluster.clusterId,
         similarity,
         outcomeDistribution: (cluster.outcomeDistribution as Record<string, number>) || {},
+        metadata: (cluster.metadata as Record<string, any>) || {},
       });
     }
   }
@@ -535,11 +587,15 @@ export async function archiveTokenAndUpdateOutcomes(
   tokenMint: string,
   finalMultiplier: number,
   maxMultiplierReached: number,
-  tokenAgeMinutes: number
+  tokenAgeMinutes: number,
+  rugOnsetTimestamp?: number,
+  profitWindowMinutes?: number
 ): Promise<{
   snapshotCount: number;
   archetypesUpdated: number;
   trajectoryOutcome: string;
+  rugOnsetTimestamp?: number;
+  profitWindowMinutes?: number;
 }> {
   // Determine trajectory outcome shape
   const trajectoryOutcome = determineTrajectoryOutcome(
@@ -661,16 +717,33 @@ export async function archiveTokenAndUpdateOutcomes(
       }
 
       const now = Math.floor(Date.now() / 1000);
+
+      // Store profit window metadata if rug was detected
+      let clusterMetadata = (bestArchetype.metadata as Record<string, any>) || {};
+      if (profitWindowMinutes !== undefined) {
+        if (!clusterMetadata.rugProfitWindows) clusterMetadata.rugProfitWindows = [];
+        clusterMetadata.rugProfitWindows.push({
+          tokenMint,
+          windowMinutes: profitWindowMinutes,
+          recordedAt: now,
+        });
+        // Keep only recent 100 records per cluster
+        if (clusterMetadata.rugProfitWindows.length > 100) {
+          clusterMetadata.rugProfitWindows = clusterMetadata.rugProfitWindows.slice(-100);
+        }
+      }
+
       await db
         .update(tokenFingerprintClusters)
         .set({
-          sampleCount: totalCount,
+          sampleCount: weightedCount,
           snapshotTokenMints: [...currentMints, tokenMint],
           centroid: newCentroid,
           outcomeDistribution: newOutcomes,
           cohesion: newCohesion,
           minSimilarity: minSim,
           maxSimilarity: maxSim,
+          metadata: clusterMetadata,
           updatedAt: now,
         })
         .where(eq(tokenFingerprintClusters.clusterId, bestArchetype.clusterId));
@@ -683,7 +756,20 @@ export async function archiveTokenAndUpdateOutcomes(
     snapshotCount: fingerprints.length,
     archetypesUpdated: archetypesSet.size,
     trajectoryOutcome,
+    rugOnsetTimestamp,
+    profitWindowMinutes,
   };
+}
+
+/**
+ * Get average profit window (minutes before rug) for a cluster
+ * Returns null if cluster has no rug data
+ */
+export function getClusterAverageProfitWindow(clusterMetadata: any): number | null {
+  const windows = (clusterMetadata?.rugProfitWindows as Array<{ windowMinutes: number }>) || [];
+  if (windows.length === 0) return null;
+  const avg = windows.reduce((sum, w) => sum + w.windowMinutes, 0) / windows.length;
+  return Math.round(avg);
 }
 
 /**

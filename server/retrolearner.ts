@@ -540,8 +540,16 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
         continue;
       }
 
-      // Get all snapshots for this token to determine trajectory outcome
-      const snapshots = await db
+      // Get all snapshots for this token (use newer tokenFingerprintSnapshots which has trajectory data)
+      const { tokenFingerprintSnapshots } = await import("@shared/schema");
+      const allSnapshots = await db
+        .select()
+        .from(tokenFingerprintSnapshots)
+        .where(eq(tokenFingerprintSnapshots.tokenMint, token.tokenMint))
+        .orderBy(tokenFingerprintSnapshots.timestamp);
+
+      // Fallback to old tokenFingerprints if no new snapshots
+      let snapshots = allSnapshots.length > 0 ? allSnapshots : await db
         .select()
         .from(tokenFingerprints)
         .where(eq(tokenFingerprints.tokenMint, token.tokenMint));
@@ -552,7 +560,7 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
 
       // Determine outcome from multiplier progression
       const multipliers = snapshots
-        .map((s) => s.medianMultiplier || 1)
+        .map((s: any) => s.medianMultiplier || s.top20HolderMetrics?.medianMultiplier || 1)
         .filter((m) => m > 0);
 
       if (multipliers.length === 0) {
@@ -575,13 +583,52 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
       // Store outcome label on token
       await setTokenTrajectoryOutcome(token.tokenMint, trajectoryOutcome);
 
+      // Detect rug onset and calculate profit window
+      const snapshotProgression = snapshots.map((s: any) => ({
+        timestamp: s.timestamp,
+        trajectoryAnchored: s.trajectoryAnchored,
+        trajectoryCurrent: s.trajectoryCurrent,
+      }));
+
+      // Detect rug onset (when price dropped 50%+ from peak)
+      let rugOnsetTimestamp: number | null = null;
+      let profitWindowMinutes: number | null = null;
+
+      if (trajectoryOutcome.includes('crash') || trajectoryOutcome.includes('rug')) {
+        // Look for rug onset in snapshot progression
+        let peakPrice = 1;
+        let peakTimestamp = snapshotProgression[0]?.timestamp || tokenAgeSeconds;
+
+        for (const snap of snapshotProgression) {
+          const priceChange = snap.trajectoryCurrent?.priceChange || snap.trajectoryAnchored?.priceChange || 0;
+          if (priceChange > peakPrice) {
+            peakPrice = priceChange;
+            peakTimestamp = snap.timestamp;
+          }
+        }
+
+        // Find first point where price dropped 50%+ from peak
+        for (const snap of snapshotProgression) {
+          if (snap.timestamp <= peakTimestamp) continue;
+          const priceChange = snap.trajectoryCurrent?.priceChange || snap.trajectoryAnchored?.priceChange || 0;
+          const decline = (peakPrice - priceChange) / peakPrice;
+          if (decline >= 0.5) {
+            rugOnsetTimestamp = snap.timestamp;
+            profitWindowMinutes = Math.floor((snap.timestamp - token.createdAt) / 60);
+            break;
+          }
+        }
+      }
+
       // Cluster all snapshots into archetypes, updating outcome distributions
       const tokenAgeMinutes = Math.floor(tokenAgeSeconds / 60);
       await archiveTokenAndUpdateOutcomes(
         token.tokenMint,
         finalMultiplier,
         maxMultiplier,
-        tokenAgeMinutes
+        tokenAgeMinutes,
+        rugOnsetTimestamp,
+        profitWindowMinutes
       );
 
       processedCount++;

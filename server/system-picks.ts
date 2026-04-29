@@ -140,6 +140,26 @@ async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick 
       return null;
     }
 
+    // Check profit window: skip tokens where rug window has likely passed
+    const primaryCluster = clusterResult.matches[0];
+    const clusterMetadata = primaryCluster.metadata || {};
+    const { getClusterAverageProfitWindow } = await import("./fingerprint-cluster-management");
+    const avgProfitWindowMinutes = getClusterAverageProfitWindow(clusterMetadata);
+
+    if (avgProfitWindowMinutes !== null) {
+      const tokenAgeMinutes = snapshot.tokenAgeSeconds / 60;
+      const remainingWindow = avgProfitWindowMinutes - tokenAgeMinutes;
+
+      // Skip if less than 2 minutes of profit window remaining
+      if (remainingWindow < 2) {
+        console.log(
+          `[SystemPicks] Token ${tokenMint.slice(0, 8)} past profit window ` +
+          `(age=${tokenAgeMinutes.toFixed(0)}min, window=${avgProfitWindowMinutes}min)`
+        );
+        return null;
+      }
+    }
+
     const tokenData = await getTokenData(tokenMint);
 
     // NEW: Generate whale signals
