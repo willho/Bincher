@@ -7,6 +7,8 @@
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
+    "proxy:1": "NODE_ENV=production tsx server/proxy-server.ts --config .env.proxy-1",
+    "proxy:2": "NODE_ENV=production tsx server/proxy-server.ts --config .env.proxy-2",
     "check": "tsc",
     "db:push": "drizzle-kit push",
     "test": "vitest run",
