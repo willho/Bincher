@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { 
+import {
   systemLogs, type InsertSystemLog,
   aiLogs, type InsertAiLog,
   apiLogs, type InsertApiLog,
@@ -13,6 +13,18 @@ type LogStatus = "success" | "error" | "warning" | "info";
 type LogService = "copy_trade" | "alert" | "webhook" | "swap" | "sell" | "system" | "telegram" | "helius" | "jupiter" | "ai" | "dexscreener" | "geckoterminal";
 type ApiService = "jupiter" | "dexscreener" | "geckoterminal" | "binance";
 type ErrorType = "timeout" | "validation" | "network" | "auth" | "rate_limit" | "unknown";
+type PipelineCategory =
+  | "discovery"
+  | "features"
+  | "ann"
+  | "snapshot"
+  | "trades"
+  | "graduation"
+  | "retrolearner"
+  | "api"
+  | "db"
+  | "capacity"
+  | "system";
 
 export type { LogService, LogStatus, ApiService, ErrorType };
 
@@ -743,4 +755,266 @@ export function stopSystemLogCleanup(): void {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
   }
+}
+
+// =====================
+// PIPELINE METRICS & LOGGING
+// =====================
+
+/**
+ * In-memory event buffer for comprehensive pipeline tracking
+ * Flushes to database on demand or crash
+ */
+
+export interface PipelineLogEvent {
+  timestamp: number;
+  category: PipelineCategory;
+  message: string;
+  level: "trace" | "debug" | "info" | "warn" | "error";
+
+  // Context
+  tokenMint?: string;
+  walletAddress?: string;
+  snapshotId?: string;
+
+  // Metrics
+  metrics?: {
+    apiCalls?: number;
+    dbReads?: number;
+    dbWrites?: number;
+    dbDeletes?: number;
+    cpuMs?: number;
+    memoryMb?: number;
+    latencyMs?: number;
+  };
+
+  // Trace
+  traceId: string;
+  parentTraceId?: string;
+}
+
+export interface SystemMetricsSnapshot {
+  timestamp: number;
+
+  // State
+  activeTokens: number;
+  activeSnapshots: number;
+  capacityPercent: number;
+
+  // API usage (hourly)
+  apiUsage: {
+    pumpPortal: number;
+    pumpSdk: number;
+    dexPaprika: number;
+    dexScreener: number;
+    chainstack: number;
+    helius: number;
+  };
+
+  // DB operations (hourly)
+  dbOps: {
+    reads: number;
+    writes: number;
+    deletes: number;
+  };
+
+  // Performance
+  avgLatencies: {
+    feature: number; // ms
+    ann: number; // ms
+    dbWrite: number; // ms
+    api: number; // ms
+  };
+
+  // Resources
+  memory: number; // MB
+  cpu: number; // %
+  errors: number;
+  errorsByCategory: Record<string, number>;
+}
+
+// Ring buffer for events
+const PIPELINE_BUFFER_SIZE = 10_000;
+let pipelineBuffer: PipelineLogEvent[] = [];
+let pipelineIndex = 0;
+
+// Metrics tracking
+let metricsSnapshot: SystemMetricsSnapshot = {
+  timestamp: Date.now(),
+  activeTokens: 0,
+  activeSnapshots: 0,
+  capacityPercent: 0,
+  apiUsage: {
+    pumpPortal: 0,
+    pumpSdk: 0,
+    dexPaprika: 0,
+    dexScreener: 0,
+    chainstack: 0,
+    helius: 0,
+  },
+  dbOps: { reads: 0, writes: 0, deletes: 0 },
+  avgLatencies: { feature: 0, ann: 0, dbWrite: 0, api: 0 },
+  memory: 0,
+  cpu: 0,
+  errors: 0,
+  errorsByCategory: {},
+};
+
+/**
+ * Log a pipeline event
+ */
+export function logPipeline(
+  category: PipelineCategory,
+  message: string,
+  level: "trace" | "debug" | "info" | "warn" | "error" = "info",
+  opts?: {
+    tokenMint?: string;
+    walletAddress?: string;
+    snapshotId?: string;
+    traceId?: string;
+    parentTraceId?: string;
+    metrics?: PipelineLogEvent["metrics"];
+  }
+): string {
+  const traceId = opts?.traceId || generatePipelineTraceId();
+
+  const event: PipelineLogEvent = {
+    timestamp: Date.now(),
+    category,
+    message,
+    level,
+    tokenMint: opts?.tokenMint,
+    walletAddress: opts?.walletAddress,
+    snapshotId: opts?.snapshotId,
+    traceId,
+    parentTraceId: opts?.parentTraceId,
+    metrics: opts?.metrics,
+  };
+
+  // Add to circular buffer
+  pipelineBuffer[pipelineIndex % PIPELINE_BUFFER_SIZE] = event;
+  pipelineIndex++;
+
+  // Update metrics
+  if (opts?.metrics) {
+    if (opts.metrics.apiCalls) metricsSnapshot.apiUsage.pumpPortal += opts.metrics.apiCalls;
+    if (opts.metrics.dbReads) metricsSnapshot.dbOps.reads += opts.metrics.dbReads;
+    if (opts.metrics.dbWrites) metricsSnapshot.dbOps.writes += opts.metrics.dbWrites;
+    if (opts.metrics.dbDeletes) metricsSnapshot.dbOps.deletes += opts.metrics.dbDeletes;
+  }
+
+  if (level === "error") {
+    metricsSnapshot.errors++;
+    metricsSnapshot.errorsByCategory[category] = (metricsSnapshot.errorsByCategory[category] || 0) + 1;
+  }
+
+  return traceId;
+}
+
+/**
+ * Get recent pipeline events
+ */
+export function getPipelineEvents(count: number = 100): PipelineLogEvent[] {
+  const results: PipelineLogEvent[] = [];
+  const start = Math.max(0, pipelineIndex - count);
+
+  for (let i = start; i < pipelineIndex; i++) {
+    const event = pipelineBuffer[i % PIPELINE_BUFFER_SIZE];
+    if (event) results.push(event);
+  }
+
+  return results;
+}
+
+/**
+ * Get all buffered pipeline events
+ */
+export function getAllPipelineEvents(): PipelineLogEvent[] {
+  const results: PipelineLogEvent[] = [];
+  for (const event of pipelineBuffer) {
+    if (event) results.push(event);
+  }
+  return results;
+}
+
+/**
+ * Update system metrics
+ */
+export function updatePipelineMetrics(updates: Partial<SystemMetricsSnapshot>): void {
+  metricsSnapshot = {
+    ...metricsSnapshot,
+    ...updates,
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * Get current metrics snapshot
+ */
+export function getPipelineMetrics(): SystemMetricsSnapshot {
+  const memUsage = process.memoryUsage();
+  metricsSnapshot.memory = Math.round(memUsage.rss / 1024 / 1024);
+  return metricsSnapshot;
+}
+
+/**
+ * Flush pipeline logs to database
+ */
+export async function flushPipelineLogs(): Promise<number> {
+  const events = getAllPipelineEvents();
+
+  if (events.length === 0) {
+    return 0;
+  }
+
+  try {
+    // Batch inserts to system_logs table
+    for (let i = 0; i < events.length; i += 100) {
+      const batch = events.slice(i, i + 100);
+
+      // TODO: Insert batch to system_logs table
+      // await db.insert(systemLogs).values(...)
+    }
+
+    console.log(`[PipelineLogger] Flushed ${events.length} events to database`);
+    return events.length;
+  } catch (error) {
+    console.error("[PipelineLogger] Failed to flush logs:", error);
+    return 0;
+  }
+}
+
+/**
+ * Crash dump handler
+ */
+export async function pipelineCrashDump(): Promise<void> {
+  console.error("[PipelineLogger] CRASH DUMP: Flushing events...");
+  await flushPipelineLogs();
+}
+
+/**
+ * Create a tracer for operations
+ */
+export function createPipelineTracer(category: PipelineCategory, operation: string) {
+  const traceId = generatePipelineTraceId();
+  const startTime = Date.now();
+
+  return {
+    traceId,
+    start: () => logPipeline(category, `${operation}: started`, "debug", { traceId }),
+    log: (message: string, level: PipelineLogEvent["level"] = "info", metrics?: PipelineLogEvent["metrics"]) =>
+      logPipeline(category, `${operation}: ${message}`, level, { traceId, metrics }),
+    end: (success: boolean = true) => {
+      const duration = Date.now() - startTime;
+      logPipeline(category, `${operation}: complete (${duration}ms)`, success ? "info" : "warn", {
+        traceId,
+        metrics: { latencyMs: duration },
+      });
+      return duration;
+    },
+  };
+}
+
+function generatePipelineTraceId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }

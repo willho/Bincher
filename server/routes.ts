@@ -75,6 +75,8 @@ import { isAIAvailable } from "./ai-health";
 import { getNetworkMode, setNetworkMode, getSolanaFaucetUrl, type NetworkMode } from "./network-mode";
 import { markSignalWalletSold, updateScoreOnWhaleActivity, resolvePositionScoreSnapshots } from "./position-score";
 import { recordWhaleActivity, checkForFamiliarWhalesInToken, type FamiliarWhaleAlert } from "./familiar-whales";
+import { registerDiagnosticEndpoints } from "./diagnostic-endpoints";
+import { registerFingerprinterDiagnosticEndpoints } from "./fingerprinter-diagnostic-endpoints";
 
 let wss: WebSocketServer;
 
@@ -6971,9 +6973,45 @@ export async function registerRoutes(
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid request", details: parsed.error.errors });
       }
+
+      const { tokenMint, entrySol, strategyTheory } = parsed.data;
+
+      // Step 1: Validate position before opening
+      const { validateAndOpenPaperPosition } = await import("./paper-trading-simulation");
+      const validation = await validateAndOpenPaperPosition({
+        userId: req.userId!,
+        tokenMint,
+        entrySol,
+        strategyTheory: strategyTheory || "retrolearner_guided_entry",
+      });
+
+      if (!validation.success) {
+        return res.status(400).json({
+          error: "Position validation failed",
+          details: validation.error,
+          simulation: validation.simulation,
+        });
+      }
+
+      // Step 2: Open position with validated exit strategy
       const { openPaperPosition } = await import("./paper-trading");
-      const position = await openPaperPosition({ userId: req.userId!, ...parsed.data });
-      res.json(position);
+      const position = await openPaperPosition({
+        userId: req.userId!,
+        ...parsed.data,
+        // Use exit strategy from validation
+        takeProfitMultiplier: validation.exitStrategy?.takeProfitMultiplier,
+        stopLossPercent: validation.exitStrategy?.stopLossPercent,
+        trailingStopPercent: validation.exitStrategy?.trailingStopPercent,
+      });
+
+      res.json({
+        position,
+        validation: {
+          simulationPassed: validation.simulation.success,
+          exitStrategy: validation.exitStrategy,
+          expectedOutcome: validation.exitStrategy?.takeProfitMultiplier,
+        },
+      });
     } catch (error: any) {
       console.error("Error opening paper position:", error);
       res.status(500).json({ error: error.message || "Failed to open paper position" });
@@ -7390,6 +7428,86 @@ export async function registerRoutes(
     } catch (error) {
       console.error("Error validating theories:", error);
       res.status(500).json({ error: "Failed to validate theories" });
+    }
+  });
+
+  // =====================
+  // PAPER TRADING SIMULATION & VALIDATION
+  // =====================
+
+  /**
+   * POST /api/paper/validate-position
+   * Simulate trade on Jupiter and calculate exit strategy before opening position
+   * Uses retrolearner outcomes to set dynamic exit strategies
+   */
+  app.post("/api/paper/validate-position", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { tokenMint, entrySol, strategyTheory } = req.body;
+
+      if (!tokenMint || !entrySol) {
+        return res.status(400).json({ error: "Missing required fields: tokenMint, entrySol" });
+      }
+
+      const { validateAndOpenPaperPosition } = await import("./paper-trading-simulation");
+
+      const validation = await validateAndOpenPaperPosition({
+        userId: req.userId!,
+        tokenMint,
+        entrySol,
+        strategyTheory: strategyTheory || "retrolearner_guided_entry",
+      });
+
+      res.json(validation);
+    } catch (error: any) {
+      console.error("Error validating position:", error);
+      res.status(500).json({ error: error.message || "Failed to validate position" });
+    }
+  });
+
+  /**
+   * GET /api/paper/validation-stats
+   * Get strategy validation success rates and prediction accuracy
+   */
+  app.get("/api/paper/validation-stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { strategyTheory } = req.query;
+      const lookbackHours = parseInt((req.query.lookbackHours as string) || "24");
+
+      const { getStrategyValidationRate } = await import("./paper-trading-simulation");
+
+      const stats = await getStrategyValidationRate(
+        (strategyTheory as string) || "retrolearner_guided_entry",
+        lookbackHours
+      );
+
+      res.json({
+        strategyTheory: strategyTheory || "retrolearner_guided_entry",
+        lookbackHours,
+        ...stats,
+      });
+    } catch (error: any) {
+      console.error("Error getting validation stats:", error);
+      res.status(500).json({ error: error.message || "Failed to get validation stats" });
+    }
+  });
+
+  /**
+   * GET /api/paper/exit-strategies/:tokenMint
+   * Get calculated exit strategy for a token based on retrolearner patterns
+   */
+  app.get("/api/paper/exit-strategies/:tokenMint", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { calculateDynamicExitStrategy } = await import("./paper-trading-simulation");
+
+      const strategy = await calculateDynamicExitStrategy(req.params.tokenMint, 1.0);
+
+      res.json({
+        tokenMint: req.params.tokenMint,
+        exitStrategy: strategy,
+      });
+    } catch (error: any) {
+      console.error("Error calculating exit strategy:", error);
+      res.status(500).json({ error: error.message || "Failed to calculate exit strategy" });
     }
   });
 
@@ -8667,6 +8785,12 @@ export async function registerRoutes(
     const status = proxyRegistry.getStatus();
     res.json(status);
   });
+
+  // Register diagnostic logging endpoints
+  registerDiagnosticEndpoints(app);
+
+  // Register fingerprinting & clustering diagnostic endpoints
+  registerFingerprinterDiagnosticEndpoints(app);
 
   return httpServer;
 }

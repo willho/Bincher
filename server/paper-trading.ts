@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { 
-  paperPositions, walletStrategies, strategyExperiments, swaps, systemInsights,
+import {
+  paperPositions, walletStrategies, strategyExperiments, swaps, systemInsights, strategyValidations,
   PaperPosition, WalletStrategy, StrategyExperiment,
   InsertPaperPosition, InsertWalletStrategy, InsertStrategyExperiment
 } from "@shared/schema";
@@ -8,6 +8,11 @@ import { eq, and, desc, sql, gte, lte, count, or, like } from "drizzle-orm";
 import { fetchTokenWithFallback } from "./data-pool";
 import OpenAI from "openai";
 import { classifyWalletBehavior, type WalletBehaviorType } from "./cluster-detection";
+import {
+  validateAndOpenPaperPosition,
+  updateValidationWithResult,
+  type DynamicExitStrategy
+} from "./paper-trading-simulation";
 
 // =====================
 // PAPER POSITION MANAGEMENT
@@ -126,11 +131,19 @@ async function closePositionInternal(
     .returning();
   
   console.log(`[PaperTrading] Closed position ${positionId}: ${realizedPnl >= 0 ? '+' : ''}${realizedPnl.toFixed(4)} SOL (${realizedPnlPercent.toFixed(2)}%)`);
-  
+
+  // Update strategy validation record with actual outcome
+  const actualMultiplier = (updated?.exitPrice || 0) / (updated?.entryPrice || 1);
+  try {
+    await updateValidationWithResult(positionId, actualMultiplier, exitReason);
+  } catch (err) {
+    console.error("[PaperTrading] Failed to update strategy validation:", err);
+  }
+
   if (experimentId) {
     await updateExperimentResults(experimentId, realizedPnl, realizedPnl >= 0);
   }
-  
+
   if (updated) {
     try {
       const { recordPaperTradeOutcome } = await import("./paper-experiments");

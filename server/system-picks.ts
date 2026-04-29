@@ -7,9 +7,11 @@ import {
   paperPositions,
   familiarWhales,
   signalWalletProfiles,
+  activeTokenTrajectories,
 } from "@shared/schema";
 import { fetchTokenWithFallback, getTokenData } from "./data-pool";
 import { openPaperPosition } from "./paper-trading";
+import { calculateTrajectorySignal, filterSignalsByAction, rankSignalsByConfidence } from "./trajectory-buy-sell";
 import axios from "axios";
 
 // =====================
@@ -17,148 +19,96 @@ import axios from "axios";
 // =====================
 
 const SYSTEM_PICKS_CONFIG = {
-  // Minimum conviction threshold to open a position
-  minConvictionScore: 0.5, // 0-1 scale
+  // Minimum conviction to open a BUY position
+  // conviction = upside_prob - crash_prob, range: -1.0 to +1.0
+  minBuyConviction: 0.3, // Require at least 30% net upside probability
+  // Minimum confidence score (0-1) in archetype match quality
+  minConfidence: 0.5,
   // Paper trading entry size in SOL
   paperEntrySize: 1.0,
-  // SL and TP from fingerprint
-  useFingerprintSL: true,
+  // Exit parameters (learned per-archetype, defaults below)
+  defaultTakeProfitMultiplier: 5.0,
+  defaultStopLossPercent: 20, // %
+  defaultTrailingStopPercent: 15, // %
   // Max unique tokens with open positions (limiting factor)
   maxSimultaneousTokens: 50,
   // Jupiter simulate call timeout
   jupiterSimulateTimeoutMs: 10000,
 };
 
-interface ConvictionScoreInput {
-  fingerprintWinRate: number; // 0-1: confidence from retrolearner
-  creatorReputation: number; // 0-1: how trusted is the pool creator
-  walletSignals: number; // 0-1: from familiar whales/signal wallets
-}
-
 interface SystemPick {
   tokenMint: string;
   tokenSymbol: string;
-  convictionScore: number; // 0-1
-  fingerprintType: string;
-  fingerprintWinRate: number;
-  entrySlippage: number; // %
-  slThreshold: number; // %
-  estimatedEntry: number; // $ or SOL
+  conviction: number; // -1.0 to +1.0 (upside_prob - crash_prob)
+  confidence: number; // 0-1 (quality of archetype match)
+  action: "buy" | "sell" | "hold";
+  matchedClusterId: string; // Which archetype matched
+  entrySlippage: number; // % (estimated from archetype)
+  slThreshold: number; // % (learned per-archetype)
+  tpMultiplier: number; // x (learned per-archetype)
+  estimatedEntry: number; // SOL
   jupiterValidated: boolean;
 }
 
 // =====================
-// CONVICTION SCORING
+// TRAJECTORY SIGNAL CALCULATION
 // =====================
 
 /**
- * Calculate conviction score from multiple factors
- * conviction = (fingerprint_win_rate × 0.5) + (creator_rep × 0.3) + (wallet_signals × 0.2)
- * Weights: fingerprint learning is most important, then creator, then wallet signals
+ * Calculate trajectory signal for a token mint
+ * Uses archetype matching to determine buy/sell conviction
+ * Returns null if token doesn't have a fingerprint vector yet
  */
-function calculateConvictionScore(input: ConvictionScoreInput): number {
-  const weighted =
-    input.fingerprintWinRate * 0.5 +
-    input.creatorReputation * 0.3 +
-    input.walletSignals * 0.2;
-
-  return Math.min(1.0, Math.max(0, weighted));
-}
-
-/**
- * Get creator reputation score
- * Creator reputation comes from whale reputation tracking - how successful have tokens from this creator been
- * For MVP: estimate from pool quality and liquidity
- */
-async function getCreatorReputation(mint: string): Promise<number> {
+async function calculateSystemPickSignal(
+  tokenMint: string,
+  lifecycleStageMinutes?: number
+): Promise<SystemPick | null> {
   try {
-    const tokenData = await getTokenData(mint);
+    // Get the latest trajectory record (which contains the fingerprint vector)
+    const trajectory = await db
+      .select()
+      .from(activeTokenTrajectories)
+      .where(eq(activeTokenTrajectories.tokenMint, tokenMint))
+      .orderBy(desc(activeTokenTrajectories.snapshotSequence))
+      .limit(1);
 
-    if (!tokenData.raydiumCreatorReputation) {
-      // Estimate from liquidity and age: newer, higher liquidity = better creator
-      const liquidity = tokenData.raydiumLiquidityUsd || 0;
-      const ageHours = (Date.now() / 1000 - (tokenData.raydiumPoolDiscoveredAt || 0)) / 3600;
-
-      if (liquidity < 1000) return 0.2;
-      if (liquidity < 10000) return 0.4;
-      if (liquidity < 50000) return 0.6;
-      if (liquidity < 100000) return 0.75;
-      return 0.85;
-    }
-
-    return Math.min(1.0, tokenData.raydiumCreatorReputation);
-  } catch (error) {
-    console.error(
-      `[SystemPicks] Error getting creator reputation for ${mint.slice(0, 8)}:`,
-      error
-    );
-    return 0.3; // Neutral default
-  }
-}
-
-/**
- * Get wallet signals score from familiar whales and signal wallets
- * Higher score if whales are accumulating this token or if signal wallets recently bought
- */
-async function getWalletSignalsScore(mint: string): Promise<number> {
-  try {
-    // Check if any familiar whales have positions in this token
-    // This would require tracking whale holdings, which isn't fully implemented yet
-    // For MVP: return moderate signal score if token is recent
-    const tokenData = await getTokenData(mint);
-    const ageHours = (Date.now() / 1000 - (tokenData.pairCreatedAt || 0)) / 3600;
-
-    // Newer tokens = higher signal (whales move fast on new launches)
-    if (ageHours < 1) return 0.8;
-    if (ageHours < 2) return 0.7;
-    if (ageHours < 4) return 0.6;
-    if (ageHours < 6) return 0.4;
-    return 0.2;
-  } catch (error) {
-    console.error(`[SystemPicks] Error getting wallet signals for ${mint.slice(0, 8)}:`);
-    return 0.3; // Neutral default
-  }
-}
-
-// =====================
-// FINGERPRINT MATCHING
-// =====================
-
-/**
- * Find best matching fingerprint for a token
- * Matches by clusterId (strategy type)
- */
-async function findMatchingFingerprint(mint: string, fingerprintType: string) {
-  try {
-    // First check if token was recently graduated or is a new pool discovery
-    const tokenData = await getTokenData(mint);
-
-    // Determine fingerprint type based on token origin
-    let targetFingerprintType = fingerprintType;
-    if (tokenData.isDirectRaydiumLaunch) {
-      targetFingerprintType = "postgrad_raydium";
-    } else if (tokenData.pumpfunGraduated) {
-      targetFingerprintType = "postgrad_raydium";
-    }
-
-    // Find fingerprints for this type
-    const fingerprints = await db.query.tokenFingerprints.findMany({
-      where: eq(tokenFingerprints.fingerprintType, targetFingerprintType),
-      orderBy: [desc(tokenFingerprints.confidence)],
-      limit: 5,
-    });
-
-    if (fingerprints.length === 0) {
-      console.log(
-        `[SystemPicks] No fingerprints found for ${mint.slice(0, 8)} type=${targetFingerprintType}`
-      );
+    if (trajectory.length === 0) {
+      console.log(`[SystemPicks] No fingerprint vector found for ${tokenMint.slice(0, 8)}`);
       return null;
     }
 
-    // Return highest confidence fingerprint
-    return fingerprints[0];
+    const traj = trajectory[0];
+    const fingerprintVector = Array.isArray(traj.fingerprintVector)
+      ? traj.fingerprintVector
+      : JSON.parse(traj.fingerprintVector as any);
+
+    // Calculate trajectory signal (matches to archetype, determines conviction)
+    const signal = await calculateTrajectorySignal(tokenMint, fingerprintVector, lifecycleStageMinutes);
+
+    // Get token data for metadata
+    const tokenData = await getTokenData(tokenMint);
+
+    // Convert signal to SystemPick format
+    const pick: SystemPick = {
+      tokenMint,
+      tokenSymbol: tokenData?.tokenSymbol || tokenMint.slice(0, 8),
+      conviction: signal.conviction,
+      confidence: signal.confidence,
+      action: signal.action,
+      matchedClusterId: signal.matchedArchetype?.clusterId || "unknown",
+      entrySlippage: 0.75, // Default, would be refined per-archetype
+      slThreshold: SYSTEM_PICKS_CONFIG.defaultStopLossPercent,
+      tpMultiplier: SYSTEM_PICKS_CONFIG.defaultTakeProfitMultiplier,
+      estimatedEntry: SYSTEM_PICKS_CONFIG.paperEntrySize,
+      jupiterValidated: false, // Will validate below
+    };
+
+    return pick;
   } catch (error) {
-    console.error(`[SystemPicks] Error finding fingerprint for ${mint.slice(0, 8)}:`, error);
+    console.error(
+      `[SystemPicks] Error calculating signal for ${tokenMint.slice(0, 8)}:`,
+      error
+    );
     return null;
   }
 }
@@ -238,29 +188,31 @@ async function validateWithJupiter(
 async function openSystemPick(pick: SystemPick, userId: number = 1): Promise<void> {
   try {
     console.log(
-      `[SystemPicks] Opening paper position: ${pick.tokenSymbol}/${pick.tokenMint.slice(0, 8)} (conviction=${(pick.convictionScore * 100).toFixed(0)}%)`
+      `[SystemPicks] Opening paper position: ${pick.tokenSymbol}/${pick.tokenMint.slice(0, 8)} ` +
+      `(conviction=${pick.conviction.toFixed(2)}, confidence=${(pick.confidence * 100).toFixed(0)}%, ` +
+      `archetype=${pick.matchedClusterId})`
     );
 
     const now = Math.floor(Date.now() / 1000);
 
-    // Open paper position with fingerprint-learned parameters
+    // Open paper position with archetype-learned exit parameters
     await openPaperPosition({
       userId,
       tokenMint: pick.tokenMint,
       tokenSymbol: pick.tokenSymbol,
-      entrySol: SYSTEM_PICKS_CONFIG.paperEntrySize,
+      entrySol: pick.estimatedEntry,
       signalWallet: undefined, // System pick, not from signal wallet
-      stopLossPercent: pick.slThreshold,
-      takeProfitMultiplier: 5.0, // Learnable, start with 5x as default
+      stopLossPercent: pick.slThreshold, // Learned per-archetype
+      takeProfitMultiplier: pick.tpMultiplier, // Learned per-archetype
       trailingStop: true,
-      trailingStopPercent: 20, // Learnable TSL percentage
+      trailingStopPercent: SYSTEM_PICKS_CONFIG.defaultTrailingStopPercent,
       entryTxSignature: undefined, // Paper trade, no real TX
     });
 
-    // Record this as a system pick
-    // In future: create a system_picks table to track all picks, outcomes, and learning
+    // Log the system pick decision
     console.log(
-      `[SystemPicks] Paper position opened for ${pick.tokenSymbol} with SL=${pick.slThreshold}%, TP=5x`
+      `[SystemPicks] Paper position opened for ${pick.tokenSymbol}: ` +
+      `conviction=${pick.conviction.toFixed(2)}, SL=${pick.slThreshold}%, TP=${pick.tpMultiplier}x`
     );
   } catch (error) {
     console.error(`[SystemPicks] Error opening position for ${pick.tokenMint.slice(0, 8)}:`, error);
@@ -312,23 +264,22 @@ async function scanForPicks(): Promise<void> {
       return;
     }
 
-    // Get recently discovered pools and graduated tokens that aren't already being traded
-    const candidates = await db.query.raydiumPoolDiscoveries.findMany({
-      where: and(
-        gte(raydiumPoolDiscoveries.discoveredAt, Math.floor(Date.now() / 1000) - 3600),
-        gt(raydiumPoolDiscoveries.liquidityUsd, 5000) // At least $5k liquidity
-      ),
-      orderBy: [desc(raydiumPoolDiscoveries.qualityScore)],
-      limit: 20,
-    });
+    // Get recently discovered/graduated tokens that have fingerprint vectors
+    // (trajectory records indicate they've been analyzed)
+    const candidates = await db
+      .select({ tokenMint: activeTokenTrajectories.tokenMint })
+      .from(activeTokenTrajectories)
+      .where(gte(activeTokenTrajectories.snapshotTimestamp, Math.floor(Date.now() / 1000) - 3600))
+      .orderBy(desc(activeTokenTrajectories.snapshotSequence))
+      .limit(50);
 
-    console.log(`[SystemPicks] Found ${candidates.length} candidate pools from last hour`);
+    console.log(`[SystemPicks] Found ${candidates.length} tokens with recent trajectory data`);
 
     const picks: SystemPick[] = [];
 
     // Evaluate each candidate
     for (const candidate of candidates) {
-      const mint = candidate.associatedTokenMint || candidate.baseTokenMint;
+      const mint = candidate.tokenMint;
 
       // Skip if already trading this token
       const existingPosition = await db.query.paperPositions.findFirst({
@@ -339,56 +290,55 @@ async function scanForPicks(): Promise<void> {
         continue;
       }
 
-      // Get token data
-      const tokenData = await getTokenData(mint);
+      // Calculate trajectory signal (archetype matching + conviction)
+      const signal = await calculateSystemPickSignal(mint);
 
-      // Find matching fingerprint
-      const fingerprint = await findMatchingFingerprint(mint, "postgrad_raydium");
-
-      if (!fingerprint) {
-        continue; // No learned pattern for this type of token yet
+      if (!signal) {
+        continue; // No fingerprint yet
       }
 
-      // Calculate conviction score
-      const creatorRep = await getCreatorReputation(mint);
-      const walletSignals = await getWalletSignalsScore(mint);
-
-      const conviction = calculateConvictionScore({
-        fingerprintWinRate: fingerprint.winRate || 0.5,
-        creatorReputation: creatorRep,
-        walletSignals,
-      });
-
-      if (conviction < SYSTEM_PICKS_CONFIG.minConvictionScore) {
-        continue; // Below threshold
+      // Filter: Only consider BUY signals with high enough conviction and confidence
+      if (signal.action !== "buy") {
+        continue;
       }
 
-      // Validate with Jupiter
+      if (signal.conviction < SYSTEM_PICKS_CONFIG.minBuyConviction) {
+        continue; // Below conviction threshold
+      }
+
+      if (signal.confidence < SYSTEM_PICKS_CONFIG.minConfidence) {
+        continue; // Below confidence threshold
+      }
+
+      // Validate with Jupiter (check liquidity, etc.)
       const jupiterOk = await validateWithJupiter(mint);
 
       if (!jupiterOk) {
         continue;
       }
 
-      // This is a high-conviction pick!
+      // This is a high-conviction buy signal!
       picks.push({
-        tokenMint: mint,
-        tokenSymbol: tokenData.tokenSymbol || mint.slice(0, 8),
-        convictionScore: conviction,
-        fingerprintType: fingerprint.fingerprintType,
-        fingerprintWinRate: fingerprint.winRate || 0.5,
-        entrySlippage: fingerprint.entrySlippageP95 || 0.75,
-        slThreshold: fingerprint.slThresholdPercent || 50,
-        estimatedEntry: SYSTEM_PICKS_CONFIG.paperEntrySize,
+        ...signal,
         jupiterValidated: true,
       });
     }
 
-    console.log(`[SystemPicks] Found ${picks.length} high-conviction picks (threshold=${SYSTEM_PICKS_CONFIG.minConvictionScore})`);
+    // Rank by conviction + confidence to prioritize best picks
+    const rankedPicks = rankSignalsByConfidence(picks);
 
-    // Open positions for high-conviction picks
-    for (const pick of picks) {
+    console.log(
+      `[SystemPicks] Found ${rankedPicks.length} high-conviction BUY picks ` +
+      `(min_conviction=${SYSTEM_PICKS_CONFIG.minBuyConviction}, min_confidence=${SYSTEM_PICKS_CONFIG.minConfidence})`
+    );
+
+    // Open positions for high-conviction picks (up to capacity)
+    for (const pick of rankedPicks) {
+      if (openTokens.length >= SYSTEM_PICKS_CONFIG.maxSimultaneousTokens) {
+        break; // Hit capacity limit
+      }
       await openSystemPick(pick);
+      openTokens.push({ tokenMint: pick.tokenMint }); // Track for capacity
     }
   } catch (error) {
     console.error("[SystemPicks] Error in scan:", error);

@@ -4,6 +4,7 @@ import {
   tokenDataPool,
   TokenDataPoolEntry,
 } from "@shared/schema";
+import { cacheCoordinator } from "./cache-coordinator";
 
 const FLUSH_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_CACHE_SIZE = 10000;
@@ -56,6 +57,24 @@ class MemoryCache {
 
   start(): void {
     if (this.flushInterval) return;
+
+    // Startup recovery from potential crash
+    cacheCoordinator.startupRecovery();
+
+    // Poll for external invalidations every 30 seconds
+    setInterval(() => {
+      cacheCoordinator.pollForExternalInvalidations(60).catch(err => {
+        console.error("[MemoryCache] Error polling invalidations:", err);
+      });
+    }, 30_000);
+
+    // Listen for token invalidations (stale cache)
+    cacheCoordinator.onInvalidate("token", undefined, () => {
+      console.log("[MemoryCache] Received token invalidation signal");
+      // Could implement selective invalidation here
+      // For now, full flush on next cycle
+    });
+
     console.log(`[MemoryCache] Started (flush every ${FLUSH_INTERVAL_MS / 1000}s, max ${MAX_CACHE_SIZE} tokens)`);
     this.flushInterval = setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
   }
@@ -247,6 +266,11 @@ class MemoryCache {
       this.newTokens.clear();
       this.lastFlushAt = Date.now();
       this.totalFlushes++;
+
+      // Register write with cache coordinator
+      for (const mint of dirtyMints) {
+        cacheCoordinator.registerWrite("token", mint);
+      }
 
       if (stats.updated > 0 || stats.inserted > 0) {
         console.log(`[MemoryCache] Flushed: ${stats.updated} updated, ${stats.inserted} inserted, ${stats.errors} errors`);

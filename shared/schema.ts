@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex, index, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, integer, real, jsonb, serial, uniqueIndex, index, unique, vector } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 // Token metadata schema (from DexScreener)
@@ -1369,6 +1369,20 @@ export const insertApiLogSchema = createInsertSchema(apiLogs).omit({ id: true })
 export type ApiLog = typeof apiLogs.$inferSelect;
 export type InsertApiLog = z.infer<typeof insertApiLogSchema>;
 
+// Cache Invalidation Log - tracks memory-cache invalidations for coherence
+export const cacheInvalidationLog = pgTable("cache_invalidation_log", {
+  id: serial("id").primaryKey(),
+  scope: text("scope").notNull(), // token | wallet | outcome | cluster | all
+  targetId: text("target_id"), // mint, wallet address, etc.
+  reason: text("reason").notNull(), // why cache was invalidated
+  triggeredBy: text("triggered_by").notNull(), // retrolearner, discovery-engine, manual, etc.
+  invalidatedAt: integer("invalidated_at").notNull(),
+});
+
+export const insertCacheInvalidationLogSchema = createInsertSchema(cacheInvalidationLog).omit({ id: true });
+export type CacheInvalidationLog = typeof cacheInvalidationLog.$inferSelect;
+export type InsertCacheInvalidationLog = z.infer<typeof insertCacheInvalidationLogSchema>;
+
 // Webhook Logs - Helius swap notifications
 export const webhookLogs = pgTable("webhook_logs", {
   id: serial("id").primaryKey(),
@@ -2333,6 +2347,15 @@ export const tokenDataPool = pgTable("token_data_pool", {
   deathbedSnapshotCreated: boolean("deathbed_snapshot_created").default(false), // Final snapshot taken?
   trajectoryOutcomeLabel: text("trajectory_outcome_label"), // "pump_100x" | "slow_bleed" | "crash_fast" (backfilled by retrolearner)
   snapshotsCount: integer("snapshots_count").default(0), // How many snapshots exist for this token
+
+  // Composite scoring for pool management
+  lastAnnScore: real("last_ann_score"), // ANN success probability [0.0, 1.0] from token-success-ann
+  compositeScore: real("composite_score"), // Composite ranking score (ANN × expected_multiplier)
+  isMonitored: boolean("is_monitored").default(false), // Token is in active monitoring pool
+  addedToPoolAt: integer("added_to_pool_at"), // When token was added to pool
+  evictedFromPoolAt: integer("evicted_from_pool_at"), // When token was removed from pool
+  evictionReason: text("eviction_reason"), // "zero_volume" | "low_score" | "manual" | etc.
+  volume24hSol: real("volume_24h_sol"), // 24h volume in SOL (for eviction logic)
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
@@ -2675,6 +2698,41 @@ export const strategyExperiments = pgTable("strategy_experiments", {
 export const insertStrategyExperimentsSchema = createInsertSchema(strategyExperiments).omit({ id: true });
 export type StrategyExperiment = typeof strategyExperiments.$inferSelect;
 export type InsertStrategyExperiment = z.infer<typeof insertStrategyExperimentsSchema>;
+
+// Strategy validation records - track predictions vs actual outcomes
+export const strategyValidations = pgTable("strategy_validations", {
+  id: serial("id").primaryKey(),
+
+  // Position reference
+  positionId: integer("position_id").notNull(),
+
+  // Strategy being tested
+  strategyTheory: text("strategy_theory").notNull(), // e.g., "retrolearner_guided_entry", "wallet_copy"
+
+  // Prediction
+  expectedOutcome: real("expected_outcome").notNull(), // Predicted multiplier from retrolearner
+
+  // Result (filled when position closes)
+  actualOutcome: real("actual_outcome"), // Actual multiplier achieved
+  actualExitReason: text("actual_exit_reason"), // take_profit, stop_loss, trailing_stop, time_based, manual
+
+  // Validation status
+  simulationPassed: boolean("simulation_passed").default(true), // Did Jupiter simulation pass?
+  validationStatus: text("validation_status").notNull().default("pending"), // pending, confirmed, refuted
+  // confirmed: actualOutcome > (expectedOutcome * 0.5)
+  // refuted: actualOutcome < (expectedOutcome * 0.1)
+
+  // Latency measurement
+  latencyMs: integer("latency_ms").notNull(), // Time from validation to position open
+
+  // Timestamps
+  createdAt: integer("created_at").notNull(),
+  confirmedAt: integer("confirmed_at"), // When position closed
+});
+
+export const insertStrategyValidationsSchema = createInsertSchema(strategyValidations).omit({ id: true });
+export type StrategyValidation = typeof strategyValidations.$inferSelect;
+export type InsertStrategyValidation = z.infer<typeof insertStrategyValidationsSchema>;
 
 // =============================================
 // PHASE E: DISCOVERY & AI LEARNING
@@ -4400,7 +4458,7 @@ export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   lifecycleStage: text("lifecycle_stage"), // Derived from snapshot age/multiplier/concentration
 
   // Centroid vector (average of all snapshots in this archetype)
-  centroid: jsonb("centroid").$type<number[]>().notNull(), // 50-dim fingerprint vector
+  centroid: vector("centroid", 26).notNull(), // 26-dim fingerprint vector for fast similarity search
 
   // Outcome probability distribution (verified from completed tokens)
   // { "pump_100x": 0.60, "slow_bleed": 0.25, "crash_fast": 0.15 }
@@ -4425,6 +4483,8 @@ export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   index("idx_outcome_distribution").on(table.outcomeDistribution),
   index("idx_archetype_cohesion").on(table.cohesion),
   index("idx_archetype_sample_count").on(table.sampleCount),
+  // Vector similarity index for fast archetype matching (created separately via migration)
+  // CREATE INDEX idx_centroid_hnsw ON token_fingerprint_clusters USING hnsw (centroid vector_cosine_ops);
 ]);
 
 export const insertTokenFingerprintClustersSchema = createInsertSchema(tokenFingerprintClusters).omit({ id: true, createdAt: true });
@@ -4448,8 +4508,8 @@ export const activeTokenTrajectories = pgTable("active_token_trajectories", {
   snapshotTrigger: text("snapshot_trigger").notNull(), // "t0_creation" | "activity_volume_since_last"
   triggerContext: jsonb("trigger_context").$type<Record<string, any>>(), // volume count, time elapsed, etc.
 
-  // Fingerprint vector (50-dim)
-  fingerprintVector: jsonb("fingerprint_vector").$type<number[]>().notNull(),
+  // Fingerprint vector (26-dim) - matches archetype centroids for fast similarity matching
+  fingerprintVector: vector("fingerprint_vector", 26).notNull(),
 
   // State at snapshot time
   currentMultiplier: real("current_multiplier"), // Price relative to entry
@@ -4469,6 +4529,8 @@ export const activeTokenTrajectories = pgTable("active_token_trajectories", {
   index("idx_snapshot_timestamp").on(table.snapshotTimestamp),
   index("idx_archived_at").on(table.archivedAt), // NULL = still active
   index("idx_current_multiplier").on(table.currentMultiplier),
+  // Vector similarity index for fast trajectory matching (created separately via migration)
+  // CREATE INDEX idx_fingerprint_vector_hnsw ON active_token_trajectories USING hnsw (fingerprint_vector vector_cosine_ops);
 ]);
 
 export const insertActiveTokenTrajectoriesSchema = createInsertSchema(activeTokenTrajectories).omit({ id: true, createdAt: true });
@@ -4588,3 +4650,191 @@ export const walletClusters = pgTable("wallet_clusters", {
 export const insertWalletClustersSchema = createInsertSchema(walletClusters).omit({ id: true, createdAt: true });
 export type WalletCluster = typeof walletClusters.$inferSelect;
 export type InsertWalletCluster = z.infer<typeof insertWalletClustersSchema>;
+
+// ====================================
+// STORAGE-BUCKETING SYSTEM: T0/T1/T2
+// ====================================
+//
+// Token lifecycle is divided into semantic milestone buckets:
+// - T0 (creation): First 30 seconds after token deployed
+// - T1 (early dynamics): 30s - 10 minutes (critical price discovery)
+// - T2 (mid-phase): 10-30 minutes (momentum validation)
+// - T3+ (mature): 30min+ (post-graduation tracking)
+//
+// Fingerprints snapshot at milestone boundaries (immutable T0 state)
+// Tokens themselves flow through milestones (fluid, evolving outcomes)
+// Wallets are discovered at specific fingerprint stages
+// Patterns cluster fingerprints (not tokens) for learning
+
+/**
+ * Token Milestone Snapshots - Immutable T0/T1/T2 state captures
+ * Each token gets explicit milestone markers for clean lifecycle management
+ * Used by fingerprint extraction to know exactly when to capture state
+ */
+export const tokenMilestoneSnapshots = pgTable("token_milestone_snapshots", {
+  id: serial("id").primaryKey(),
+
+  // Token identification
+  tokenMint: text("token_mint").notNull(),
+
+  // Milestone definition
+  milestoneBucket: text("milestone_bucket").notNull(), // "t0_creation" | "t1_early" | "t2_midphase"
+  bucketDurationSeconds: integer("bucket_duration_seconds"), // 30s, 10min, 30min
+
+  // Market state at milestone capture
+  snapshotTimestamp: integer("snapshot_timestamp").notNull(),
+  tokenAgeSeconds: integer("token_age_seconds").notNull(),
+
+  // Key metrics at this milestone
+  priceUsd: real("price_usd"),
+  marketCapUsd: real("market_cap_usd"),
+  liquidityUsd: real("liquidity_usd"),
+  volume24hUsd: real("volume_24h_usd"),
+
+  // Trading activity in bucket window
+  buysInBucket: integer("buys_in_bucket"),
+  sellsInBucket: integer("sells_in_bucket"),
+  volumeInBucket: real("volume_in_bucket"),
+
+  // Holder/whale data at milestone
+  holderCount: integer("holder_count"),
+  topHolderPercent: real("top_holder_percent"),
+  knownWhalesActive: integer("known_whales_active"),
+
+  // Metadata
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_token_mint_milestone").on(table.tokenMint, table.milestoneBucket),
+  index("idx_milestone_bucket").on(table.milestoneBucket),
+  index("idx_snapshot_timestamp").on(table.snapshotTimestamp),
+]);
+
+export const insertTokenMilestoneSnapshotSchema = createInsertSchema(tokenMilestoneSnapshots).omit({ id: true, createdAt: true });
+export type TokenMilestoneSnapshot = typeof tokenMilestoneSnapshots.$inferSelect;
+export type InsertTokenMilestoneSnapshot = z.infer<typeof insertTokenMilestoneSnapshotSchema>;
+
+/**
+ * Fingerprint Snapshot Reference - Links immutable fingerprints to milestone snapshots
+ * One fingerprint per T0 state, always references that specific T0 snapshot
+ * Enables immutability: fingerprint created at T0 never changes, only outcomes accumulate
+ */
+export const fingerprintSnapshotReference = pgTable("fingerprint_snapshot_reference", {
+  id: serial("id").primaryKey(),
+
+  // Fingerprint identification
+  fingerprintId: integer("fingerprint_id").notNull(), // FK to tokenFingerprints.id
+
+  // Which milestone this fingerprint is based on (immutable)
+  t0MilestoneSnapshotId: integer("t0_milestone_snapshot_id").notNull(), // FK to tokenMilestoneSnapshots where milestoneBucket='t0_creation'
+
+  // Optional multi-milestone fingerprints (for validation)
+  t1MilestoneSnapshotId: integer("t1_milestone_snapshot_id"), // T0→T1 features
+  t2MilestoneSnapshotId: integer("t2_milestone_snapshot_id"), // T0→T2 features
+
+  // Fingerprint immutability marker
+  isImmutable: boolean("is_immutable").default(true), // Cannot be updated after creation
+  frozenAt: integer("frozen_at").notNull(), // When this fingerprint was marked immutable
+
+  // Metadata
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_fingerprint_id").on(table.fingerprintId),
+  index("idx_t0_snapshot_id").on(table.t0MilestoneSnapshotId),
+  index("idx_is_immutable").on(table.isImmutable),
+]);
+
+export const insertFingerprintSnapshotReferenceSchema = createInsertSchema(fingerprintSnapshotReference).omit({ id: true, createdAt: true });
+export type FingerprintSnapshotReference = typeof fingerprintSnapshotReference.$inferSelect;
+export type InsertFingerprintSnapshotReference = z.infer<typeof insertFingerprintSnapshotReferenceSchema>;
+
+/**
+ * Wallet Fingerprint Discovery - Track which wallets discovered at which fingerprints
+ * Enables "wallet trajectory" analysis: did this wallet appear at early fingerprints?
+ * Links trading wallets to fingerprints for pattern validation
+ */
+export const walletFingerprintDiscovery = pgTable("wallet_fingerprint_discovery", {
+  id: serial("id").primaryKey(),
+
+  // Wallet identification
+  walletAddress: text("wallet_address").notNull(),
+
+  // Fingerprint identification
+  fingerprintId: integer("fingerprint_id").notNull(), // FK to tokenFingerprints.id
+  tokenMint: text("token_mint").notNull(),
+
+  // Discovery context (when/how wallet was identified at this fingerprint)
+  discoveryMilestone: text("discovery_milestone").notNull(), // "t0_creation" | "t1_early" | "t2_midphase"
+  discoveredAtTimestamp: integer("discovered_at_timestamp").notNull(),
+
+  // Wallet behavior at discovery
+  tradeCount: integer("trade_count"), // Number of trades by this wallet on this token
+  firstTradeTimestamp: integer("first_trade_timestamp"),
+  lastTradeTimestamp: integer("last_trade_timestamp"),
+
+  // Outcome for this wallet on this token
+  walletPnl: real("wallet_pnl"), // PnL in USD at exit
+  walletMultiplier: real("wallet_multiplier"), // Exit multiplier
+  holdDurationMinutes: integer("hold_duration_minutes"),
+
+  // Metadata
+  discoveredBy: text("discovered_by"), // "subscription" | "history_scan" | "cluster_detection"
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_wallet_address_fingerprint").on(table.walletAddress, table.fingerprintId),
+  index("idx_fingerprint_id_discovery").on(table.fingerprintId),
+  index("idx_discovery_milestone").on(table.discoveryMilestone),
+  index("idx_wallet_multiplier").on(table.walletMultiplier),
+]);
+
+export const insertWalletFingerprintDiscoverySchema = createInsertSchema(walletFingerprintDiscovery).omit({ id: true, createdAt: true });
+export type WalletFingerprintDiscovery = typeof walletFingerprintDiscovery.$inferSelect;
+export type InsertWalletFingerprintDiscovery = z.infer<typeof insertWalletFingerprintDiscoverySchema>;
+
+/**
+ * Fingerprint Lifecycle Metrics - Success metrics aggregated per fingerprint cluster
+ * Separate from individual outcomes: this tracks patterns across all tokens in cluster
+ * Used by retrolearner to identify which fingerprint shapes are historically profitable
+ */
+export const fingerprintLifecycleMetrics = pgTable("fingerprint_lifecycle_metrics", {
+  id: serial("id").primaryKey(),
+
+  // Fingerprint cluster identification
+  fingerprintClusterId: text("fingerprint_cluster_id").notNull(), // FK to tokenFingerprintClusters.clusterId
+
+  // Aggregated success metrics (across all tokens in cluster)
+  sampleTokenCount: integer("sample_token_count"), // How many tokens matched this fingerprint
+
+  // Outcome distribution (what % of tokens had which outcome)
+  earlyWinRate: real("early_win_rate"), // % that hit 2x by T1
+  sustainableRate: real("sustainable_rate"), // % that held 2x through T2
+  peakMultiplierMedian: real("peak_multiplier_median"), // Median max multiplier
+  peakMultiplier95th: real("peak_multiplier_95th"), // 95th percentile max
+
+  // Timing metrics
+  medianTimeToPeakMinutes: integer("median_time_to_peak_minutes"),
+  medianHoldMinutes: integer("median_hold_minutes"),
+
+  // Early buyer success (wallet-level, from walletFingerprintDiscovery)
+  earlyBuyerWinRate: real("early_buyer_win_rate"), // % of early wallets that profited
+  earlyBuyerMedianMultiplier: real("early_buyer_median_multiplier"),
+
+  // Confidence in this metric set
+  confidenceScore: real("confidence_score"), // 0-1: statistical confidence
+
+  // Risk metrics
+  drawdownPercentile: real("drawdown_percentile"), // Typical max drawdown
+  volatilityPercent: real("volatility_percent"), // Price volatility during T0-T1
+
+  // Timing
+  lastCalculatedAt: integer("last_calculated_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_fingerprint_cluster_id").on(table.fingerprintClusterId),
+  index("idx_early_win_rate").on(table.earlyWinRate),
+  index("idx_confidence_score").on(table.confidenceScore),
+]);
+
+export const insertFingerprintLifecycleMetricsSchema = createInsertSchema(fingerprintLifecycleMetrics).omit({ id: true, createdAt: true });
+export type FingerprintLifecycleMetrics = typeof fingerprintLifecycleMetrics.$inferSelect;
+export type InsertFingerprintLifecycleMetrics = z.infer<typeof insertFingerprintLifecycleMetricsSchema>;
