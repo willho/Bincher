@@ -7,7 +7,7 @@ import {
   paperPositions,
   familiarWhales,
   signalWalletProfiles,
-  activeTokenTrajectories,
+  tokenFingerprintSnapshots,
 } from "@shared/schema";
 import { fetchTokenWithFallback, getTokenData } from "./data-pool";
 import { calculateTrajectorySignal, filterSignalsByAction, rankSignalsByConfidence } from "./trajectory-buy-sell";
@@ -104,27 +104,31 @@ export async function initializeSystemPicksFund(): Promise<void> {
  */
 async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick | null> {
   try {
-    // Get latest fingerprint
-    const trajectory = await db
+    // Get latest snapshot (trajectory data includes features and maxMultiplier reached)
+    const snapshots = await db
       .select()
-      .from(activeTokenTrajectories)
-      .where(eq(activeTokenTrajectories.tokenMint, tokenMint))
-      .orderBy(desc(activeTokenTrajectories.snapshotSequence))
+      .from(tokenFingerprintSnapshots)
+      .where(eq(tokenFingerprintSnapshots.tokenMint, tokenMint))
+      .orderBy(desc(tokenFingerprintSnapshots.timestamp))
       .limit(1);
 
-    if (trajectory.length === 0) return null;
+    if (snapshots.length === 0) return null;
 
-    const traj = trajectory[0];
-    const fingerprintVector = Array.isArray(traj.fingerprintVector)
-      ? traj.fingerprintVector
-      : JSON.parse(traj.fingerprintVector as any);
+    const snapshot = snapshots[0];
+    const features = Array.isArray(snapshot.features)
+      ? snapshot.features
+      : JSON.parse(snapshot.features as any);
+
+    // Extract trajectory data (includes maxMultiplier reached)
+    const trajectory = snapshot.trajectoryAnchored as any || {};
+    const top20Metrics = snapshot.top20HolderMetrics as any || {};
 
     // NEW: Use enhanced cluster matching with multi-cluster blending (Algorithm 3)
     const clusterResult = await clusterSnapshotToArchetype({
       tokenMint,
-      fingerprintVector,
-      tokenAgeMinutes: traj.tokenAgeMinutes || 0,
-      medianMultiplier: traj.medianMultiplier || 1,
+      fingerprintVector: features,
+      tokenAgeMinutes: snapshot.tokenAgeSeconds / 60,
+      medianMultiplier: top20Metrics.medianMultiplier || 1,
     });
 
     if (!clusterResult || !clusterResult.matches || clusterResult.matches.length === 0) {
@@ -355,12 +359,12 @@ async function scanForPicks(): Promise<void> {
       return;
     }
 
-    // Get candidates with recent trajectory data
+    // Get candidates with recent snapshots (within last hour)
     const candidates = await db
-      .select({ tokenMint: activeTokenTrajectories.tokenMint })
-      .from(activeTokenTrajectories)
-      .where(gte(activeTokenTrajectories.snapshotTimestamp, Math.floor(Date.now() / 1000) - 3600))
-      .orderBy(desc(activeTokenTrajectories.snapshotSequence))
+      .select({ tokenMint: tokenFingerprintSnapshots.tokenMint })
+      .from(tokenFingerprintSnapshots)
+      .where(gte(tokenFingerprintSnapshots.timestamp, Math.floor(Date.now() / 1000) - 3600))
+      .orderBy(desc(tokenFingerprintSnapshots.timestamp))
       .limit(50);
 
     console.log(`[SystemPicks] Evaluating ${candidates.length} token candidates`);
@@ -468,9 +472,9 @@ async function calculateSystemPickSignal(
     // Get the latest trajectory record (which contains the fingerprint vector)
     const trajectory = await db
       .select()
-      .from(activeTokenTrajectories)
-      .where(eq(activeTokenTrajectories.tokenMint, tokenMint))
-      .orderBy(desc(activeTokenTrajectories.snapshotSequence))
+      .from(tokenFingerprintSnapshots)
+      .where(eq(tokenFingerprintSnapshots.tokenMint, tokenMint))
+      .orderBy(desc(tokenFingerprintSnapshots.snapshotNumber))
       .limit(1);
 
     if (trajectory.length === 0) {
@@ -478,13 +482,14 @@ async function calculateSystemPickSignal(
       return null;
     }
 
-    const traj = trajectory[0];
-    const fingerprintVector = Array.isArray(traj.fingerprintVector)
-      ? traj.fingerprintVector
-      : JSON.parse(traj.fingerprintVector as any);
+    const snapshot = trajectory[0];
+    const features = Array.isArray(snapshot.features)
+      ? snapshot.features
+      : JSON.parse(snapshot.features as any);
+    const tokenAgeMinutes = snapshot.tokenAgeSeconds / 60;
 
     // Calculate trajectory signal (matches to archetype, determines conviction)
-    const signal = await calculateTrajectorySignal(tokenMint, fingerprintVector, lifecycleStageMinutes);
+    const signal = await calculateTrajectorySignal(tokenMint, features, tokenAgeMinutes);
 
     // Get token data for metadata
     const tokenData = await getTokenData(tokenMint);
@@ -668,10 +673,10 @@ async function scanForPicks(): Promise<void> {
     // Get recently discovered/graduated tokens that have fingerprint vectors
     // (trajectory records indicate they've been analyzed)
     const candidates = await db
-      .select({ tokenMint: activeTokenTrajectories.tokenMint })
-      .from(activeTokenTrajectories)
-      .where(gte(activeTokenTrajectories.snapshotTimestamp, Math.floor(Date.now() / 1000) - 3600))
-      .orderBy(desc(activeTokenTrajectories.snapshotSequence))
+      .select({ tokenMint: tokenFingerprintSnapshots.tokenMint })
+      .from(tokenFingerprintSnapshots)
+      .where(gte(tokenFingerprintSnapshots.timestamp, Math.floor(Date.now() / 1000) - 3600))
+      .orderBy(desc(tokenFingerprintSnapshots.snapshotNumber))
       .limit(50);
 
     console.log(`[SystemPicks] Found ${candidates.length} tokens with recent trajectory data`);
