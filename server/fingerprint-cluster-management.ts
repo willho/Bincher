@@ -1,26 +1,28 @@
 import { db } from "./db";
-import { tokenFingerprintClusters, tokenFingerprints } from "@shared/schema";
+import { tokenFingerprintClusters, tokenFingerprints, tokenDataPool } from "@shared/schema";
 import { eq, and, gte, lt, sql } from "drizzle-orm";
 
 /**
- * Lifecycle Stage + Outcome Probability Clustering
+ * Live-Token-Averaging Clustering Architecture
  *
- * Key insight: All tokens eventually reach a final state (crash).
- * Prediction isn't about outcome (binary) but trajectory shape.
- * Snapshots cluster by lifecycle stage + verified outcome distributions.
+ * Core concept: Clusters accumulate outcomes continuously as tokens live and die.
+ * No batch retrolearner cycles. Real-time feedback from live tokens.
  *
- * Real-time flow:
- * 1. Snapshot created (activity-gated, no time gates)
- * 2. Match to archetype → get outcome probability distribution
- * 3. Track probability vector over time as token evolves
- * 4. Divergence in probabilities = branching signal
+ * Cluster lifecycle:
+ * 1. Token snapshot matches cluster (similarity > 0.70)
+ * 2. Token added to cluster's liveMembers list (while still trading)
+ * 3. Cluster centroid updates in real-time as new snapshots arrive
+ * 4. Token reaches deathbed (volume → 0)
+ * 5. Token's snapshots averaged into cluster centroid (lifecycle-weighted)
+ * 6. Token removed from liveMembers, outcome added to outcomeDistribution
+ * 7. Token's snapshot records deleted (pruned)
+ * 8. Cluster variance checked: if bimodal, split; if similar to other, merge
  *
- * Daily retrolearner flow:
- * 1. Identify archived tokens
- * 2. Backfill all snapshots with trajectoryOutcome (shape they followed)
- * 3. Cluster snapshots into outcome archetypes with probability distributions
- * 4. Update archetype centroids and outcome probabilities
- * 5. Next day's matching uses improved distributions
+ * 4 Core Algorithms:
+ * - Cluster Variance Detection & Split/Merge: Monitor outcome distribution for bimodality
+ * - Multi-Cluster Blending: If token matches 2+ clusters with similar confidence, blend
+ * - Snapshot Lifecycle Weighting: Early snapshots weighted 1.0x, deathbed 0.2x
+ * - Snapshot Frequency: T+0,1,5,10,30,60,180,360,1440 min + event triggers
  */
 
 /**
@@ -39,7 +41,52 @@ function cosineSimilarity(v1: number[], v2: number[]): number {
 }
 
 /**
- * Average vectors and calculate cohesion
+ * ALGORITHM 1: Snapshot Lifecycle-Weighted Averaging
+ * Weight snapshots by lifecycle phase: early (1.0x) → mid (0.8x) → late (0.5x) → deathbed (0.2x)
+ * Prevents deathbed noise from biasing cluster centroid
+ */
+function getSnapshotLifecycleWeight(tokenAgeMinutes: number): number {
+  if (tokenAgeMinutes < 10) return 1.0;     // Early phase (0-10min)
+  if (tokenAgeMinutes < 60) return 0.8;     // Mid phase (10-60min)
+  if (tokenAgeMinutes < 360) return 0.5;    // Late phase (60min-6hr)
+  return 0.2;                               // Deathbed phase (6hr+)
+}
+
+/**
+ * Average vectors with optional lifecycle weighting and calculate cohesion
+ */
+function averageVectorsWeighted(
+  vectors: { vector: number[]; tokenAgeMinutes?: number }[]
+): {
+  centroid: number[];
+  cohesion: number;
+} {
+  const dim = vectors[0]?.vector.length || 50;
+  const centroid = Array(dim).fill(0);
+  let totalWeight = 0;
+
+  vectors.forEach(({ vector: v, tokenAgeMinutes = 0 }) => {
+    const weight = getSnapshotLifecycleWeight(tokenAgeMinutes);
+    for (let i = 0; i < dim; i++) {
+      centroid[i] += (v[i] * weight) / vectors.length;
+    }
+    totalWeight += weight;
+  });
+
+  // Normalize by weights
+  const avgWeight = totalWeight / vectors.length;
+  for (let i = 0; i < dim; i++) {
+    centroid[i] /= avgWeight;
+  }
+
+  const similarities = vectors.map(({ vector: v }) => cosineSimilarity(v, centroid));
+  const cohesion = similarities.reduce((a, b) => a + b, 0) / vectors.length;
+
+  return { centroid, cohesion };
+}
+
+/**
+ * Backwards-compatible unweighted averaging
  */
 function averageVectors(vectors: number[][]): {
   centroid: number[];
@@ -61,10 +108,156 @@ function averageVectors(vectors: number[][]): {
 }
 
 /**
+ * ALGORITHM 2: Cluster Variance Detection & Split/Merge
+ * Split if bimodal outcome distribution (some tokens crash, others pump)
+ * Merge if clusters become too similar (distance < 0.15, similarity > 0.85)
+ */
+function calculateOutcomeVariance(outcomeDistribution: Record<string, number>): number {
+  const values = Object.values(outcomeDistribution);
+  if (values.length === 0) return 0;
+
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length;
+  return Math.sqrt(variance); // Standard deviation
+}
+
+function detectBimodalOutcomes(outcomeDistribution: Record<string, number>): boolean {
+  const successful = ["pump_100x", "pump_10x", "pump_5x", "pump_2x_sustained", "pump_2x_quick", "pump_minor"];
+  const crashes = ["crash_fast", "slow_bleed"];
+
+  let successCount = 0, crashCount = 0;
+  for (const [outcome, prob] of Object.entries(outcomeDistribution)) {
+    if (successful.includes(outcome)) successCount += prob;
+    if (crashes.includes(outcome)) crashCount += prob;
+  }
+
+  return successCount > 0.40 && crashCount > 0.40;
+}
+
+export function shouldSplitCluster(cluster: {
+  sampleCount: number;
+  outcomeDistribution?: Record<string, number>;
+  cohesion?: number;
+}): boolean {
+  const outcomes = cluster.outcomeDistribution || {};
+  const variance = calculateOutcomeVariance(outcomes);
+  const bimodal = detectBimodalOutcomes(outcomes);
+
+  // Thresholds from plan: variance > 0.35 OR bimodality > 0.80
+  return variance > 0.35 || bimodal;
+}
+
+export function shouldMergeClusters(
+  cluster1: { centroid: number[]; outcomeDistribution?: Record<string, number> },
+  cluster2: { centroid: number[]; outcomeDistribution?: Record<string, number> }
+): boolean {
+  const distance = 1 - cosineSimilarity(cluster1.centroid as number[], cluster2.centroid as number[]);
+  const outcomes1 = Object.values(cluster1.outcomeDistribution || {});
+  const outcomes2 = Object.values(cluster2.outcomeDistribution || {});
+
+  if (outcomes1.length === 0 || outcomes2.length === 0) return false;
+
+  const mean1 = outcomes1.reduce((a, b) => a + b, 0) / outcomes1.length;
+  const mean2 = outcomes2.reduce((a, b) => a + b, 0) / outcomes2.length;
+  const outcomeSimilarity = 1 - Math.abs(mean1 - mean2);
+
+  // Thresholds from plan: distance < 0.15 AND similarity > 0.85
+  return distance < 0.15 && outcomeSimilarity > 0.85;
+}
+
+/**
+ * ALGORITHM 3: Multi-Cluster Matching & Blending
+ * If token matches 2+ clusters with similar confidence, blend outcomes
+ */
+export interface ClusterMatch {
+  clusterId: string;
+  similarity: number;
+  outcomeDistribution: Record<string, number>;
+}
+
+export function computeBlendWeights(matches: ClusterMatch[]): Record<string, number> {
+  if (matches.length === 0) return {};
+  if (matches.length === 1) {
+    return { [matches[0].clusterId]: 1.0 };
+  }
+
+  // Multi-cluster blending: inverse similarity weighting
+  const totalSimilarity = matches.reduce((sum, m) => sum + m.similarity, 0);
+  const weights: Record<string, number> = {};
+
+  for (const match of matches) {
+    weights[match.clusterId] = match.similarity / totalSimilarity;
+  }
+
+  return weights;
+}
+
+export function blendOutcomeDistributions(
+  matches: ClusterMatch[],
+  weights?: Record<string, number>
+): Record<string, number> {
+  if (matches.length === 0) return {};
+
+  const w = weights || computeBlendWeights(matches);
+  const blended: Record<string, number> = {};
+
+  for (const match of matches) {
+    const weight = w[match.clusterId] || 0;
+    for (const [outcome, prob] of Object.entries(match.outcomeDistribution)) {
+      blended[outcome] = (blended[outcome] || 0) + prob * weight;
+    }
+  }
+
+  return blended;
+}
+
+export function getConfidencePenalty(matchCount: number): number {
+  if (matchCount <= 1) return 0;
+  if (matchCount === 2) return 0.10;  // 10% penalty for 2-cluster blend
+  return 0.20;                         // 20% penalty for 3+ cluster blend
+}
+
+/**
+ * ALGORITHM 4: Snapshot Frequency Schedule
+ * Base: T+0, 1, 5, 10, 30, 60, 180, 360, 1440 min + event triggers
+ */
+export interface SnapshotSchedule {
+  baseSnapshots: number[];  // Minutes when to take base snapshots
+  eventTriggers: string[];  // "price_spike", "volume_spike", "whale_exit", "graduation"
+}
+
+export function getSnapshotSchedule(): SnapshotSchedule {
+  return {
+    baseSnapshots: [0, 1, 5, 10, 30, 60, 180, 360, 1440],
+    eventTriggers: ["price_spike_50pct", "volume_spike_10x", "whale_exit_20pct", "graduation_imminent_95pct"],
+  };
+}
+
+export function shouldTakeSnapshotForEvent(
+  event: "price" | "volume" | "whale" | "graduation",
+  currentValue: number,
+  baselineValue: number
+): boolean {
+  switch (event) {
+    case "price":
+      return currentValue >= baselineValue * 1.5; // 50% price jump
+    case "volume":
+      return currentValue >= baselineValue * 10; // 10x volume
+    case "whale":
+      return (baselineValue - currentValue) / baselineValue >= 0.2; // 20% position reduction
+    case "graduation":
+      return currentValue >= 0.95; // 95% bonding curve
+    default:
+      return false;
+  }
+}
+
+/**
  * Cluster snapshot to lifecycle stage + outcome archetype
+ * Enhanced with multi-cluster matching & blending (Algorithm 3)
  *
  * Called as each fingerprint is created (activity-gated).
- * Returns archetype with outcome probability distribution for prediction.
+ * Returns matched clusters with outcome distributions for prediction.
  */
 export async function clusterSnapshotToArchetype(
   fingerprint: {
@@ -74,71 +267,69 @@ export async function clusterSnapshotToArchetype(
     medianMultiplier: number;
   }
 ): Promise<{
-  archetypeClusterId: string;
-  outcomeDistribution: Record<string, number>;
-  similarityToArchetype: number;
+  matches: ClusterMatch[];
+  blendedOutcomes: Record<string, number>;
+  primaryClusterId: string;
+  confidencePenalty: number;
   isNewArchetype: boolean;
 }> {
   const vector = fingerprint.fingerprintVector;
+  const minSimilarity = 0.70; // Threshold for cluster matching
 
-  // Find all existing archetypes
-  const allArchetypes = await db
+  // Find all existing clusters
+  const allClusters = await db
     .select()
     .from(tokenFingerprintClusters)
     .where(eq(tokenFingerprintClusters.type, "dead"));
 
-  if (allArchetypes.length === 0) {
-    // Create first archetype for this lifecycle stage
+  if (allClusters.length === 0) {
+    // Create first cluster for this lifecycle stage
     return createStageArchetype(fingerprint);
   }
 
-  // Find most similar archetype
-  let bestArchetype = allArchetypes[0];
-  let bestSimilarity = -1;
+  // Find all clusters above threshold (Algorithm 3: Multi-Cluster Matching)
+  const matches: ClusterMatch[] = [];
+  for (const cluster of allClusters) {
+    const clusterCentroid = cluster.centroid as number[];
+    const similarity = cosineSimilarity(vector, clusterCentroid);
 
-  for (const archetype of allArchetypes) {
-    const archetypeCentroid = archetype.centroid as number[];
-    const similarity = cosineSimilarity(vector, archetypeCentroid);
-
-    if (similarity > bestSimilarity) {
-      bestSimilarity = similarity;
-      bestArchetype = archetype;
+    if (similarity >= minSimilarity) {
+      matches.push({
+        clusterId: cluster.clusterId,
+        similarity,
+        outcomeDistribution: (cluster.outcomeDistribution as Record<string, number>) || {},
+      });
     }
   }
 
-  const thresholds = {
-    mergeSimilarity: 0.80,
-    minArchetypeCohesion: 0.70,
-    cohesionDropTolerance: 0.08,
-  };
-
-  // Too dissimilar → create new archetype
-  if (bestSimilarity < thresholds.mergeSimilarity) {
+  // No matches above threshold → create new cluster
+  if (matches.length === 0) {
     return createStageArchetype(fingerprint);
   }
 
-  // Check if merging would degrade cohesion
-  if (bestArchetype.sampleCount > 50) {
-    if (bestArchetype.cohesion < thresholds.minArchetypeCohesion) {
-      return createStageArchetype(fingerprint);
-    }
-  }
+  // Sort by similarity (highest first)
+  matches.sort((a, b) => b.similarity - a.similarity);
 
-  // Merge snapshot into archetype (but don't update outcome distribution yet)
-  // Outcome distribution only updates when tokens are archived (daily retrolearner)
-  const updated = await mergeSnapshotIntoArchetype(
-    bestArchetype.clusterId,
-    vector,
-    fingerprint.tokenMint
-  );
+  // Decide: single cluster vs blending
+  const topGap = matches[0].similarity - (matches[1]?.similarity ?? 0);
+  const useBlending = topGap <= 0.10 && matches.length >= 2;
 
-  const outcomeDistribution =
-    (bestArchetype.outcomeDistribution as Record<string, number>) || {};
+  // Blend outcomes if close match (Algorithm 3)
+  const blendedOutcomes = useBlending
+    ? blendOutcomeDistributions(matches)
+    : matches[0].outcomeDistribution;
+
+  const confidencePenalty = useBlending ? getConfidencePenalty(matches.length) : 0;
+
+  // Merge snapshot into primary (best match) cluster
+  const primaryMatch = matches[0];
+  await mergeSnapshotIntoArchetype(primaryMatch.clusterId, vector, fingerprint.tokenMint);
 
   return {
-    archetypeClusterId: bestArchetype.clusterId,
-    outcomeDistribution,
-    similarityToArchetype: bestSimilarity,
+    matches,
+    blendedOutcomes,
+    primaryClusterId: primaryMatch.clusterId,
+    confidencePenalty,
     isNewArchetype: false,
   };
 }
@@ -431,6 +622,179 @@ export async function archiveTokenAndUpdateOutcomes(
     snapshotCount: fingerprints.length,
     archetypesUpdated: archetypesSet.size,
     trajectoryOutcome,
+  };
+}
+
+/**
+ * Handle token deathbed: lifecycle-weighted averaging + pruning
+ * Called when token reaches volume → 0 (end of trading)
+ *
+ * 1. Determine final outcome (crash, pump, etc.)
+ * 2. Lifecycle-weight all snapshots (early 1.0x, late 0.2x)
+ * 3. Find best matching cluster
+ * 4. Merge weighted snapshots into cluster centroid
+ * 5. Update cluster outcome distribution
+ * 6. Delete snapshot records (pruning)
+ * 7. Check cluster for split/merge conditions
+ */
+export async function handleTokenDeathbed(
+  tokenMint: string,
+  finalMultiplier: number,
+  maxMultiplierReached: number,
+  tokenAgeMinutes: number
+): Promise<{
+  outcome: string;
+  clusterId: string;
+  snapshotsPruned: number;
+  clusterSplit: boolean;
+  clusterMerged: boolean;
+}> {
+  // 1. Determine final outcome
+  const outcome = determineTrajectoryOutcome(finalMultiplier, tokenAgeMinutes, maxMultiplierReached);
+
+  // 2. Fetch all snapshots for this token
+  const snapshots = await db
+    .select()
+    .from(tokenFingerprints)
+    .where(eq(tokenFingerprints.tokenMint, tokenMint))
+    .orderBy(tokenFingerprints.snapshotTimestamp);
+
+  if (snapshots.length === 0) {
+    return {
+      outcome,
+      clusterId: "none",
+      snapshotsPruned: 0,
+      clusterSplit: false,
+      clusterMerged: false,
+    };
+  }
+
+  // 3. Find best matching cluster
+  const allClusters = await db
+    .select()
+    .from(tokenFingerprintClusters)
+    .where(eq(tokenFingerprintClusters.type, "dead"));
+
+  let bestCluster = allClusters[0];
+  let bestSimilarity = -1;
+
+  for (const cluster of allClusters) {
+    // Use first snapshot for cluster matching (most representative of early shape)
+    const firstSnapshotVector = snapshots[0].fingerprintVector as number[];
+    const similarity = cosineSimilarity(firstSnapshotVector, cluster.centroid as number[]);
+    if (similarity > bestSimilarity) {
+      bestSimilarity = similarity;
+      bestCluster = cluster;
+    }
+  }
+
+  // Create new cluster if no good match
+  if (bestSimilarity < 0.75) {
+    const now = Math.floor(Date.now() / 1000);
+    const stageDesc = `age${Math.round(tokenAgeMinutes)}_outcome${outcome}`;
+    const clusterId = `lifecycle_${stageDesc}_${now}`;
+
+    await db.insert(tokenFingerprintClusters).values({
+      clusterId,
+      type: "dead",
+      lifecycleStage: stageDesc,
+      centroid: snapshots[0].fingerprintVector,
+      outcomeDistribution: { [outcome]: 1.0 },
+      sampleCount: 1,
+      snapshotTokenMints: [tokenMint],
+      cohesion: 1.0,
+      minSimilarity: 1.0,
+      maxSimilarity: 1.0,
+      createdAt: now,
+      updatedAt: now,
+      lastRebalancedAt: now,
+    });
+
+    // Prune snapshots
+    await db.delete(tokenFingerprints).where(eq(tokenFingerprints.tokenMint, tokenMint));
+
+    return {
+      outcome,
+      clusterId,
+      snapshotsPruned: snapshots.length,
+      clusterSplit: false,
+      clusterMerged: false,
+    };
+  }
+
+  // 4. Merge lifecycle-weighted snapshots into cluster
+  const weightedSnapshots = snapshots.map((snap) => ({
+    vector: snap.fingerprintVector as number[],
+    tokenAgeMinutes: snap.tokenAgeMinutes || 0,
+  }));
+
+  const { centroid: newCentroid, cohesion: newCohesion } = averageVectorsWeighted(weightedSnapshots);
+
+  // 5. Update outcome distribution
+  const currentMints = (bestCluster.snapshotTokenMints as string[]) || [];
+  const currentOutcomes = (bestCluster.outcomeDistribution as Record<string, number>) || {};
+  const totalCount = bestCluster.sampleCount + 1;
+
+  const newOutcomes: Record<string, number> = {};
+  for (const [outcomeType, prob] of Object.entries(currentOutcomes)) {
+    newOutcomes[outcomeType] = (prob * bestCluster.sampleCount) / totalCount;
+  }
+  newOutcomes[outcome] =
+    ((newOutcomes[outcome] || 0) * bestCluster.sampleCount + 1) / totalCount;
+
+  // Calculate new cohesion
+  const testVectors = snapshots.map((s) => s.fingerprintVector as number[]);
+  testVectors.push(newCentroid);
+  const { cohesion: mergedCohesion } = averageVectors(testVectors);
+
+  const now = Math.floor(Date.now() / 1000);
+  await db
+    .update(tokenFingerprintClusters)
+    .set({
+      sampleCount: totalCount,
+      snapshotTokenMints: [...currentMints, tokenMint],
+      centroid: newCentroid,
+      outcomeDistribution: newOutcomes,
+      cohesion: mergedCohesion,
+      updatedAt: now,
+    })
+    .where(eq(tokenFingerprintClusters.clusterId, bestCluster.clusterId));
+
+  // 6. Prune snapshots
+  await db.delete(tokenFingerprints).where(eq(tokenFingerprints.tokenMint, tokenMint));
+
+  // 7. Check for split/merge conditions (Algorithm 1 & 2)
+  let clusterSplit = false;
+  let clusterMerged = false;
+
+  const updatedCluster = {
+    sampleCount: totalCount,
+    outcomeDistribution: newOutcomes,
+    cohesion: mergedCohesion,
+  };
+
+  if (shouldSplitCluster(updatedCluster)) {
+    // TODO: Implement cluster split logic
+    clusterSplit = true;
+  }
+
+  // Check for merge with similar clusters
+  const otherClusters = allClusters.filter((c) => c.clusterId !== bestCluster.clusterId);
+  for (const otherCluster of otherClusters) {
+    if (shouldMergeClusters({ centroid: newCentroid, outcomeDistribution: newOutcomes },
+                             { centroid: otherCluster.centroid as number[], outcomeDistribution: otherCluster.outcomeDistribution as Record<string, number> })) {
+      // TODO: Implement cluster merge logic
+      clusterMerged = true;
+      break;
+    }
+  }
+
+  return {
+    outcome,
+    clusterId: bestCluster.clusterId,
+    snapshotsPruned: snapshots.length,
+    clusterSplit,
+    clusterMerged,
   };
 }
 
