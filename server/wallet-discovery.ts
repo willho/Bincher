@@ -753,3 +753,50 @@ export async function discoverWalletsFromMissedTokens(
     return new Map();
   }
 }
+
+/**
+ * Look up cluster associations for snapshot's top 20 holders
+ * Used during snapshot evaluation to see which clusters the holders belong to
+ * and learn from their historical performance
+ */
+export async function getHolderClusterAssociations(
+  walletAddresses: string[]
+): Promise<Map<string, {
+  winRate: number;
+  totalPnl7d: number;
+  sharpeRatio: number;
+  discoveryConfidence: number;
+  discoveredFromTokens: string[];
+}>> {
+  const { retrolearnerWalletAnalysis } = await import("@shared/schema");
+
+  const holderMetrics = new Map<string, {
+    winRate: number;
+    totalPnl7d: number;
+    sharpeRatio: number;
+    discoveryConfidence: number;
+    discoveredFromTokens: string[];
+  }>();
+
+  for (const wallet of walletAddresses) {
+    try {
+      const analysis = await db.query.retrolearnerWalletAnalysis.findFirst({
+        where: eq(retrolearnerWalletAnalysis.walletAddress, wallet),
+      });
+
+      if (analysis) {
+        holderMetrics.set(wallet, {
+          winRate: analysis.winRate7d || 0,
+          totalPnl7d: analysis.totalPnl7d || 0,
+          sharpeRatio: analysis.sharpeRatio || 0,
+          discoveryConfidence: analysis.discoveryConfidence || 0,
+          discoveredFromTokens: (analysis.discoveredFromTokens as string[]) || [],
+        });
+      }
+    } catch (_) {
+      // Wallet not yet in retrolearner database - skip
+    }
+  }
+
+  return holderMetrics;
+}

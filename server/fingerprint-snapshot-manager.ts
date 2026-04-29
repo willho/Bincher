@@ -204,6 +204,7 @@ export async function createFingerprintSnapshot(
     underWaterCount: 20 - profitableCount,
     minMultiplier: Math.min(...holderMultipliers),
     maxMultiplier: Math.max(...holderMultipliers),
+    walletAddresses: top20Holders.map(h => h.walletAddress), // For leaderboard lookups
   };
 
   // Get worst-case latency and slippage from last 3 seconds

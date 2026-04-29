@@ -14,6 +14,7 @@ import { calculateTrajectorySignal, filterSignalsByAction, rankSignalsByConfiden
 import { clusterSnapshotToArchetype, getSnapshotSchedule, shouldTakeSnapshotForEvent } from "./fingerprint-cluster-management";
 import { generateWhaleSignal, calculateExitSignal, validateWhaleSignal, getWhaleWeightMetrics } from "./whale-watcher-system";
 import { systemPicksFund, type FundSession } from "./system-picks-fund";
+import { getHolderClusterAssociations } from "./wallet-discovery";
 import axios from "axios";
 
 // =====================
@@ -198,6 +199,15 @@ async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick 
     // Extract trajectory data (includes maxMultiplier reached)
     const trajectory = snapshot.trajectoryAnchored as any || {};
     const top20Metrics = snapshot.top20HolderMetrics as any || {};
+
+    // Look up top 20 holder cluster associations from leaderboard (for learning)
+    const topHolderWallets = (top20Metrics.walletAddresses || []) as string[];
+    const holderMetrics = await getHolderClusterAssociations(topHolderWallets);
+
+    // Calculate average holder quality (for context/logging)
+    const avgHolderWinRate = holderMetrics.size > 0
+      ? Array.from(holderMetrics.values()).reduce((sum, m) => sum + m.winRate, 0) / holderMetrics.size
+      : 0;
 
     // NEW: Use enhanced cluster matching with multi-cluster blending (Algorithm 3)
     const clusterResult = await clusterSnapshotToArchetype({
