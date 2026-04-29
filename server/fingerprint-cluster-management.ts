@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { tokenFingerprintClusters, tokenFingerprints, tokenDataPool } from "@shared/schema";
-import { eq, and, gte, lt, sql } from "drizzle-orm";
+import { tokenFingerprintClusters, tokenFingerprints, tokenDataPool, tokenFingerprintSnapshots, familiarWhales } from "@shared/schema";
+import { eq, and, gte, lt, sql, desc } from "drizzle-orm";
 
 /**
  * Live-Token-Averaging Clustering Architecture
@@ -474,6 +474,56 @@ function determineTrajectoryOutcome(
 }
 
 /**
+ * Calculate whale quality score for a token (0.2-1.0)
+ * Scores the top 20 holders to determine outcome weight
+ *
+ * High quality (0.8-1.0) = active/watch-tier whales with high success rate
+ * Low quality (0.2-0.4) = unknown wallets, snipers, bots
+ *
+ * Used to weight outcome contributions: high-quality whale backing = higher impact on cluster
+ */
+async function getWhaleQualityScore(tokenMint: string): Promise<number> {
+  try {
+    // Get latest snapshot with holder metrics
+    const snapshot = await db.query.tokenFingerprintSnapshots.findFirst({
+      where: eq(tokenFingerprintSnapshots.tokenMint, tokenMint),
+      orderBy: desc(tokenFingerprintSnapshots.timestamp),
+    });
+
+    if (!snapshot?.top20HolderMetrics) return 0.5; // Default neutral
+
+    const metrics = snapshot.top20HolderMetrics as any;
+
+    // Use holder concentration as quality proxy:
+    // If top 20 median multiplier > 1.5x, they made good decisions
+    // If profitable count > 15, the token has strong whale support
+    const medianMultiplier = metrics.medianMultiplier || 1;
+    const profitableCount = metrics.profitableCount || 0;
+
+    let score = 0.5; // Start neutral
+
+    // Profitable whales = good token quality
+    if (profitableCount >= 15) {
+      score += 0.3; // Strong whale backing
+    } else if (profitableCount >= 10) {
+      score += 0.15;
+    }
+
+    // Median multiplier shows whale judgment
+    if (medianMultiplier > 2) {
+      score += 0.2; // Whales knew early
+    } else if (medianMultiplier > 1.5) {
+      score += 0.1;
+    }
+
+    return Math.max(0.2, Math.min(1.0, score));
+  } catch (error) {
+    console.warn(`[WhaleQuality] Error for ${tokenMint}:`, error);
+    return 0.5;
+  }
+}
+
+/**
  * Retrolearner: Backfill archived token snapshots with outcome, cluster them
  * Called daily by retrolearner after identifying archived tokens
  */
@@ -493,6 +543,11 @@ export async function archiveTokenAndUpdateOutcomes(
     tokenAgeMinutes,
     maxMultiplierReached
   );
+
+  // Calculate whale quality score (weights outcome contribution to clusters)
+  // High-quality whale backing (0.8-1.0) = outcome heavily influences cluster
+  // Low-quality/unknown (0.2-0.4) = outcome lightly influences cluster
+  const whaleQualityScore = await getWhaleQualityScore(tokenMint);
 
   // Fetch all fingerprints for this token
   const fingerprints = await db
@@ -576,17 +631,19 @@ export async function archiveTokenAndUpdateOutcomes(
       const { centroid: newCentroid, cohesion: newCohesion } =
         averageVectors(allVectors);
 
-      // Update outcome distribution
+      // Update outcome distribution with whale quality weighting
+      // High-quality whale backing (score 0.8-1.0) = outcome weighted heavily
+      // Low-quality holdings (score 0.2-0.4) = outcome weighted lightly
       const newOutcomes = { ...currentOutcomes };
-      const totalCount = bestArchetype.sampleCount + 1;
+      const weightedCount = bestArchetype.sampleCount + whaleQualityScore;
       for (const outcome of Object.keys(newOutcomes)) {
         newOutcomes[outcome] =
-          (newOutcomes[outcome] * bestArchetype.sampleCount) / totalCount;
+          (newOutcomes[outcome] * bestArchetype.sampleCount) / weightedCount;
       }
       newOutcomes[trajectoryOutcome] =
         ((newOutcomes[trajectoryOutcome] || 0) * bestArchetype.sampleCount +
-          1) /
-        totalCount;
+          whaleQualityScore) /
+        weightedCount;
 
       // Calculate similarity range
       let minSim = 1,
