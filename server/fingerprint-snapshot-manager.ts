@@ -1,6 +1,6 @@
 import { db } from "./db";
-import { eq, and, gte, desc } from "drizzle-orm";
-import { tokenFingerprintSnapshots } from "@shared/schema";
+import { eq, and, gte, desc, sql } from "drizzle-orm";
+import { tokenFingerprintSnapshots, rawTokenTrades, holderSnapshots } from "@shared/schema";
 import { getTopHoldersWithPnL } from "./snapshot-holder-pnl-calculator";
 import { latencyMonitor } from "./latency-monitor";
 
@@ -98,6 +98,75 @@ function checkTradeVolumeMilestone(
 }
 
 /**
+ * Helper: get creation price from first trade
+ */
+async function getPriceAtCreation(tokenMint: string): Promise<number> {
+  const firstTrade = await db.query.rawTokenTrades.findFirst({
+    where: eq(rawTokenTrades.tokenMint, tokenMint),
+    orderBy: (trades, { asc }) => asc(trades.timestamp),
+  });
+
+  if (!firstTrade) return 0.00001;
+  return firstTrade.price ?? 0.00001;
+}
+
+/**
+ * Helper: calculate trade metrics since last snapshot
+ */
+async function getTradeMetricsSinceLastSnapshot(
+  tokenMint: string,
+  lastSnapshotTime: number
+): Promise<{
+  tradeCount: number;
+  uniqueTraders: number;
+  volumeSol: number;
+}> {
+  const trades = await db.query.rawTokenTrades.findMany({
+    where: and(
+      eq(rawTokenTrades.tokenMint, tokenMint),
+      gte(rawTokenTrades.timestamp, lastSnapshotTime)
+    ),
+  });
+
+  const uniqueWallets = new Set(trades.map(t => t.walletAddress));
+  const volumeSol = trades.reduce((sum, t) => sum + (t.amountSol || 0), 0);
+
+  return {
+    tradeCount: trades.length,
+    uniqueTraders: uniqueWallets.size,
+    volumeSol,
+  };
+}
+
+/**
+ * Helper: track top 20 holder exits between snapshots
+ */
+async function getHolderExitsSinceLastSnapshot(
+  tokenMint: string,
+  lastSnapshotTime: number,
+  previousTop20Holders: string[]
+): Promise<number> {
+  if (previousTop20Holders.length === 0) return 0;
+
+  // Find sells from previous top 20 holders after last snapshot
+  const exitTrades = await db.query.rawTokenTrades.findMany({
+    where: and(
+      eq(rawTokenTrades.tokenMint, tokenMint),
+      eq(rawTokenTrades.direction, "sell"),
+      gte(rawTokenTrades.timestamp, lastSnapshotTime)
+    ),
+  });
+
+  const exitWallets = new Set(
+    exitTrades
+      .filter(t => previousTop20Holders.includes(t.walletAddress))
+      .map(t => t.walletAddress)
+  );
+
+  return exitWallets.size;
+}
+
+/**
  * Create a new fingerprint snapshot
  */
 export async function createFingerprintSnapshot(
@@ -141,14 +210,78 @@ export async function createFingerprintSnapshot(
   const { worstLatencyMs, worstSlippagePercent } =
     latencyMonitor.getWorstInWindow(3);
 
+  // Get creation price
+  const creationPrice = await getPriceAtCreation(tokenMint);
+
+  // Get all trades since token creation to calculate trajectory
+  const creationTime = Math.floor(Date.now() / 1000) - tokenAgeSeconds;
+  const allTrades = await db.query.rawTokenTrades.findMany({
+    where: and(
+      eq(rawTokenTrades.tokenMint, tokenMint),
+      gte(rawTokenTrades.timestamp, creationTime)
+    ),
+  });
+
+  const uniqueTradersSinceCreation = new Set(
+    allTrades.map(t => t.walletAddress)
+  ).size;
+  const volumeSolSinceCreation = allTrades.reduce(
+    (sum, t) => sum + (t.amountSol || 0),
+    0
+  );
+
+  // Track exits of previous top holders
+  let top20ExitCount = 0;
+  if (lastSnapshot) {
+    const lastHolderSnapshot = await db.query.holderSnapshots.findFirst({
+      where: and(
+        eq(holderSnapshots.tokenMint, tokenMint),
+        gte(holderSnapshots.snapshotTime, lastSnapshot.timestamp)
+      ),
+      orderBy: desc(holderSnapshots.snapshotTime),
+    });
+
+    if (lastHolderSnapshot?.topHolders) {
+      const previousTopHolders = new Set(
+        (lastHolderSnapshot.topHolders as any[]).map(h => h.address)
+      );
+
+      const exitTrades = await db.query.rawTokenTrades.findMany({
+        where: and(
+          eq(rawTokenTrades.tokenMint, tokenMint),
+          eq(rawTokenTrades.direction, "sell"),
+          gte(rawTokenTrades.timestamp, lastSnapshot.timestamp)
+        ),
+      });
+
+      top20ExitCount = new Set(
+        exitTrades
+          .filter(t => previousTopHolders.has(t.walletAddress))
+          .map(t => t.walletAddress)
+      ).size;
+    }
+  }
+
+  // Calculate concentration shift from top 20 holder metrics
+  let concentrationShift = 0;
+  if (lastSnapshot && top20HolderMetrics) {
+    const lastMetrics = lastSnapshot.top20HolderMetrics as any;
+    if (lastMetrics?.maxMultiplier) {
+      concentrationShift = Math.abs(
+        (top20HolderMetrics.maxMultiplier - lastMetrics.maxMultiplier) /
+          lastMetrics.maxMultiplier
+      ) * 100;
+    }
+  }
+
   // Build trajectory anchored (arc from 0 to this snapshot)
   const trajectoryAnchored = {
-    priceChange: ((currentPrice / getPriceAtCreation(tokenMint)) - 1) * 100, // TODO: fetch creation price
-    tradeCount: 0, // TODO: fetch from rawTokenTrades
-    uniqueTraders: 0, // TODO: fetch from rawTokenTrades
-    volumeSol: 0, // TODO: fetch from rawTokenTrades
-    top20Exited: 0, // TODO: track from previous snapshots
-    concentrationShift: 0, // TODO: calculate from holder data
+    priceChange: creationPrice > 0 ? ((currentPrice / creationPrice) - 1) * 100 : 0,
+    tradeCount: allTrades.length,
+    uniqueTraders: uniqueTradersSinceCreation,
+    volumeSol: volumeSolSinceCreation,
+    top20Exited: top20ExitCount,
+    concentrationShift,
     durationSeconds: tokenAgeSeconds,
   };
 
@@ -259,10 +392,3 @@ export async function evaluateSnapshotTrigger(
   return { shouldSnapshot: false, trigger: "time_based" };
 }
 
-/**
- * Helper: get creation price (placeholder - needs implementation)
- */
-function getPriceAtCreation(tokenMint: string): number {
-  // TODO: fetch from tokenDataPool or first snapshot
-  return 0.00001; // Placeholder
-}
