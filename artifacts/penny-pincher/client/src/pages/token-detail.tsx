@@ -1,4 +1,4 @@
-import { useParams, useRouter } from "wouter";
+import { useParams, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -32,14 +32,14 @@ interface TokenDetail {
 
 export default function TokenDetailPage() {
   const params = useParams();
-  const [, navigate] = useRouter();
+  const [, navigate] = useLocation();
   const mint = params.mint || "";
 
   const { data: token, isLoading } = useQuery({
     queryKey: [`/api/tokens/${mint}/details`],
     queryFn: async () => {
       const response = await apiRequest("GET", `/api/tokens/${mint}/details`);
-      return response as TokenDetail;
+      return (await response.json()) as TokenDetail;
     },
     enabled: !!mint,
   });

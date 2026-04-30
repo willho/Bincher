@@ -1,4 +1,4 @@
-import { useParams, useRouter } from "wouter";
+import { useParams, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -31,14 +31,14 @@ interface WalletDetail {
 
 export default function WalletDetailPage() {
   const params = useParams();
-  const [, navigate] = useRouter();
+  const [, navigate] = useLocation();
   const address = params.address || "";
 
   const { data: wallet, isLoading } = useQuery({
     queryKey: [`/api/wallets/${address}/detail`],
     queryFn: async () => {
       const response = await apiRequest("GET", `/api/wallets/${address}/detail`);
-      return response as WalletDetail;
+      return (await response.json()) as WalletDetail;
     },
     enabled: !!address,
   });

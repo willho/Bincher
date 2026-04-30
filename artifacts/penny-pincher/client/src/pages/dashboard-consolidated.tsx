@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "wouter";
+import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -82,7 +82,7 @@ interface WalletLeaderboardEntry {
 }
 
 export default function DashboardConsolidated() {
-  const [, navigate] = useRouter();
+  const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState("overview");
 
   // Fetch fund stats
@@ -90,7 +90,7 @@ export default function DashboardConsolidated() {
     queryKey: ["/api/system/fund-stats"],
     queryFn: async () => {
       const response = await apiRequest("GET", "/api/system/fund-stats");
-      return response as FundStats;
+      return (await response.json()) as FundStats;
     },
     staleTime: 30000,
   });
@@ -100,7 +100,7 @@ export default function DashboardConsolidated() {
     queryKey: ["/api/clusters/summary"],
     queryFn: async () => {
       const response = await apiRequest("GET", "/api/clusters/summary");
-      return response as ClusterSummary[];
+      return (await response.json()) as ClusterSummary[];
     },
     staleTime: 60000,
   });
@@ -110,7 +110,7 @@ export default function DashboardConsolidated() {
     queryKey: ["/api/whales/top"],
     queryFn: async () => {
       const response = await apiRequest("GET", "/api/whales/top");
-      return response as WhaleSummary[];
+      return (await response.json()) as WhaleSummary[];
     },
     staleTime: 60000,
   });
@@ -120,7 +120,7 @@ export default function DashboardConsolidated() {
     queryKey: ["/api/tokens/active"],
     queryFn: async () => {
       const response = await apiRequest("GET", "/api/tokens/active");
-      return response as TokenLaunch[];
+      return (await response.json()) as TokenLaunch[];
     },
     staleTime: 30000,
   });
@@ -130,7 +130,7 @@ export default function DashboardConsolidated() {
     queryKey: ["/api/tokens/leaderboard"],
     queryFn: async () => {
       const response = await apiRequest("GET", "/api/tokens/leaderboard");
-      return response as TokenLeaderboardEntry[];
+      return (await response.json()) as TokenLeaderboardEntry[];
     },
     staleTime: 30000,
   });
@@ -140,7 +140,7 @@ export default function DashboardConsolidated() {
     queryKey: ["/api/wallets/leaderboard"],
     queryFn: async () => {
       const response = await apiRequest("GET", "/api/wallets/leaderboard");
-      return response as WalletLeaderboardEntry[];
+      return (await response.json()) as WalletLeaderboardEntry[];
     },
     staleTime: 60000,
   });
