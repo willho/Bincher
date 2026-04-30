@@ -5,8 +5,8 @@ import {
   storeSlowGrowerPatterns,
   scoreSlowGrowerMatch,
   SlowGrowerPattern,
-} from "./slow-grower-detector";
-import { db } from "./db";
+} from "../server/slow-grower-detector";
+import { db } from "../server/db";
 import { swaps, botFlaggedWallets, tokenDataPool } from "@shared/schema";
 
 /**

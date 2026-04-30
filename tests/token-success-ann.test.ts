@@ -5,8 +5,8 @@ import {
   getOrCreateModel,
   trainANNModel,
   predictTokenSuccess,
-} from "./token-success-ann";
-import { db } from "./db";
+} from "../server/token-success-ann";
+import { db } from "../server/db";
 import { priceHistoryCache, tokenOutcomes, swaps } from "@shared/schema";
 
 /**

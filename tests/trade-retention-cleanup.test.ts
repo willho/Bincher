@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { db } from "./db";
+import { db } from "../server/db";
 import { rawTokenTrades } from "@shared/schema";
-import { cleanupOldTrades, getTradeTableStats } from "./trade-retention-cleanup";
+import { cleanupOldTrades, getTradeTableStats } from "../server/trade-retention-cleanup";
 import { sql } from "drizzle-orm";
 
 /**

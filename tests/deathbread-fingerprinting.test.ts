@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { db } from "./db";
+import { db } from "../server/db";
 import { tokenFingerprints, tokenDataPool, rawTokenTrades } from "@shared/schema";
 import {
   recordDeathbreadFingerprint,
@@ -7,7 +7,7 @@ import {
   archiveTokenWithDeathbread,
   estimateDeathbreadSavings,
   estimateFullStrategy,
-} from "./deathbread-fingerprinting";
+} from "../server/deathbread-fingerprinting";
 import { sql } from "drizzle-orm";
 
 /**

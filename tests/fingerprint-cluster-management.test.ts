@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { db } from "./db";
+import { db } from "../server/db";
 import { tokenFingerprintClusters, tokenFingerprints } from "@shared/schema";
 import {
   archiveTokenTrajectory,
   estimateClusterSize,
   estimateFullFingerprinterSize,
   reportArchetypeQuality,
-} from "./fingerprint-cluster-management";
+} from "../server/fingerprint-cluster-management";
 import { sql } from "drizzle-orm";
 
 /**

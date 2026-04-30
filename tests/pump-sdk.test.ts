@@ -3,7 +3,7 @@
  * Tests SDK functionality, performance, and identifies any limits
  */
 
-import { initializePumpSdk, fetchBondingCurveProgress, isTokenGraduated, getBondingCurvePercentage } from "../pump-sdk-client";
+import { initializePumpSdk, fetchBondingCurveProgress, isTokenGraduated, getBondingCurvePercentage } from "../server/pump-sdk-client";
 import { OnlinePumpSdk } from "@pump-fun/pump-sdk";
 import { Connection, PublicKey } from "@solana/web3.js";
 

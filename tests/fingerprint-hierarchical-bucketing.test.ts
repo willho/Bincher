@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { db } from "./db";
+import { db } from "../server/db";
 import { tokenFingerprints } from "@shared/schema";
 import {
   bucketInactiveFingerprints,
   estimateInactiveTokenStorageSavings,
-} from "./fingerprint-hierarchical-bucketing";
+} from "../server/fingerprint-hierarchical-bucketing";
 import { sql } from "drizzle-orm";
 
 /**

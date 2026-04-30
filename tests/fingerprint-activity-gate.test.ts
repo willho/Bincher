@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { db } from "./db";
+import { db } from "../server/db";
 import { tokenFingerprints, rawTokenTrades } from "@shared/schema";
 import {
   shouldFingerprintToken,
@@ -7,7 +7,7 @@ import {
   recordFingerprintSnapshot,
   estimateStorageSavingsWithGating,
   demonstrateActivityGating,
-} from "./fingerprint-activity-gate";
+} from "../server/fingerprint-activity-gate";
 import { sql } from "drizzle-orm";
 
 /**

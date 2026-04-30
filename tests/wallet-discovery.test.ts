@@ -10,8 +10,8 @@ import {
   getCopyChainStats,
   runWalletDiscoveryCycle,
   scoreWalletForSignal,
-} from "./wallet-discovery";
-import { db } from "./db";
+} from "../server/wallet-discovery";
+import { db } from "../server/db";
 import { swaps, tokenOutcomes } from "@shared/schema";
 
 /**

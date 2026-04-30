@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { db } from "./db";
+import { db } from "../server/db";
 import { rawTokenTrades } from "@shared/schema";
 import {
   createDailySummary,
   summarizeAndDeleteDayOldTrades,
   compressDailyToWeeklySummary,
   estimateStorageByAge,
-} from "./trade-hierarchical-summarization";
+} from "../server/trade-hierarchical-summarization";
 import { sql } from "drizzle-orm";
 
 /**
