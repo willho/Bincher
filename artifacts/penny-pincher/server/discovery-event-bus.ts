@@ -26,6 +26,7 @@ export type DiscoveryEventType =
   | "social_call"
   | "social_detected"
   | "pumpfun_graduated"
+  | "pumpfun_bonding_curve"
   | "raydium_new_pool";
 
 interface BusEvent {

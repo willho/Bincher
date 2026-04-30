@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { 
   behaviorVectors, 
@@ -71,8 +70,8 @@ export async function loadVectorsForRoute(
   // Only load personality/relationship for chat-based intents that need communication style
   // Trading AI and safety checks don't need personality vectors
   const needsPersonality = needs.has("personality") || needs.has("full") || 
-    routeResult.intent === "advice" || routeResult.intent === "chat" ||
-    routeResult.intent === "unknown" || routeResult.tier >= 3;
+    (routeResult.intent as string) === "advice" || (routeResult.intent as string) === "chat" ||
+    (routeResult.intent as string) === "unknown" || routeResult.tier >= 3;
   
   if (needsPersonality) {
     loadPromises.push(loadPersonalityVectors(userId, vectors));

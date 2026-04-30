@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Fingerprint Matching with pgvector
  *
@@ -67,7 +66,7 @@ export async function matchToArchetypes(
       `
     );
 
-    return results as ArchetypeMatch[];
+    return results as unknown as ArchetypeMatch[];
   } catch (error) {
     console.error("[FingerprintMatching] Error matching to archetypes:", error);
     throw error;
@@ -117,7 +116,7 @@ export async function matchToTrajectories(
       `
     );
 
-    return results as TrajectoryMatch[];
+    return results as unknown as TrajectoryMatch[];
   } catch (error) {
     console.error("[FingerprintMatching] Error matching to trajectories:", error);
     throw error;

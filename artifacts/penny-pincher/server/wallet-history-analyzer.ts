@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { retrolearnerWalletAnalysis, goodTraders } from "../shared/schema";
 import { eq, and, lt } from "drizzle-orm";
@@ -61,7 +60,7 @@ export class WalletHistoryAnalyzer {
         .from(goodTraders)
         .where(
           and(
-            goodTraders.isActive === true,
+            eq(goodTraders.isActive, true),
             // TODO: Add join with retrolearnerWalletAnalysis to check lastAnalyzedAt
             // For now, return all active good traders
           )

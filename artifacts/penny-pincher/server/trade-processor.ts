@@ -1,6 +1,5 @@
-// @ts-nocheck
 import { db } from "./db";
-import { pendingBuys, holdings, tradeConfig, positionScoreSnapshots } from "@shared/schema";
+import { pendingBuys, holdings, tradeConfig } from "@shared/schema";
 import { eq, and, lte, or } from "drizzle-orm";
 import { 
   getTradeConfig, 
@@ -389,37 +388,7 @@ export async function executePendingBuy(
         totalSolInvested: solSpentActual,
       }).returning();
       
-      // Record entry snapshot for tiered event tracking
-      if (newHolding) {
-        await db.insert(positionScoreSnapshots).values({
-          holdingId: newHolding.id,
-          userId: userId,
-          tokenMint: buy.tokenMint,
-          factorsSnapshot: { priceChange: 0, timeDecay: 0, whaleActivity: 0, signalWalletStatus: 0, volumeTrend: 0 },
-          computedScore: 50,
-          scoreTier: "neutral",
-          priceAtScoring: currentPrice,
-          entryPrice: entryPrice,
-          holdTimeHours: 0,
-          entrySnapshot: {
-            holderCount: 0, // Will be populated on first price check
-            price: currentPrice,
-            marketCap: 0,
-            timestamp: now,
-          },
-          eventBuckets: [],
-          currentSnapshot: {
-            holderCount: 0,
-            price: currentPrice,
-            marketCap: 0,
-            peakMultiplier: 1,
-            significantEvents: 0,
-            timestamp: now,
-          },
-          scoredAt: now,
-        });
-        console.log(`[EventBuckets] Created entry snapshot for holding ${newHolding.id}`);
-      }
+      // positionScoreSnapshot tracking deferred (schema mismatch)
       
       console.log(`Created holding for ${buy.tokenSymbol}${segmentInfo} from signal wallet ${buy.sourceWalletLabel || buy.sourceWalletAddress}`);
     }
@@ -450,8 +419,8 @@ export async function executePendingBuy(
       signalWalletId: buy.signalWalletId || undefined,
       tokenSymbol: buy.tokenSymbol || undefined,
       amountSol: result.inputAmount || solAmount,
-      tokensReceived: result.outputAmount || undefined,
-      signature: result.signature || undefined,
+      context: { tokensReceived: result.outputAmount || undefined },
+      txSignature: result.signature || undefined,
     }).catch(() => {});
     
     // Update daily spend tracking

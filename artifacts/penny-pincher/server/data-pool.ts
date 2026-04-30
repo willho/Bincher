@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, desc, asc, sql, lt, gt, isNull } from "drizzle-orm";
 import {
@@ -89,6 +88,20 @@ export async function upsertTokenData(
     telegramMentions: number;
     holderCount: number;
     imageUrl: string;
+    pumpfunGraduated: boolean;
+    pumpfunGraduationTime: number;
+    raydiumPoolAddress: string;
+    raydiumPoolDiscoveredAt: number;
+    raydiumLiquidityUsd: number;
+    poolOriginType: string;
+    isPumpfun: boolean;
+    pumpfunBondingCurveProgress: number;
+    boostRank: number;
+    trendingRank: number;
+    discoverySource: string;
+    deployerAddress: string;
+    creatorAddress: string;
+    lastAnalyzedAt: number;
   }>,
   source: string = 'backend',
   fetchedBy?: number
@@ -235,7 +248,6 @@ export async function upsertTokenData(
     priceChange7d: null,
     priceChange14d: null,
     priceChange30d: null,
-    deployerAddress: null,
     hasTwitter: data.hasTwitter ?? false,
     hasTelegram: data.hasTelegram ?? false,
     hasWebsite: data.hasWebsite ?? false,
@@ -265,6 +277,35 @@ export async function upsertTokenData(
     holderCountUpdatedAt: data.holderCount ? now : null,
     imageUrl: data.imageUrl ?? null,
     imageUrlFetchedAt: data.imageUrl ? now : null,
+    raydiumPoolAddress: null,
+    raydiumPoolDiscoveredAt: null,
+    raydiumLiquidityUsd: null,
+    raydiumCreatorAddress: null,
+    raydiumCreatorReputation: null,
+    raydiumTopHolderCount: null,
+    raydiumHolderConcentration: null,
+    isDirectRaydiumLaunch: false,
+    poolOriginType: null,
+    lastSnapshotAt: null,
+    lastSnapshotTradeCount: 0,
+    totalTradeCount: 0,
+    triggeredMilestones: {},
+    lastMilestoneMultiplier: null,
+    isDeathbed: false,
+    deathbedDetectedAt: null,
+    deathbedSnapshotCreated: false,
+    trajectoryOutcomeLabel: null,
+    snapshotsCount: 0,
+    lastAnnScore: null,
+    compositeScore: null,
+    isMonitored: false,
+    addedToPoolAt: null,
+    evictedFromPoolAt: null,
+    evictionReason: null,
+    volume24hSol: null,
+    creatorAddress: data.creatorAddress ?? null,
+    lastAnalyzedAt: data.lastAnalyzedAt ?? null,
+    deployerAddress: data.deployerAddress ?? null,
   };
 
   memoryCache.setToken(finalMint, newEntry, true);
@@ -767,6 +808,7 @@ export interface TokenDataWithSource {
   liquidity?: number;
   volume24h?: number;
   priceChange24h?: number;
+  creatorAddress?: string;
   source: 'cache' | 'dexscreener' | 'geckoterminal' | 'stale';
   isStale: boolean;
   fetchedAt?: number;

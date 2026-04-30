@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { goodTraders, swaps } from "../shared/schema";
 import { eq, and, gte } from "drizzle-orm";
@@ -163,24 +162,15 @@ export class GoodTraderIdentifier {
         .insert(goodTraders)
         .values({
           walletAddress: signal.walletAddress,
-          discoveredFromTokenMint: signal.tokenMint,
-          discoveredAt: now,
-          discoveryMethod: "profit_sell",
+          discoveredFromTokens: [signal.tokenMint],
           totalProfitUsd: signal.profitUsd,
-          totalTradesCount: 1,
-          winningTradesCount: 1,
+          totalTrades: 1,
+          profitableCount: 1,
           winRate: 1.0,
           avgHoldMinutes: signal.holdMinutes,
-          avgMultiplier: signal.profitMultiplier,
-          isBot: false,
-          tradingStyle: "unknown",
-          styleConfidence: 0,
-          tokensMinted: 1,
-          singleTokenOnly: false,
-          lastTradeAt: now,
+          lastAssessedAt: now,
           isActive: true,
           createdAt: now,
-          updatedAt: now,
         })
         .onConflictDoNothing()
         .execute();
@@ -209,28 +199,19 @@ export class GoodTraderIdentifier {
       if (!existing.length) return;
 
       const trader = existing[0];
-      const newTradeCount = (trader.totalTradesCount || 0) + 1;
-      const newWinningCount = (trader.winningTradesCount || 0) + 1;
+      const newTradeCount = (trader.totalTrades || 0) + 1;
+      const newWinningCount = (trader.profitableCount || 0) + 1;
       const newTotalProfit = (trader.totalProfitUsd || 0) + signal.profitUsd;
       const newWinRate = newWinningCount / newTradeCount;
-      const newAvgMultiplier =
-        ((trader.avgMultiplier || 1) * (newTradeCount - 1) +
-          signal.profitMultiplier) /
-        newTradeCount;
-
-      const tokenCount = (trader.tokensMinted || 0) + 1;
 
       await db
         .update(goodTraders)
         .set({
           totalProfitUsd: newTotalProfit,
-          totalTradesCount: newTradeCount,
-          winningTradesCount: newWinningCount,
+          totalTrades: newTradeCount,
+          profitableCount: newWinningCount,
           winRate: newWinRate,
-          avgMultiplier: newAvgMultiplier,
-          tokensMinted: tokenCount,
-          lastTradeAt: Math.floor(Date.now() / 1000),
-          updatedAt: Math.floor(Date.now() / 1000),
+          lastAssessedAt: Math.floor(Date.now() / 1000),
         })
         .where(eq(goodTraders.id, trader.id))
         .execute();
@@ -321,7 +302,6 @@ export class GoodTraderIdentifier {
         .update(goodTraders)
         .set({
           isActive: false,
-          updatedAt: Math.floor(Date.now() / 1000),
         })
         .where(eq(goodTraders.walletAddress, walletAddress))
         .execute();

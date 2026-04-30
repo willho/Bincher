@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { tokenFingerprints, tokenFingerprintClusters } from "@shared/schema";
 import { and, eq, lt, gte } from "drizzle-orm";
@@ -322,29 +321,20 @@ export async function compressOldFingerprints(): Promise<{
       // Insert cluster representative
       await db.insert(tokenFingerprintClusters).values({
         clusterId: `${triggerType}_${now}_${i}`,
-        snapshotTrigger: triggerType,
-        centroidVector: centroid,
+        lifecycleStage: triggerType,
+        centroid: centroid as number[],
         sampleCount: clusterIndices.length,
-        ageRangeStart:
-          ageValues.length > 0 ? Math.min(...ageValues) : undefined,
-        ageRangeEnd:
-          ageValues.length > 0 ? Math.max(...ageValues) : undefined,
         cohesion: cohesions[i] || 0,
-        avgWinRate:
-          winRates.length > 0
-            ? winRates.reduce((a, b) => a + b) / winRates.length
-            : undefined,
-        avgFinalMultiplier:
-          multipliers.length > 0
-            ? multipliers.reduce((a, b) => a + b) / multipliers.length
-            : undefined,
-        avgHoldMinutes:
-          holdTimes.length > 0
-            ? holdTimes.reduce((a, b) => a + b) / holdTimes.length
-            : undefined,
-        compressedAt: now,
-        archivedSnapshotCount: clusterIndices.length,
         createdAt: now,
+        metadata: {
+          ageRangeStart: ageValues.length > 0 ? Math.min(...ageValues) : null,
+          ageRangeEnd: ageValues.length > 0 ? Math.max(...ageValues) : null,
+          avgWinRate: winRates.length > 0 ? winRates.reduce((a, b) => a + b) / winRates.length : null,
+          avgFinalMultiplier: multipliers.length > 0 ? multipliers.reduce((a, b) => a + b) / multipliers.length : null,
+          avgHoldMinutes: holdTimes.length > 0 ? holdTimes.reduce((a, b) => a + b) / holdTimes.length : null,
+          compressedAt: now,
+          archivedSnapshotCount: clusterIndices.length,
+        },
       });
 
       clustersCreated++;
@@ -444,11 +434,10 @@ export async function findSimilarFingerprints(
   // Search cluster centroids - compressed matches
   const clusters = await db
     .select()
-    .from(tokenFingerprintClusters)
-    .where(eq(tokenFingerprintClusters.snapshotTrigger, snapshotTrigger));
+    .from(tokenFingerprintClusters);
 
   for (const cluster of clusters) {
-    const similarity = cosineSimilarity(queryVector, cluster.centroidVector);
+    const similarity = cosineSimilarity(queryVector, cluster.centroid);
     results.push({
       type: "cluster",
       clusterId: cluster.clusterId,
@@ -477,14 +466,13 @@ export async function findBestClusterForFingerprint(
 ): Promise<string | null> {
   const clusters = await db
     .select()
-    .from(tokenFingerprintClusters)
-    .where(eq(tokenFingerprintClusters.snapshotTrigger, snapshotTrigger));
+    .from(tokenFingerprintClusters);
 
   let bestCluster: string | null = null;
   let bestSimilarity = 0;
 
   for (const cluster of clusters) {
-    const similarity = cosineSimilarity(vector, cluster.centroidVector);
+    const similarity = cosineSimilarity(vector, cluster.centroid);
     if (similarity > bestSimilarity) {
       bestSimilarity = similarity;
       bestCluster = cluster.clusterId;

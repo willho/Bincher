@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Token Lifecycle Learning System
  *
@@ -52,7 +51,8 @@ const LIFECYCLE_LEARNING_CONFIG = {
 export async function analyzePreGraduationPhase(
   tokenMint: string,
   clusterIds: string[]
-): Promise<Partial<InsertTokenFingerprint>[]> {
+): Promise<InsertTokenFingerprint[]> {
+  const now = Math.floor(Date.now() / 1000);
   try {
     const token = await db.query.tokenDataPool.findFirst({
       where: eq(tokenDataPool.tokenMint, tokenMint),
@@ -76,16 +76,16 @@ export async function analyzePreGraduationPhase(
     }
 
     // Create fingerprints for each cluster this token matched
-    const fingerprints: Partial<InsertTokenFingerprint>[] = [];
+    const fingerprints: InsertTokenFingerprint[] = [];
 
     for (const clusterId of clusterIds) {
       // Estimate entry/exit metrics from bonding curve behavior
       const entrySlippageAvg = calculateBondingCurveEntrySlippage(outcome);
       const slThresholdPercent = calculateOptimalStopLoss(outcome);
 
-      const fingerprint: Partial<InsertTokenFingerprint> = {
+      const fingerprint: InsertTokenFingerprint = {
         fingerprintType: "pregrad_bonding_curve",
-        clusterId,
+        archetypeClusterId: clusterId,
         tokenMint,
 
         // Performance metrics
@@ -175,7 +175,8 @@ function calculateOptimalStopLoss(outcome: any): number {
 export async function analyzePostGraduationPhase(
   tokenMint: string,
   clusterIds: string[]
-): Promise<Partial<InsertTokenFingerprint>[]> {
+): Promise<InsertTokenFingerprint[]> {
+  const now = Math.floor(Date.now() / 1000);
   try {
     const graduation = await db.query.graduationEvents.findFirst({
       where: eq(graduationEvents.tokenMint, tokenMint),
@@ -202,16 +203,16 @@ export async function analyzePostGraduationPhase(
     }
 
     // Create updated fingerprints for post-grad phase
-    const fingerprints: Partial<InsertTokenFingerprint>[] = [];
+    const fingerprints: InsertTokenFingerprint[] = [];
 
     for (const clusterId of clusterIds) {
       const entrySlippageAvg = calculateRaydiumEntrySlippage(outcome);
       const slThresholdPercent = calculateOptimalStopLoss(outcome);
       const tslCurve = calculateTSLCurve(outcome);
 
-      const fingerprint: Partial<InsertTokenFingerprint> = {
+      const fingerprint: InsertTokenFingerprint = {
         fingerprintType: "postgrad_raydium",
-        clusterId,
+        archetypeClusterId: clusterId,
         tokenMint,
 
         // Performance metrics from post-grad buyers
@@ -402,7 +403,7 @@ export async function getBestFingerprint(
     // Find fingerprints with highest confidence and win rate
     const fingerprints = await db.query.tokenFingerprints.findMany({
       where: and(
-        eq(tokenFingerprints.clusterId, clusterId),
+        eq(tokenFingerprints.archetypeClusterId, clusterId),
         eq(tokenFingerprints.fingerprintType, fingerprintType),
         gte(tokenFingerprints.confidence, LIFECYCLE_LEARNING_CONFIG.minConfidenceScore)
       ),

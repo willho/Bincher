@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, lt, sql, desc, gte, asc, or, isNull, inArray } from "drizzle-orm";
 import { computeTasks, computeSourceStats, walletSummaries, ComputeTask } from "@shared/schema";
@@ -424,7 +423,7 @@ export async function cleanupCompletedTasks(olderThanHours: number = 48): Promis
 
 async function processServerSideTasks(): Promise<void> {
   const serverTaskTypes = ["holder_overlap", "wallet_correlation"];
-  const task = await assignTask("backend-server", serverTaskTypes);
+  const task = await assignTask("backend-server", undefined, serverTaskTypes);
   if (!task) return;
 
   try {
@@ -441,9 +440,9 @@ async function processServerSideTasks(): Promise<void> {
     }
 
     const computeTimeMs = Date.now() - startTime;
-    await completeComputeTask(task.id, result, "backend-server", computeTimeMs);
+    await completeComputeTask(task.id, "backend-server", result, computeTimeMs);
   } catch (error) {
-    await failComputeTask(task.id, `Server error: ${error instanceof Error ? error.message : String(error)}`, "backend-server");
+    await failComputeTask(task.id, "backend-server", `Server error: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

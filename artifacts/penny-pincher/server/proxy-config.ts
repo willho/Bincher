@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Proxy Configuration & Management
  *
@@ -79,7 +78,6 @@ export async function verifyProxyHealth(proxy: ProxyInstance): Promise<boolean> 
       headers: {
         "Authorization": `Bearer ${proxy.authKey}`,
       },
-      timeout: 5000,
     });
 
     if (!response.ok) {

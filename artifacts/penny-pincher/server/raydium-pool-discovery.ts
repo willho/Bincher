@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, gte, desc } from "drizzle-orm";
 import { raydiumPoolDiscoveries, tokenDataPool } from "@shared/schema";
@@ -114,7 +113,6 @@ async function pollForNewPools(): Promise<void> {
         // Use base token as primary token link
         const existingToken = await db.query.tokenDataPool.findFirst({
           where: eq(tokenDataPool.tokenMint, baseToken),
-          limit: 1,
         });
 
         // Emit discovery event

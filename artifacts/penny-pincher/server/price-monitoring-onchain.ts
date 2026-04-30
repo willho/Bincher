@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * On-Chain Price Monitoring (Free - No API Cost)
  *
@@ -129,7 +128,14 @@ export async function monitorOpenPositions(connection: Connection): Promise<void
         await updatePositionPriceTracking(position.id, currentPrice);
 
         // Check if should exit (SL/TP/TSL)
-        await checkPositionExit(position, currentPrice);
+        await checkPositionExit({
+          id: position.id,
+          entryPrice: position.entryPrice,
+          takeProfitMultiplier: position.takeProfitMultiplier ?? undefined,
+          stopLossPercent: position.stopLossPercent ?? undefined,
+          highestPrice: position.highestPrice ?? undefined,
+          trailingStopPercent: position.trailingStopPercent ?? undefined,
+        }, currentPrice);
       } catch (error) {
         console.error(`[PriceMonitoring] Error monitoring position ${position.id}:`, error);
       }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Creator Reputation System
  *
@@ -100,7 +99,7 @@ async function getCreatorHistoryFromPumpFun(creatorAddress: string): Promise<Cre
       rugRate: rugCount / Math.max(1, tokens.length),
       avgMultiplier: totalMultiplier / Math.max(1, tokens.length),
       lastLaunchTime: tokens[0]?.created_time,
-      totalVolume: tokens.reduce((sum, t) => sum + (t.total_volume || 0), 0),
+      totalVolume: tokens.reduce((sum: number, t: { total_volume?: number | null }) => sum + (t.total_volume || 0), 0),
       confidence: Math.min(1.0, tokens.length / 20), // Higher confidence with more data
     };
   } catch (error) {

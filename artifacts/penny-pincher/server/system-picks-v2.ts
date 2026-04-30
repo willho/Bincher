@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, gte, desc, gt } from "drizzle-orm";
 import {
@@ -10,13 +9,42 @@ import {
 } from "@shared/schema";
 import { fetchTokenWithFallback, getTokenData } from "./data-pool";
 import { openPaperPosition } from "./paper-trading";
-// TODO: These exports need to be implemented in retrolearner-v2.ts
-// import {
-//   discoverOutcomeClusters,
-//   matchTokenToClusters,
-//   getCreatorHistoryPumpPortal,
-// } from "./retrolearner-v2";
 import { getExitStrategy } from "./exit-strategies";
+
+// =====================
+// STUB HELPERS (replace with real implementations when retrolearner-v2 exports them)
+// =====================
+
+interface OutcomeCluster {
+  id: string;
+  name: string;
+  winRate: number;
+  medianMultiplier: number;
+  profitWindowMinutes: { start: number; end: number };
+}
+
+interface CreatorHistory {
+  successRate: number;
+  rugRate: number;
+  totalLaunches: number;
+}
+
+async function discoverOutcomeClusters(): Promise<OutcomeCluster[]> {
+  return [];
+}
+
+async function matchTokenToClusters(
+  _mint: string,
+  _clusters: OutcomeCluster[]
+): Promise<Record<string, number>> {
+  return {};
+}
+
+async function getCreatorHistoryPumpPortal(
+  _creatorAddress: string
+): Promise<CreatorHistory> {
+  return { successRate: 0.5, rugRate: 0.1, totalLaunches: 0 };
+}
 
 // =====================
 // CONFIGURATION
@@ -56,7 +84,7 @@ async function getCreatorReputation(mint: string): Promise<number> {
   try {
     const tokenData = await getTokenData(mint);
 
-    if (!tokenData.creatorAddress) {
+    if (!tokenData || !tokenData.creatorAddress) {
       return 0.5; // Unknown creator, neutral
     }
 
@@ -93,7 +121,7 @@ async function getWalletSignalScore(mint: string): Promise<number> {
     // Calculate average win rate of recent buyers
 
     const tokenData = await getTokenData(mint);
-    const ageHours = (Date.now() / 1000 - (tokenData.pairCreatedAt || 0)) / 3600;
+    const ageHours = (Date.now() / 1000 - ((tokenData?.pairCreatedAt) || 0)) / 3600;
 
     // Tokens with active whale interest are hotter
     if (ageHours < 0.5) return 0.8; // Fresh with potential whale activity
@@ -122,7 +150,7 @@ interface ConvictionCalculation {
 /**
  * Calculate conviction score using cluster matching + creator + wallets
  */
-async function calculateConviction(
+export async function calculateConviction(
   mint: string
 ): Promise<ConvictionCalculation | null> {
   try {
@@ -165,7 +193,7 @@ async function calculateConviction(
       creatorScore,
       walletScore,
       finalConviction: conviction,
-      profitWindow: bestCluster.profitWindow,
+      profitWindow: bestCluster.profitWindowMinutes,
     };
   } catch (error) {
     console.error(
@@ -351,7 +379,7 @@ async function scanForHighConvictionPicks(): Promise<void> {
       const tokenData = await getTokenData(mint);
       picks.push({
         mint,
-        symbol: tokenData.tokenSymbol || mint.slice(0, 8),
+        symbol: tokenData?.tokenSymbol || mint.slice(0, 8),
         conviction,
       });
     }

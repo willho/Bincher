@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { EventEmitter } from "events";
 import { db } from "./db";
 import { serverSubscriptions } from "../shared/schema";
@@ -241,7 +240,6 @@ export class DexPaprikaPostGradManager extends EventEmitter {
             subscriptionType: "migration", // Indicates post-grad monitoring
             assignedAt: Math.floor(Date.now() / 1000),
             status: "reconnecting",
-            deduplicationKey: `${this.serverName}|${tokenMint}||migration`,
           })
           .onConflictDoNothing()
           .execute();

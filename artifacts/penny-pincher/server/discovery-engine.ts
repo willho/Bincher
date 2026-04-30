@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { 
   discoveryTriggers, discoveryEvents, discoveryMetrics, 
@@ -2709,10 +2708,10 @@ export async function checkBondingCurveProgress(): Promise<{ graduations: number
         if (summary.isGraduated) {
           await handleGraduation(token.tokenMint);
           graduations++;
-        } else if (summary.progressBps >= 9500) {
+        } else if ((summary.progressBps ?? 0) >= 9500) {
           // Token is 95%+ full - log for monitoring
           console.log(
-            `[Discovery] Token ${token.tokenSymbol} at ${(summary.progressBps / 100).toFixed(1)}% bonding curve`
+            `[Discovery] Token ${token.tokenSymbol} at ${((summary.progressBps ?? 0) / 100).toFixed(1)}% bonding curve`
           );
         }
       } catch (error) {

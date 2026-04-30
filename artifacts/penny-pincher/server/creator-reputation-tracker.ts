@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { db } from "./db";
 import { creatorReputation, tokenOutcomes, tokenFingerprints } from "@shared/schema";
-import { and, eq, gte, lt, isNull } from "drizzle-orm";
+import { and, eq, gte, lt, isNull, isNotNull } from "drizzle-orm";
 
 /**
  * Creator Reputation Tracker
@@ -19,7 +18,7 @@ export async function updateCreatorReputation(): Promise<void> {
   // Get all creators with recent token outcomes
   const creatorOutcomes = await db.query.tokenOutcomes
     .findMany({
-      where: isNull(tokenOutcomes.bondingVelocity) === false, // Has been analyzed
+      where: isNotNull(tokenOutcomes.bondingVelocity), // Has been analyzed
     });
 
   // Group by creator

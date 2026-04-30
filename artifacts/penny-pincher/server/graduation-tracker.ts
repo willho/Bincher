@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Pump.fun Graduation Tracker - Event Handler
  * Processes tokens when they graduate from bonding curve
@@ -118,7 +117,7 @@ export async function handleGraduation(mint: string): Promise<void> {
     await upsertTokenData(mint, {
       pumpfunGraduated: true,
       pumpfunGraduationTime: now,
-      raydiumPoolAddress: poolInfo.address,
+      raydiumPoolAddress: poolInfo.address ?? undefined,
       raydiumPoolDiscoveredAt: now,
       poolOriginType: "pumpfun_graduated",
       raydiumLiquidityUsd: poolInfo.liquidity,
@@ -129,7 +128,7 @@ export async function handleGraduation(mint: string): Promise<void> {
     await db.insert(graduationEvents).values({
       tokenMint: mint,
       graduationTime: now,
-      destinationPoolAddress: poolInfo.address,
+      destinationPoolAddress: poolInfo.address ?? "",  // notNull required
       timeToGraduation: now - creationTime,
       liquidityOnGraduation: poolInfo.liquidity || 0,
       learningExported: false,
@@ -140,7 +139,7 @@ export async function handleGraduation(mint: string): Promise<void> {
     await emit({
       type: "pumpfun_graduated",
       tokenMint: mint,
-      tokenSymbol: tokenData.tokenSymbol,
+      tokenSymbol: tokenData.tokenSymbol ?? undefined,
       source: "graduation_tracker",
       data: {
         poolAddress: poolInfo.address,

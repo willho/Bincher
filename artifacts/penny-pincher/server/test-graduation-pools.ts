@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Integration tests for token graduation tracking, pool discovery, and retrolearner
  * Tests the full pipeline: graduation detection → pool discovery → retrolearner → system picks
@@ -13,9 +12,9 @@ import {
   tokenFingerprints,
   tokenOutcomes,
   paperPositions,
-  InsertTokenDataPool,
+  InsertTokenDataPoolEntry as InsertTokenDataPool,
   InsertGraduationEvent,
-  InsertRaydiumPoolDiscovery,
+  InsertRaydiumPoolDiscoveryEntry as InsertRaydiumPoolDiscovery,
 } from "@shared/schema";
 
 // =====================
@@ -122,6 +121,7 @@ export async function testBondingCurveDiscovery(): Promise<void> {
         bondingEarlyBuyerConcentration: 0.25, // Top 10 buyers hold 25%
         isPlayedOut: false,
         createdAt: now,
+        updatedAt: now,
       })
       .returning();
 
@@ -318,6 +318,7 @@ export async function testFingerprintLearning(): Promise<void> {
         isPlayedOut: false,
         lastAnalyzedAt: now,
         createdAt: now,
+        updatedAt: now,
       })
       .returning();
 
@@ -330,7 +331,7 @@ export async function testFingerprintLearning(): Promise<void> {
       .insert(tokenFingerprints)
       .values({
         fingerprintType: "postgrad_raydium",
-        clusterId: "postgrad_default",
+        archetypeClusterId: "postgrad_default",
         tokenMint: MOCK_TOKENS.WELL_PERFORMING.mint,
         winRate: 0.72, // 72% win rate from simulations
         medianMultiplier: 3.0,
@@ -346,6 +347,7 @@ export async function testFingerprintLearning(): Promise<void> {
         confidence: 0.85, // 85% confidence (many samples)
         sampleCount: 142,
         createdAt: now,
+        updatedAt: now,
       })
       .returning();
 
@@ -358,7 +360,7 @@ export async function testFingerprintLearning(): Promise<void> {
     const retrieved = await db.query.tokenFingerprints.findFirst({
       where: and(
         eq(tokenFingerprints.fingerprintType, "postgrad_raydium"),
-        eq(tokenFingerprints.clusterId, "postgrad_default")
+        eq(tokenFingerprints.archetypeClusterId, "postgrad_default")
       ),
     });
 

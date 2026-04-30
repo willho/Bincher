@@ -1,4 +1,3 @@
-// @ts-nocheck
 import OpenAI from "openai";
 import { z } from "zod";
 import { db } from "./db";
@@ -2358,7 +2357,7 @@ async function executeScoreRefresh(tokenIdentifier: string): Promise<{ success: 
           buyVolume24h: (poolData as any).buyVolume24h || 0,
           sellVolume24h: (poolData as any).sellVolume24h || 0,
           holders: poolData.holderCount || 0,
-          topHolderPercent: poolData.topHolderPct || 0,
+          topHolderPercent: 0, // topHolderPct not available in token data
           sourceWallets: [],
           hasTwitter: poolData.hasTwitter || false,
           hasTelegram: poolData.hasTelegram || false,

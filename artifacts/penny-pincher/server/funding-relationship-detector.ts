@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, gte, lte, inArray, desc, asc } from "drizzle-orm";
 import { swaps, walletFundingLinks, monitoredWallets } from "@shared/schema";
@@ -30,7 +29,7 @@ export async function detectFundingTransfers(): Promise<typeof walletFundingLink
 
   // Get top familiar whales (high success rate)
   const topWallets = await getTopFamiliarWhales(MIN_FUNDER_SUCCESS_RATE);
-  const topWalletAddresses = topWallets.map((w) => w.address);
+  const topWalletAddresses = topWallets.map((w) => w.walletAddress);
 
   if (topWalletAddresses.length === 0) {
     console.log("[FundingDetector] No top wallets found");
@@ -50,7 +49,7 @@ export async function detectFundingTransfers(): Promise<typeof walletFundingLink
         inArray(swaps.source, topWalletAddresses),
         eq(swaps.fromToken, SOL_MINT), // Sending SOL
         gte(swaps.timestamp, sevenDaysAgo),
-        gte(swaps.amount, MIN_FUNDING_SOL)
+        gte(swaps.fromAmount, MIN_FUNDING_SOL)
       )
     )
     .orderBy(desc(swaps.timestamp));
@@ -58,7 +57,7 @@ export async function detectFundingTransfers(): Promise<typeof walletFundingLink
   console.log(`[FundingDetector] Found ${solTransfers.length} SOL transfers from top wallets`);
 
   // Identify recipients who are "fresh" (minimal transaction history)
-  const recipientAddresses = [...new Set(solTransfers.map((t) => t.destination))];
+  const recipientAddresses = [...new Set(solTransfers.map((t) => t.toToken))];
   const freshRecipients = await filterFreshWallets(recipientAddresses);
 
   console.log(`[FundingDetector] Identified ${freshRecipients.size} fresh recipient wallets`);
@@ -68,7 +67,7 @@ export async function detectFundingTransfers(): Promise<typeof walletFundingLink
 
   for (const transfer of solTransfers) {
     // Only link to fresh wallets
-    if (!freshRecipients.has(transfer.destination)) {
+    if (!freshRecipients.has(transfer.toToken)) {
       continue;
     }
 
@@ -79,7 +78,7 @@ export async function detectFundingTransfers(): Promise<typeof walletFundingLink
       .where(
         and(
           eq(walletFundingLinks.funderWallet, transfer.source),
-          eq(walletFundingLinks.recipientWallet, transfer.destination),
+          eq(walletFundingLinks.recipientWallet, transfer.toToken),
           eq(walletFundingLinks.transferredAt, transfer.timestamp)
         )
       )
@@ -87,17 +86,19 @@ export async function detectFundingTransfers(): Promise<typeof walletFundingLink
 
     if (existing.length === 0) {
       // Get funder's success rate at time of funding
-      const funder = topWallets.find((w) => w.address === transfer.source);
+      const funder = topWallets.find((w) => w.walletAddress === transfer.source);
       const successRate = funder?.successRate || 0.6;
 
       newLinks.push({
         funderWallet: transfer.source,
-        recipientWallet: transfer.destination,
-        solAmount: transfer.amount,
+        recipientWallet: transfer.toToken,
+        solAmount: transfer.fromAmount,
         transferredAt: transfer.timestamp,
         discoveredAt: now,
         recipientStatus: "pending",
         funderSuccessRate: successRate,
+        createdAt: now,
+        updatedAt: now,
       });
     }
   }
@@ -217,7 +218,7 @@ export async function classifyFundingRecipients(): Promise<void> {
         );
       } else if (actionType === "sol_transfer") {
         // Possible obfuscation - follow one hop
-        const nextRecipient = action.destination;
+        const nextRecipient = action.toToken;
         const isNextFresh = await isWalletFresh(nextRecipient);
 
         if (isNextFresh) {
@@ -225,12 +226,14 @@ export async function classifyFundingRecipients(): Promise<void> {
           const chainLink: typeof walletFundingLinks.$inferInsert = {
             funderWallet: recipient, // Current recipient becomes next funder
             recipientWallet: nextRecipient,
-            solAmount: action.amount,
+            solAmount: action.fromAmount,
             transferredAt: action.timestamp,
             discoveredAt: now,
             recipientStatus: "pending",
             chainDepth: 1,
             funderSuccessRate: link.funderSuccessRate, // Inherit success rate
+            createdAt: now,
+            updatedAt: now,
           };
 
           await db.insert(walletFundingLinks).values(chainLink);

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import {
   creatorReputation,
@@ -303,7 +302,7 @@ export async function makeTradingDecision(
 
   // 2. WHALE SIGNAL - Check immediately if whale data available
   if (snapshot.whaleEntered5Sol !== undefined || snapshot.whaleEntered1Sol !== undefined) {
-    const whaleDecision = await shouldBuyOnSmartMoney({
+    const whaleDecision = await shouldBuyOnSmartMoney(tokenMint, {
       whaleEntered5Sol: snapshot.whaleEntered5Sol,
       whaleEntered1Sol: snapshot.whaleEntered1Sol,
       timeSinceFirstWhale5Sol: snapshot.timeSinceFirstWhale5Sol,

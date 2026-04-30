@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Fingerprinting & Clustering Diagnostic Endpoints
  *
@@ -15,7 +14,7 @@ import {
   strategyClusters,
   tokenOutcomes,
 } from "@shared/schema";
-import { eq, and, desc, gte, lte, isNotNull, sql, count } from "drizzle-orm";
+import { eq, and, desc, gte, lte, isNotNull, isNull, sql, count } from "drizzle-orm";
 
 export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
   /**
@@ -70,7 +69,29 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
 
       // Apply all conditions
       if (conditions.length > 0) {
-        query = query.where(and(...conditions));
+        const whereQuery = db.select().from(tokenFingerprints).where(and(...conditions));
+        const fingerprints = await whereQuery
+          .orderBy(desc(tokenFingerprints.createdAt))
+          .limit(Math.min(parseInt(limit as string) || 50, 500))
+          .offset(parseInt(offset as string) || 0);
+        const totalCount = await db.select({ count: count() }).from(tokenFingerprints);
+        return res.json({
+          success: true,
+          count: fingerprints.length,
+          total: totalCount[0]?.count || 0,
+          limit: Math.min(parseInt(limit as string) || 50, 500),
+          offset: parseInt(offset as string) || 0,
+          fingerprints: fingerprints.map((fp) => ({
+            id: fp.id,
+            tokenMint: fp.tokenMint,
+            snapshotIndex: fp.snapshotIndex,
+            fingerprintType: fp.fingerprintType,
+            archetypeId: fp.archetypeId,
+            archetypeConfidence: fp.archetypeConfidence,
+            createdAt: new Date(fp.createdAt).toISOString(),
+          })),
+          timestamp: new Date().toISOString(),
+        });
       }
 
       // Apply ordering and pagination
@@ -137,7 +158,7 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
    */
   app.get("/api/debug/fingerprints/:tokenMint", async (req: Request, res: Response) => {
     try {
-      const { tokenMint } = req.params;
+      const tokenMint = Array.isArray(req.params.tokenMint) ? req.params.tokenMint[0] : req.params.tokenMint;
 
       // Get token data
       const token = await db.query.tokenDataPool.findFirst({
@@ -178,17 +199,17 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
         success: true,
         token: {
           mint: token.tokenMint,
-          name: token.name,
-          symbol: token.symbol,
+          name: token.tokenName,
+          symbol: token.tokenSymbol,
           isDeathbed: token.isDeathbed,
           status: token.pumpfunGraduated ? "graduated" : "pre-grad",
         },
         outcome: outcome
           ? {
-              success: outcome.success,
-              multiplier: outcome.multiplier,
-              pnlPercent: outcome.pnlPercent,
-              holdDurationSeconds: outcome.holdDurationSeconds,
+              success: !outcome.isPlayedOut,
+              multiplier: outcome.earlyBuyerMedianMultiplier,
+              pnlPercent: ((outcome.earlyBuyerMedianMultiplier ?? 1) - 1) * 100,
+              holdDurationSeconds: (outcome.timeToPeakMinutes ?? 0) * 60,
             }
           : null,
         fingerprintTimeline: {
@@ -252,7 +273,7 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
           const members = await db
             .select({ count: count() })
             .from(tokenFingerprints)
-            .where(eq(tokenFingerprints.archetypeId, cluster.id));
+            .where(eq(tokenFingerprints.archetypeId, String(cluster.id)));
 
           const memberCount = members[0]?.count || 0;
 
@@ -263,18 +284,16 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
               confidence: tokenFingerprints.archetypeConfidence,
             })
             .from(tokenFingerprints)
-            .where(eq(tokenFingerprints.archetypeId, cluster.id))
+            .where(eq(tokenFingerprints.archetypeId, String(cluster.id)))
             .limit(5);
 
           return {
             id: cluster.id,
-            name: cluster.name,
-            description: cluster.description,
+            name: cluster.clusterId,
+            description: cluster.patternDescription,
             memberCount,
-            centerDimensions: cluster.centerPoint
-              ? Object.keys(cluster.centerPoint).length
-              : 0,
-            radiusThreshold: cluster.radiusThreshold,
+            centerDimensions: 0,
+            radiusThreshold: null,
             createdAt: new Date(cluster.createdAt).toISOString(),
             updatedAt: cluster.updatedAt ? new Date(cluster.updatedAt).toISOString() : null,
             sampleMembers: sampleMembers.map((m) => ({
@@ -331,7 +350,7 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
 
       // Get archetype
       const archetype = await db.query.strategyClusters.findFirst({
-        where: eq(strategyClusters.id, archetypeId),
+        where: eq(strategyClusters.id, parseInt(archetypeId as string) || -1),
       });
 
       if (!archetype) {
@@ -347,22 +366,21 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
           trajectory: tokenFingerprints.trajectory,
         })
         .from(tokenFingerprints)
-        .where(eq(tokenFingerprints.archetypeId, archetypeId))
+        .where(eq(tokenFingerprints.archetypeId, archetypeId as string))
         .orderBy(desc(tokenFingerprints.archetypeConfidence));
 
       // Get outcome statistics for members
       const memberOutcomes = await db
         .select({
           tokenMint: tokenOutcomes.tokenMint,
-          success: tokenOutcomes.success,
-          multiplier: tokenOutcomes.multiplier,
-          pnlPercent: tokenOutcomes.pnlPercent,
+          isPlayedOut: tokenOutcomes.isPlayedOut,
+          earlyBuyerMedianMultiplier: tokenOutcomes.earlyBuyerMedianMultiplier,
         })
         .from(tokenOutcomes)
         .where(
           sql`${tokenOutcomes.tokenMint} IN (${sql.join(
-            members.map((m) => m.tokenMint),
-            ","
+            members.map((m) => m.tokenMint).filter((t): t is string => t !== null).map(t => sql`${t}`),
+            sql`, `
           )})`
         );
 
@@ -370,14 +388,14 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
       const outcomeMap = new Map(memberOutcomes.map((o) => [o.tokenMint, o]));
 
       // Calculate cluster quality metrics
-      const successfulMembers = Array.from(outcomeMap.values()).filter((o) => o.success);
+      const successfulMembers = Array.from(outcomeMap.values()).filter((o) => !o.isPlayedOut);
       const successRate =
         memberOutcomes.length > 0
           ? ((successfulMembers.length / memberOutcomes.length) * 100).toFixed(1)
           : "0";
       const avgMultiplier =
         successfulMembers.length > 0
-          ? (successfulMembers.reduce((sum, o) => sum + (o.multiplier || 0), 0) /
+          ? (successfulMembers.reduce((sum, o) => sum + (o.earlyBuyerMedianMultiplier || 0), 0) /
               successfulMembers.length).toFixed(2)
           : "0";
 
@@ -385,19 +403,17 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
         success: true,
         archetype: {
           id: archetype.id,
-          name: archetype.name,
-          description: archetype.description,
-          centerDimensions: archetype.centerPoint
-            ? Object.keys(archetype.centerPoint).length
-            : 0,
-          radiusThreshold: archetype.radiusThreshold,
+          name: archetype.clusterId,
+          description: archetype.patternDescription,
+          centerDimensions: archetype.vector ? archetype.vector.length : 0,
+          radiusThreshold: null,
           createdAt: new Date(archetype.createdAt).toISOString(),
           updatedAt: archetype.updatedAt ? new Date(archetype.updatedAt).toISOString() : null,
         },
         members: {
           total: members.length,
           list: members.map((m) => {
-            const outcome = outcomeMap.get(m.tokenMint);
+            const outcome = m.tokenMint ? outcomeMap.get(m.tokenMint) : undefined;
             return {
               tokenMint: m.tokenMint,
               confidence: m.confidence,
@@ -405,9 +421,9 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
               trajectory: m.trajectory,
               outcome: outcome
                 ? {
-                    success: outcome.success,
-                    multiplier: outcome.multiplier,
-                    pnlPercent: outcome.pnlPercent,
+                    success: !outcome.isPlayedOut,
+                    multiplier: outcome.earlyBuyerMedianMultiplier,
+                    pnlPercent: ((outcome.earlyBuyerMedianMultiplier ?? 1) - 1) * 100,
                   }
                 : null,
             };
@@ -461,7 +477,7 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
       const unclustered = await db
         .select({ tokenMint: tokenFingerprints.tokenMint })
         .from(tokenFingerprints)
-        .where(eq(tokenFingerprints.archetypeId, null));
+        .where(isNull(tokenFingerprints.archetypeId));
 
       // Get archetype size distribution
       const archetypeSizes = await db
@@ -533,7 +549,7 @@ export function registerFingerprinterDiagnosticEndpoints(app: Express): void {
    */
   app.get("/api/debug/fingerprint-features/:tokenMint", async (req: Request, res: Response) => {
     try {
-      const { tokenMint } = req.params;
+      const tokenMint = Array.isArray(req.params.tokenMint) ? req.params.tokenMint[0] : req.params.tokenMint;
 
       const fingerprints = await db
         .select()

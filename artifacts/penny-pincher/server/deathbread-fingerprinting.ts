@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { tokenFingerprints, tokenDataPool, rawTokenTrades } from "@shared/schema";
 import { eq, and, gte, lt } from "drizzle-orm";
@@ -92,7 +91,7 @@ export async function recordDeathbreadFingerprint(
   const deathbreadId = `death_${tokenMint}_${now}`;
   try {
     await db.insert(tokenFingerprints).values({
-      id: deathbreadId,
+      fingerprintType: "deathbread",
       tokenMint,
       snapshotTimestamp: now,
       snapshotTrigger: `deathbread_${archiveReason}`,
@@ -100,13 +99,8 @@ export async function recordDeathbreadFingerprint(
       winRate: deathMetrics.winRate,
       medianMultiplier: deathMetrics.finalMultiplier,
       avgHoldMinutes: deathMetrics.avgHoldMinutes,
-      whaleEntryCount: 0, // No new whales at death
-      clusterCoordination: 0, // No coordination at death
-      buyerDiversity: deathMetrics.buyerDiversity,
-      holderConcentration: deathMetrics.holderConcentration,
-      isArchived: false, // Will be used for clustering
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
     });
 
     console.log(
@@ -277,8 +271,7 @@ export async function archiveTokenWithDeathbread(
   await db
     .update(tokenDataPool)
     .set({
-      isArchived: true,
-      archivedAt: now,
+      isActive: false,
     })
     .where(eq(tokenDataPool.tokenMint, tokenMint));
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { tokenFingerprints, tokenFingerprintClusters } from "@shared/schema";
 import { and, eq, gte, lt } from "drizzle-orm";
@@ -169,6 +168,7 @@ export async function bucketInactiveFingerprints(): Promise<{
     .groupBy(tokenFingerprints.tokenMint);
 
   for (const { tokenMint } of recentTokens) {
+    if (!tokenMint) continue;
     const activity = await getTokenActivityLevel(tokenMint, 24);
 
     if (activity === "active") {

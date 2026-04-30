@@ -1214,6 +1214,19 @@ export const tokenSnapshotSchema = z.object({
   finalMultiplier: z.number().optional(),
   holdTimeMinutes: z.number().optional(),
   outcomeUpdatedAt: z.number().optional(),
+  pairAddress: z.string().optional(),
+  pumpfunGraduated: z.boolean().optional(),
+  priceChange1h: z.number().optional(),
+  priceChange7d: z.number().optional(),
+  whaleNetSentiment: z.number().optional(),
+  imageUrl: z.string().optional(),
+  boostRank: z.number().optional(),
+  trendingRank: z.number().optional(),
+  isPumpfun: z.boolean().optional(),
+  pumpfunBondingCurveProgress: z.number().optional(),
+  discoverySource: z.string().optional(),
+  discoverySourceWallet: z.string().optional(),
+  holderCount: z.number().optional(),
 });
 
 export type TokenSnapshot = z.infer<typeof tokenSnapshotSchema>;
@@ -2359,6 +2372,8 @@ export const tokenDataPool = pgTable("token_data_pool", {
   evictedFromPoolAt: integer("evicted_from_pool_at"), // When token was removed from pool
   evictionReason: text("eviction_reason"), // "zero_volume" | "low_score" | "manual" | etc.
   volume24hSol: real("volume_24h_sol"), // 24h volume in SOL (for eviction logic)
+  lastAnalyzedAt: integer("last_analyzed_at"), // When retrolearner last analyzed this token
+  creatorAddress: text("creator_address"), // Token creator/deployer address
 });
 
 export const insertTokenDataPoolSchema = createInsertSchema(tokenDataPool).omit({ id: true });
@@ -2644,8 +2659,12 @@ export const paperPositions = pgTable("paper_positions", {
   discoverySource: text("discovery_source"), // "trending" | "boosted" | "whale" | "signal_wallet" | "event_bus"
   discoverySourceWallet: text("discovery_source_wallet"), // whale or signal wallet address that sourced this token
   
+  // Pool tracking
+  raydiumPoolAddress: text("raydium_pool_address"), // Raydium AMM pool address for price monitoring
+
   // Status
   status: text("status").notNull().default("open"), // open, closed, expired
+  closedAt: integer("closed_at"), // Unix timestamp when position was closed
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at"),
 });
@@ -4115,6 +4134,9 @@ export const tokenFingerprintSnapshots = pgTable("token_fingerprint_snapshots", 
   features: jsonb("features").notNull(), // Early dynamics + holder metrics
   top20HolderMetrics: jsonb("top20_holder_metrics"), // { medianMultiplier, profitableCount, ... }
 
+  // Price at snapshot time
+  price: real("price"), // USD price of the token at the moment this snapshot was taken
+
   // Execution environment at snapshot time (last 3 seconds, worst-case)
   worstLatencyMs: integer("worst_latency_ms"), // Worst Jupiter quote latency in last 3 sec
   worstSlippagePercent: real("worst_slippage_percent"), // Worst slippage in last 3 sec
@@ -4190,6 +4212,15 @@ export const tokenFingerprints = pgTable("token_fingerprints", {
   trajectoryOutcome: text("trajectory_outcome"), // "pump_100x", "slow_bleed", "crash_fast", etc.
   finalMultiplier: real("final_multiplier"), // Peak multiplier achieved
   finalTimestamp: integer("final_timestamp"), // When token peaked or outcome determined
+
+  // Archetype matching (set during archiving pipeline)
+  isArchived: boolean("is_archived").default(false), // Whether this fingerprint has been archived into a cluster
+  archetypeId: text("archetype_id"), // Resolved archetype label (may differ from archetypeClusterId)
+  archetypeConfidence: real("archetype_confidence"), // Cosine similarity to assigned cluster centroid
+  snapshotIndex: integer("snapshot_index"), // Ordinal index within the token's snapshot sequence
+  trajectory: jsonb("trajectory").$type<Record<string, unknown>>(), // Compressed arc trajectory data
+  milestones: jsonb("milestones").$type<Record<string, unknown>>(), // Price/volume milestone events
+  earlyDynamicsFeatures: jsonb("early_dynamics_features").$type<number[]>(), // ML feature vector for early dynamics
 
   // Timestamps
   createdAt: integer("created_at").notNull(),
@@ -4516,6 +4547,9 @@ export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   minSimilarity: real("min_similarity"),
   maxSimilarity: real("max_similarity"),
 
+  // Extended metadata (free-form JSON for algorithm-specific data)
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+
   // Metadata
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at"),
@@ -4627,6 +4661,10 @@ export const serverSubscriptions = pgTable("server_subscriptions", {
   subscriptionType: text("subscription_type").notNull(), // "newtoken", "migration", "wallet_trade"
   assignedAt: integer("assigned_at").notNull(),
   status: text("status").default("active"), // active, reconnecting, paused
+  circuitBreakerUntil: integer("circuit_breaker_until"), // Unix timestamp — subscription paused until this time
+  consecutiveFailures: integer("consecutive_failures").default(0), // Consecutive reconnection failures
+  lastFailureAt: integer("last_failure_at"), // Timestamp of last reconnection failure
+  lastRetryAt: integer("last_retry_at"), // Timestamp of last reconnect attempt
 }, (table) => [
   index("idx_server_name").on(table.serverName),
   index("idx_subscription_type").on(table.subscriptionType),
@@ -4649,6 +4687,7 @@ export const goodTraders = pgTable("good_traders", {
   totalTrades: integer("total_trades"),
   profitableCount: integer("profitable_count"),
   totalPnl: real("total_pnl"), // SOL equivalent
+  totalProfitUsd: real("total_profit_usd"), // USD equivalent profit
   avgHoldMinutes: real("avg_hold_minutes"),
   sharpeRatio: real("sharpe_ratio"),
   discoveryScore: real("discovery_score"), // 0-1: confidence in assessment
@@ -4682,6 +4721,19 @@ export const walletClusters = pgTable("wallet_clusters", {
   sampleCount: integer("sample_count"), // number of wallets in cluster
   cohesion: real("cohesion"), // vector similarity metric
   centroid: jsonb("centroid").$type<number[]>(), // behavioral vector average
+  tokenMint: text("token_mint"), // associated token mint (optional per cluster)
+  walletCount: integer("wallet_count"), // number of wallets in the cluster
+  isLikelyInsider: boolean("is_likely_insider").default(false), // insider trading flag
+  entryTimeCluster: boolean("entry_time_cluster"), // whether entries cluster tightly in time
+  entryPriceCluster: boolean("entry_price_cluster"), // whether entries cluster tightly in price
+  earliestEntryTime: integer("earliest_entry_time"), // Unix timestamp of earliest entry
+  latestEntryTime: integer("latest_entry_time"), // Unix timestamp of latest entry
+  entryTimeRangeMinutes: integer("entry_time_range_minutes"), // time spread in minutes
+  commonExitPrice: real("common_exit_price"), // average exit price
+  profitAbility: real("profit_ability"), // estimated profitability score 0-1
+  avgMultiplierInCluster: real("avg_multiplier_in_cluster"), // average multiplier
+  detectedAt: integer("detected_at"), // when cluster was first detected
+  analysisCompletedAt: integer("analysis_completed_at"), // when analysis finished
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at"),
 }, (table) => [

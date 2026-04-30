@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, gt, gte, desc, isNull, sql, inArray } from "drizzle-orm";
 import {
@@ -434,7 +433,7 @@ async function checkTrendingTokensForResurface(): Promise<void> {
           await emit({
             type: "trending_spotted",
             tokenMint: mint,
-            tokenSymbol: token.tokenSymbol,
+            tokenSymbol: token.tokenSymbol ?? undefined,
             source: "retrolearner_v2_resurface",
             data: { wasPlayedOut: true, timeSinceAnalysis: hoursSinceAnalysis },
             timestamp: Date.now(),

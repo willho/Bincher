@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Pool Discovery via DexScreener (Replace GeckoTerminal)
  *
@@ -180,7 +179,7 @@ async function processDiscoveredPool(pool: {
         liquidityUsd: pool.liquidity,
         lastUpdatedAt: pool.discoveredAt,
         isVerified: false,
-        qualityScore,
+        qualityScore: qualityScore.score,
       })
       .returning();
 
@@ -189,16 +188,21 @@ async function processDiscoveredPool(pool: {
     }
 
     console.log(
-      `[PoolDiscovery] New pool discovered: ${pool.poolAddress.slice(0, 8)}... (${pool.baseTokenMint.slice(0, 8)}/${pool.quoteTokenMint.slice(0, 8)}, liquidity=$${pool.liquidity.toFixed(0)}, quality=${qualityScore.toFixed(0)})`
+      `[PoolDiscovery] New pool discovered: ${pool.poolAddress.slice(0, 8)}... (${pool.baseTokenMint.slice(0, 8)}/${pool.quoteTokenMint.slice(0, 8)}, liquidity=$${pool.liquidity.toFixed(0)}, quality=${qualityScore.score.toFixed(0)})`
     );
 
     // Emit discovery event for other systems
-    await emit("raydium_new_pool", {
-      poolAddress: pool.poolAddress,
-      baseTokenMint: pool.baseTokenMint,
-      quoteTokenMint: pool.quoteTokenMint,
-      liquidity: pool.liquidity,
-      qualityScore,
+    await emit({
+      type: "raydium_new_pool",
+      tokenMint: pool.baseTokenMint,
+      source: "pool_discovery_dexscreener",
+      data: {
+        poolAddress: pool.poolAddress,
+        quoteTokenMint: pool.quoteTokenMint,
+        liquidity: pool.liquidity,
+        qualityScore: qualityScore.score,
+      },
+      timestamp: Math.floor(Date.now() / 1000),
       urgency: 65,
     });
   } catch (error) {

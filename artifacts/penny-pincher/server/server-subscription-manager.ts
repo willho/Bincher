@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { serverSubscriptions } from "../shared/schema";
 import { sql, eq, and } from "drizzle-orm";
@@ -108,7 +107,6 @@ export class ServerSubscriptionManager {
               subscriptionType: "newtoken",
               assignedAt: Math.floor(Date.now() / 1000),
               status: "active",
-              deduplicationKey: dedup,
             })
             .onConflictDoNothing()
             .execute();
@@ -152,7 +150,6 @@ export class ServerSubscriptionManager {
               subscriptionType: "wallet_trade",
               assignedAt: Math.floor(Date.now() / 1000),
               status: "active",
-              deduplicationKey: dedup,
             })
             .onConflictDoNothing()
             .execute();
@@ -342,13 +339,14 @@ export class ServerSubscriptionManager {
       let query = db
         .select()
         .from(serverSubscriptions)
-        .where(eq(serverSubscriptions.serverName, this.serverName));
-
-      if (subscriptionType) {
-        query = query.where(
-          eq(serverSubscriptions.subscriptionType, subscriptionType)
+        .where(
+          subscriptionType
+            ? and(
+                eq(serverSubscriptions.serverName, this.serverName),
+                eq(serverSubscriptions.subscriptionType, subscriptionType)
+              )
+            : eq(serverSubscriptions.serverName, this.serverName)
         );
-      }
 
       const allSubs = await query.execute();
 

@@ -280,9 +280,9 @@ export default function TokenPage() {
               <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>
-          {(snapshot as any)?.imageUrl && (
+          {snapshot?.imageUrl && (
             <Avatar className="h-10 w-10" data-testid="img-token-icon">
-              <AvatarImage src={(snapshot as any).imageUrl} alt={snapshot?.tokenSymbol || "Token"} />
+              <AvatarImage src={snapshot?.imageUrl} alt={snapshot?.tokenSymbol || "Token"} />
               <AvatarFallback>{(snapshot?.tokenSymbol || "?").slice(0, 2)}</AvatarFallback>
             </Avatar>
           )}
@@ -291,33 +291,33 @@ export default function TokenPage() {
               <h1 className="text-2xl font-bold" data-testid="text-token-symbol">
                 {isLoading ? <Skeleton className="h-8 w-24" /> : snapshot?.tokenSymbol || "Unknown"}
               </h1>
-              {(snapshot as any)?.tokenName && (
-                <span className="text-muted-foreground text-sm" data-testid="text-token-name">{(snapshot as any).tokenName}</span>
+              {snapshot?.tokenName && (
+                <span className="text-muted-foreground text-sm" data-testid="text-token-name">{snapshot?.tokenName}</span>
               )}
-              {(snapshot as any)?.boostRank && (
+              {snapshot?.boostRank && (
                 <Badge variant="default" data-testid="badge-boosted">
                   <Flame className="h-3 w-3 mr-1" />
-                  Boosted #{(snapshot as any).boostRank}
+                  Boosted #{snapshot?.boostRank}
                 </Badge>
               )}
-              {(snapshot as any)?.trendingRank && (
+              {snapshot?.trendingRank && (
                 <Badge variant="secondary" data-testid="badge-trending">
                   <TrendingUp className="h-3 w-3 mr-1" />
-                  Trending #{(snapshot as any).trendingRank}
+                  Trending #{snapshot?.trendingRank}
                 </Badge>
               )}
-              {(snapshot as any)?.isPumpfun && (
-                <Badge variant={(snapshot as any)?.pumpfunGraduated ? "default" : "secondary"} data-testid="badge-pumpfun">
-                  {(snapshot as any)?.pumpfunGraduated ? "Graduated" : `Pump ${((snapshot as any)?.pumpfunBondingCurveProgress || 0).toFixed(0)}%`}
+              {snapshot?.isPumpfun && (
+                <Badge variant={snapshot?.pumpfunGraduated ? "default" : "secondary"} data-testid="badge-pumpfun">
+                  {snapshot?.pumpfunGraduated ? "Graduated" : `Pump ${(snapshot?.pumpfunBondingCurveProgress || 0).toFixed(0)}%`}
                 </Badge>
               )}
-              {(snapshot as any)?.discoverySource && (
+              {snapshot?.discoverySource && (
                 <Badge variant="outline" data-testid="badge-discovery-source">
-                  {(snapshot as any).discoverySource === 'whale' ? 'Whale Find' :
-                   (snapshot as any).discoverySource === 'trending' ? 'Trending' :
-                   (snapshot as any).discoverySource === 'boosted' ? 'Boosted' :
-                   (snapshot as any).discoverySource === 'signal_wallet' ? 'Signal' :
-                   (snapshot as any).discoverySource}
+                  {snapshot?.discoverySource === 'whale' ? 'Whale Find' :
+                   snapshot?.discoverySource === 'trending' ? 'Trending' :
+                   snapshot?.discoverySource === 'boosted' ? 'Boosted' :
+                   snapshot?.discoverySource === 'signal_wallet' ? 'Signal' :
+                   snapshot?.discoverySource}
                 </Badge>
               )}
             </div>
@@ -374,11 +374,11 @@ export default function TokenPage() {
                 <p className="text-2xl font-bold" data-testid="text-price">
                   ${snapshot?.priceUsd?.toFixed(6) || "N/A"}
                 </p>
-                {((snapshot as any)?.priceChange1h !== null || snapshot?.priceChange24h !== null) && (
+                {(snapshot?.priceChange1h !== null || snapshot?.priceChange24h !== null) && (
                   <div className="flex gap-2 mt-1 flex-wrap">
-                    {(snapshot as any)?.priceChange1h != null && (
-                      <span className={`text-xs ${(snapshot as any).priceChange1h >= 0 ? 'text-green-500' : 'text-red-500'}`} data-testid="text-change-1h">
-                        1h: {(snapshot as any).priceChange1h >= 0 ? '+' : ''}{(snapshot as any).priceChange1h.toFixed(1)}%
+                    {snapshot?.priceChange1h != null && (
+                      <span className={`text-xs ${snapshot?.priceChange1h >= 0 ? 'text-green-500' : 'text-red-500'}`} data-testid="text-change-1h">
+                        1h: {snapshot?.priceChange1h >= 0 ? '+' : ''}{snapshot?.priceChange1h.toFixed(1)}%
                       </span>
                     )}
                     {snapshot?.priceChange24h != null && (
@@ -386,9 +386,9 @@ export default function TokenPage() {
                         24h: {snapshot.priceChange24h >= 0 ? '+' : ''}{snapshot.priceChange24h.toFixed(1)}%
                       </span>
                     )}
-                    {(snapshot as any)?.priceChange7d != null && (
-                      <span className={`text-xs ${(snapshot as any).priceChange7d >= 0 ? 'text-green-500' : 'text-red-500'}`} data-testid="text-change-7d">
-                        7d: {(snapshot as any).priceChange7d >= 0 ? '+' : ''}{(snapshot as any).priceChange7d.toFixed(1)}%
+                    {snapshot?.priceChange7d != null && (
+                      <span className={`text-xs ${snapshot?.priceChange7d >= 0 ? 'text-green-500' : 'text-red-500'}`} data-testid="text-change-7d">
+                        7d: {snapshot?.priceChange7d >= 0 ? '+' : ''}{snapshot?.priceChange7d.toFixed(1)}%
                       </span>
                     )}
                   </div>
@@ -468,7 +468,7 @@ export default function TokenPage() {
               <p className="text-2xl font-bold" data-testid="text-holders">
                 {topHolders?.totalCount
                   ? (topHolders.isEstimate ? `${topHolders.totalCount.toLocaleString()}+` : topHolders.totalCount.toLocaleString())
-                  : (snapshot?.holders || (snapshot as any)?.holderCount)?.toLocaleString() || "N/A"}
+                  : (snapshot?.holders || snapshot?.holderCount)?.toLocaleString() || "N/A"}
               </p>
             )}
           </CardContent>
@@ -509,10 +509,10 @@ export default function TokenPage() {
           <CardContent>
             {isLoading ? (
               <Skeleton className="h-8 w-16" />
-            ) : (snapshot?.pairCreatedAt || (snapshot as any)?.pairCreatedAt) ? (
+            ) : (snapshot?.pairCreatedAt || snapshot?.pairCreatedAt) ? (
               <p className="text-2xl font-bold" data-testid="text-token-age">
                 {(() => {
-                  const created = snapshot?.pairCreatedAt || (snapshot as any)?.pairCreatedAt;
+                  const created = snapshot?.pairCreatedAt || snapshot?.pairCreatedAt;
                   const ageMs = Date.now() - (created * 1000);
                   const days = Math.floor(ageMs / 86400000);
                   const hours = Math.floor((ageMs % 86400000) / 3600000);
@@ -545,9 +545,9 @@ export default function TokenPage() {
                     Rep: {((snapshot as any).whaleAvgReputation * 100).toFixed(0)}%
                   </span>
                 )}
-                {(snapshot as any)?.whaleNetSentiment != null && (
-                  <span className={`text-xs ${(snapshot as any).whaleNetSentiment >= 0 ? 'text-green-500' : 'text-red-500'}`} data-testid="text-whale-sentiment">
-                    {(snapshot as any).whaleNetSentiment >= 0 ? 'Bullish' : 'Bearish'}
+                {snapshot?.whaleNetSentiment != null && (
+                  <span className={`text-xs ${snapshot?.whaleNetSentiment >= 0 ? 'text-green-500' : 'text-red-500'}`} data-testid="text-whale-sentiment">
+                    {snapshot?.whaleNetSentiment >= 0 ? 'Bullish' : 'Bearish'}
                   </span>
                 )}
               </div>
@@ -1120,14 +1120,14 @@ export default function TokenPage() {
               <BarChart3 className="h-4 w-4" />
               Price Chart
               <Badge variant="outline" className="text-xs ml-auto">
-                {(snapshot as any)?.pairAddress ? "DEXTools" : "DexScreener"}
+                {snapshot?.pairAddress ? "DEXTools" : "DexScreener"}
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0 overflow-hidden rounded-b-lg">
             <iframe
-              src={(snapshot as any)?.pairAddress
-                ? `https://www.dextools.io/widget-chart/en/solana/pe-light/${(snapshot as any).pairAddress}?theme=dark&chartType=1&chartResolution=15&drawingToolbars=false`
+              src={snapshot?.pairAddress
+                ? `https://www.dextools.io/widget-chart/en/solana/pe-light/${snapshot?.pairAddress}?theme=dark&chartType=1&chartResolution=15&drawingToolbars=false`
                 : `https://dexscreener.com/solana/${tokenMint}?embed=1&theme=dark&trades=0&info=0`
               }
               className="w-full h-[300px] border-0"

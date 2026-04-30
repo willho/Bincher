@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Proxy API Client
  *
@@ -13,7 +12,7 @@ import {
 } from "./proxy-config";
 
 export interface ProxyRequestOptions {
-  service: "shyft" | "chainstack" | "dexpaprika"; // Service to route through
+  service: "shyft" | "chainstack" | "dexpaprika" | "dexscreener"; // Service to route through
   method?: "GET" | "POST";
   body?: any;
   timeout?: number;
@@ -71,7 +70,6 @@ export async function requestViaProxy<T = any>(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-      timeout: options.timeout || 10000,
     });
 
     // Track usage for load-balancing

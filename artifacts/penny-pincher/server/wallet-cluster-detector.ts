@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { db } from "./db";
 import { walletClusters } from "../shared/schema";
+import { eq } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 /**
@@ -211,11 +211,9 @@ export class WalletClusterDetector {
           earliestEntryTime: minTime,
           latestEntryTime: maxTime,
           entryTimeRangeMinutes: Math.ceil(timeRange / 60),
-          commonExitPrice: undefined,
-          profitAbility: undefined,
-          avgMultiplierInCluster: undefined,
           detectedAt: now,
           analysisCompletedAt: now,
+          createdAt: now,
         })
         .execute();
 
@@ -265,7 +263,7 @@ export class WalletClusterDetector {
       const clusters = await db
         .select()
         .from(walletClusters)
-        .where(walletClusters.tokenMint === tokenMint)
+        .where(eq(walletClusters.tokenMint, tokenMint))
         .execute();
 
       return clusters;
@@ -286,7 +284,7 @@ export class WalletClusterDetector {
       const clusters = await db
         .select()
         .from(walletClusters)
-        .where(walletClusters.isLikelyInsider === true)
+        .where(eq(walletClusters.isLikelyInsider, true))
         .limit(limit)
         .execute();
 
@@ -318,11 +316,11 @@ export class WalletClusterDetector {
       const suspicious = all.filter((c) => c.isLikelyInsider).length;
       const avgSize =
         all.length > 0
-          ? all.reduce((sum, c) => sum + c.walletCount, 0) / all.length
+          ? all.reduce((sum, c) => sum + (c.walletCount ?? 0), 0) / all.length
           : 0;
       const avgCoordination =
         all.length > 0
-          ? all.reduce((sum, c) => sum + c.coordinationScore, 0) / all.length
+          ? all.reduce((sum, c) => sum + (c.coordinationScore ?? 0), 0) / all.length
           : 0;
 
       return {

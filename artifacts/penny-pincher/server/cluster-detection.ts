@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, desc, gte, inArray } from "drizzle-orm";
 import { swaps } from "@shared/schema";
@@ -983,16 +982,16 @@ export async function enrichClusterWithWhaleData(cluster: WalletCluster): Promis
     const { familiarWhales } = await import("@shared/schema");
 
     const whaleRows = await db.select({
-      address: familiarWhales.address,
+      walletAddress: familiarWhales.walletAddress,
       monitoringTier: familiarWhales.monitoringTier,
       tierScore: familiarWhales.tierScore,
       successRate: familiarWhales.successRate,
     })
       .from(familiarWhales)
-      .where(inArray(familiarWhales.address, cluster.members));
+      .where(inArray(familiarWhales.walletAddress, cluster.members));
 
     const whaleMembers = whaleRows.map(w => ({
-      address: w.address,
+      address: w.walletAddress,
       monitoringTier: w.monitoringTier || "unknown",
       tierScore: w.tierScore || 0,
       successRate: w.successRate || 0,
@@ -1038,8 +1037,6 @@ export function clearWalletBehaviorCache(): void {
 export async function mergeFundingLinksIntoClusters(): Promise<{ merged: number }> {
   try {
     const { getVerifiedFundingLinks } = await import("./funding-relationship-detector");
-    const { walletClusterMembers } = await import("@shared/schema");
-
     const verifiedLinks = await getVerifiedFundingLinks();
     let mergedCount = 0;
 
@@ -1047,6 +1044,10 @@ export async function mergeFundingLinksIntoClusters(): Promise<{ merged: number 
       try {
         // Get or create funder's cluster
         const funderCluster = await getClusterForWallet(link.funderWallet);
+
+        if (!funderCluster) {
+          continue;
+        }
 
         // Check if recipient is already in cluster
         if (!funderCluster.members.includes(link.recipientWallet)) {
@@ -1062,15 +1063,6 @@ export async function mergeFundingLinksIntoClusters(): Promise<{ merged: number 
 
           // Persist updated cluster
           await persistClusterToDb(funderCluster);
-
-          // Record how this member joined (for provenance)
-          await db
-            .update(walletClusterMembers)
-            .set({
-              joinedVia: "funding_direct",
-              fundingLinkId: link.id,
-            })
-            .where(eq(walletClusterMembers.walletAddress, link.recipientWallet));
 
           mergedCount++;
           console.log(

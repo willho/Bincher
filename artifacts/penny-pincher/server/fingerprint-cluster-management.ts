@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { tokenFingerprintClusters, tokenFingerprints, tokenDataPool, tokenFingerprintSnapshots, familiarWhales } from "@shared/schema";
 import { eq, and, gte, lt, sql, desc } from "drizzle-orm";
@@ -336,7 +335,14 @@ export async function clusterSnapshotToArchetype(
 
   if (allClusters.length === 0) {
     // Create first cluster for this lifecycle stage
-    return createStageArchetype(fingerprint);
+    const newArch = await createStageArchetype(fingerprint);
+    return {
+      matches: [],
+      blendedOutcomes: newArch.outcomeDistribution,
+      primaryClusterId: newArch.archetypeClusterId,
+      confidencePenalty: 0,
+      isNewArchetype: true,
+    };
   }
 
   // Find all clusters above threshold (Algorithm 3: Multi-Cluster Matching)
@@ -350,14 +356,21 @@ export async function clusterSnapshotToArchetype(
         clusterId: cluster.clusterId,
         similarity,
         outcomeDistribution: (cluster.outcomeDistribution as Record<string, number>) || {},
-        metadata: (cluster.metadata as Record<string, any>) || {},
+        metadata: (cluster.metadata as Record<string, unknown>) || {},
       });
     }
   }
 
   // No matches above threshold → create new cluster
   if (matches.length === 0) {
-    return createStageArchetype(fingerprint);
+    const newArch = await createStageArchetype(fingerprint);
+    return {
+      matches: [],
+      blendedOutcomes: newArch.outcomeDistribution,
+      primaryClusterId: newArch.archetypeClusterId,
+      confidencePenalty: 0,
+      isNewArchetype: true,
+    };
   }
 
   // Sort by similarity (highest first)
@@ -846,7 +859,7 @@ export async function handleTokenDeathbed(
       clusterId,
       type: "dead",
       lifecycleStage: stageDesc,
-      centroid: snapshots[0].fingerprintVector,
+      centroid: (snapshots[0].fingerprintVector ?? []) as number[],
       outcomeDistribution: { [outcome]: 1.0 },
       sampleCount: 1,
       snapshotTokenMints: [tokenMint],

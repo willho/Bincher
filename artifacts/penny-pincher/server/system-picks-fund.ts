@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { sql } from "drizzle-orm";
 
@@ -459,7 +458,4 @@ function isLowQualityWindow(): boolean {
 // Singleton instance
 export const systemPicksFund = new SystemPicksFund();
 
-/**
- * Export types for use in system-picks.ts
- */
-export type { FundSession, Position };
+// FundSession and Position are already exported as export interface above

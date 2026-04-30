@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Pump.fun WebSocket Client
  *
@@ -525,9 +524,7 @@ class PumpFunWebSocket extends EventEmitter {
     const toRemove: string[] = [];
 
     // Fetch token data for subscribed tokens
-    const tokens = await db.select().from(tokenDataPool).where(
-      // Dynamic query - check if any tokens need removal
-    );
+    const tokens = await db.select().from(tokenDataPool);
 
     for (const mint of mints) {
       const token = tokens.find(t => t.tokenMint === mint);

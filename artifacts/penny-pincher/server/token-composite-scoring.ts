@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Token Composite Scoring System
  *
@@ -38,8 +37,8 @@ async function getExpectedMultiplier(mint: string): Promise<number> {
       where: eq(tokenOutcomes.tokenMint, mint),
     });
 
-    if (outcome?.peakMultiplier && outcome.peakMultiplier > 0) {
-      return Math.min(outcome.peakMultiplier, 100); // Cap at 100x for scoring stability
+    if (outcome?.peakMultiplierAllTime && outcome.peakMultiplierAllTime > 0) {
+      return Math.min(outcome.peakMultiplierAllTime, 100); // Cap at 100x for scoring stability
     }
 
     // Strategy 2: Get fingerprint cluster and use median historical multiplier

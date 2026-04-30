@@ -606,7 +606,7 @@ export async function addPendingBuy(
     const segmentSol = segments[i];
     const segmentUsd = segmentSol * solPriceUsd;
     
-    const result = await db.insert(pendingBuys).values({
+    const result: Array<typeof pendingBuys.$inferSelect> = await db.insert(pendingBuys).values({
       userId: userId,
       tokenMint,
       tokenSymbol,
@@ -629,8 +629,7 @@ export async function addPendingBuy(
       sourceWalletLabel: sourceWalletData?.walletLabel,
       signalWalletId: sourceWalletData?.signalWalletId,
       copyTiming: timing, // Store timing mode for execution logic
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    }).returning() as any[];
+    }).returning();
     
     // First segment becomes the parent for subsequent segments
     if (i === 0) {

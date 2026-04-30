@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, gte, lte, desc, isNull, lt } from "drizzle-orm";
 import {
@@ -452,7 +451,7 @@ async function learnFingerprintFromToken(
       .insert(tokenFingerprints)
       .values({
         fingerprintType,
-        clusterId,
+        archetypeClusterId: clusterId,
         tokenMint: mint,
         winRate,
         medianMultiplier,
@@ -592,8 +591,8 @@ async function backfillTrajectoryOutcomesAndCluster(): Promise<number> {
       }));
 
       // Detect rug onset (when price dropped 50%+ from peak)
-      let rugOnsetTimestamp: number | null = null;
-      let profitWindowMinutes: number | null = null;
+      let rugOnsetTimestamp: number | undefined = undefined;
+      let profitWindowMinutes: number | undefined = undefined;
 
       if (trajectoryOutcome.includes('crash') || trajectoryOutcome.includes('rug')) {
         // Look for rug onset in snapshot progression

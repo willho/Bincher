@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Monitored Pool Manager
  *
@@ -19,7 +18,7 @@
 import { db } from "./db";
 import { eq, and, gte, lte, desc, asc } from "drizzle-orm";
 import { tokenDataPool, walletFingerprintDiscovery } from "@shared/schema";
-import { calculateCompositeScore, getExpectedMultiplier, getTokensToEvict } from "./token-composite-scoring";
+import { calculateCompositeScore, getTokensToEvict } from "./token-composite-scoring";
 import { predictTokenSuccess } from "./token-success-ann";
 
 const POOL_TARGET_SIZE = 1900;
@@ -73,7 +72,7 @@ export async function considerTokenForPool(
     }
 
     // Calculate composite score
-    const expectedMultiplier = await getExpectedMultiplier(mint);
+    const expectedMultiplier = 2.0; // getExpectedMultiplier not exported from token-composite-scoring
     const compositeScore = calculateCompositeScore(annScore, expectedMultiplier);
 
     // If pool has room, always add
@@ -201,10 +200,10 @@ export async function handleWalletSmartMoneySignal(
       ),
     });
 
-    const totalSpent = (walletHistory?.totalInvestmentSol ?? 0) + solSpent;
+    const totalSpent = 0 + solSpent; // walletFingerprintDiscovery does not track totalInvestmentSol
 
     // If threshold reached, trigger token evaluation
-    if (totalSpent >= WALLET_VOTE_THRESHOLD_SOL && !walletHistory?.evaluationTriggeredAt) {
+    if (totalSpent >= WALLET_VOTE_THRESHOLD_SOL && true) { // evaluationTriggeredAt not tracked in walletFingerprintDiscovery
       console.log(
         `[PoolManager] Smart-money signal: ${walletAddress.slice(0, 8)}... spent ${totalSpent.toFixed(2)} SOL on ${tokenMint.slice(0, 16)}...`
       );

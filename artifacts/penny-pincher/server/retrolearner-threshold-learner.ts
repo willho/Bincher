@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import {
   creatorReputation,
@@ -32,7 +31,7 @@ export async function learnCreatorThresholds(): Promise<void> {
 
   for (const threshold of thresholdCandidates) {
     // Get tokens from creators with win_rate >= threshold
-    const qualifyingCreators = creators.filter((c) => c.winRate >= threshold);
+    const qualifyingCreators = creators.filter((c) => (c.winRate ?? 0) >= threshold);
 
     if (qualifyingCreators.length === 0) continue;
 

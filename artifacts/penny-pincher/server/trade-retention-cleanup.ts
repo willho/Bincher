@@ -22,24 +22,26 @@ export async function cleanupOldTrades(maxAgeDays: number = 1): Promise<{
   const now = Math.floor(Date.now() / 1000);
   const cutoffTime = now - maxAgeDays * 86400;
 
-  // Delete trades older than cutoff
-  const result = await db
+  // Delete trades older than cutoff (return IDs to get accurate count)
+  const deleted = await db
     .delete(rawTokenTrades)
-    .where(lt(rawTokenTrades.createdAt, cutoffTime));
+    .where(lt(rawTokenTrades.createdAt, cutoffTime))
+    .returning({ id: rawTokenTrades.id });
 
+  const deletedCount = deleted.length;
   // Estimate storage freed (100 bytes per trade)
-  const estimatedBytes = (result as any).rowsAffected ?? 0 * 100;
+  const estimatedBytes = deletedCount * 100;
   const storageCleaned =
     estimatedBytes > 1_000_000_000
       ? `${(estimatedBytes / 1_000_000_000).toFixed(1)} GB`
       : `${(estimatedBytes / 1_000_000).toFixed(1)} MB`;
 
   console.log(
-    `[TradeCleanup] Deleted ${(result as any).rowsAffected ?? 0} trades older than ${maxAgeDays} day(s). Storage freed: ${storageCleaned}`
+    `[TradeCleanup] Deleted ${deletedCount} trades older than ${maxAgeDays} day(s). Storage freed: ${storageCleaned}`
   );
 
   return {
-    deletedCount: (result as any).rowsAffected ?? 0,
+    deletedCount,
     storageCleaned,
   };
 }

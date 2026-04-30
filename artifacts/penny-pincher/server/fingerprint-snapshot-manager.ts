@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { db } from "./db";
 import { eq, and, gte, desc, sql } from "drizzle-orm";
 import { tokenFingerprintSnapshots, rawTokenTrades, holderSnapshots } from "@shared/schema";
@@ -311,8 +310,9 @@ export async function createFingerprintSnapshot(
 
   // Backfill: update all previous snapshots' trajectoryCurrent with this new trajectory segment
   if (lastSnapshot) {
+    const lastPrice = lastSnapshot.price ?? currentPrice;
     const trajectorySegment = {
-      priceChange: ((currentPrice - lastSnapshot.price ?? currentPrice) / (lastSnapshot.price ?? currentPrice)) * 100,
+      priceChange: lastPrice > 0 ? ((currentPrice - lastPrice) / lastPrice) * 100 : 0,
       durationSeconds: now - lastSnapshot.timestamp,
       // ... other segment fields
     };
