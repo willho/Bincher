@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, TrendingUp, Zap, Wallet, Compass, BarChart3 } from "lucide-react";
+import { Loader2, TrendingUp, Zap, Wallet, Compass, BarChart3, Flame } from "lucide-react";
 
 interface FundStats {
   solAllocated: number;
@@ -55,6 +55,20 @@ interface TokenLaunch {
   age: number;
 }
 
+interface TokenLeaderboardEntry {
+  mint: string;
+  symbol: string;
+  name: string;
+  rank: number;
+  projectedGain: number;
+  confidence: number;
+  bondingProgress: number;
+  clusterMatch: number;
+  annScore: number;
+  whaleCount: number;
+  riskScore: number;
+}
+
 export default function DashboardConsolidated() {
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -98,7 +112,17 @@ export default function DashboardConsolidated() {
     staleTime: 30000,
   });
 
-  const isLoading = fundLoading || clustersLoading || whalesLoading || tokensLoading;
+  // Fetch token leaderboard
+  const { data: leaderboard, isLoading: leaderboardLoading } = useQuery({
+    queryKey: ["/api/tokens/leaderboard"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/tokens/leaderboard");
+      return response as TokenLeaderboardEntry[];
+    },
+    staleTime: 30000,
+  });
+
+  const isLoading = fundLoading || clustersLoading || whalesLoading || tokensLoading || leaderboardLoading;
 
   if (isLoading) {
     return (
@@ -119,7 +143,7 @@ export default function DashboardConsolidated() {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-5 mb-8">
+          <TabsList className="grid w-full grid-cols-6 mb-8">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
               Overview
@@ -139,6 +163,10 @@ export default function DashboardConsolidated() {
             <TabsTrigger value="tokens" className="flex items-center gap-2">
               <Compass className="h-4 w-4" />
               Tokens
+            </TabsTrigger>
+            <TabsTrigger value="leaderboard" className="flex items-center gap-2">
+              <Flame className="h-4 w-4" />
+              Leaderboard
             </TabsTrigger>
           </TabsList>
 
@@ -447,6 +475,85 @@ export default function DashboardConsolidated() {
                         <Button size="sm">Enter Trade</Button>
                         <Button size="sm" variant="outline">Monitor</Button>
                         <Button size="sm" variant="ghost">Details</Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* LEADERBOARD TAB */}
+          <TabsContent value="leaderboard">
+            <Card>
+              <CardHeader>
+                <CardTitle>Token Leaderboard</CardTitle>
+                <CardDescription>Ranked by projected potential gains</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {leaderboard?.map((token) => (
+                    <div
+                      key={token.mint}
+                      className="border rounded p-4 hover:bg-accent transition-colors"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-4 flex-1">
+                          <div className="text-center min-w-[60px]">
+                            <p className="text-2xl font-bold text-primary">#{token.rank}</p>
+                            <p className="text-xs text-muted-foreground">Rank</p>
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-bold text-lg">{token.symbol}</p>
+                            <p className="text-xs font-mono text-muted-foreground">
+                              {token.mint.slice(0, 16)}...
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-bold text-green-600">
+                            {token.projectedGain.toFixed(1)}x
+                          </p>
+                          <p className="text-xs text-muted-foreground">Projected Gain</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-6 gap-3 text-sm">
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Confidence</p>
+                          <p className="font-semibold">{(token.confidence * 100).toFixed(0)}%</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Bonding</p>
+                          <p className="font-semibold">{token.bondingProgress.toFixed(0)}%</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Cluster Match</p>
+                          <p className="font-semibold">{(token.clusterMatch * 100).toFixed(0)}%</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">ANN Score</p>
+                          <p className="font-semibold">{token.annScore.toFixed(1)}/10</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Whales</p>
+                          <p className="font-semibold">{token.whaleCount}</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Risk</p>
+                          <p className={`font-semibold ${token.riskScore < 0.3 ? "text-green-600" : token.riskScore < 0.7 ? "text-yellow-600" : "text-red-600"}`}>
+                            {token.riskScore.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 mt-3">
+                        <Button size="sm" className="flex-1">
+                          Enter Trade
+                        </Button>
+                        <Button size="sm" variant="outline">
+                          Details
+                        </Button>
                       </div>
                     </div>
                   ))}
