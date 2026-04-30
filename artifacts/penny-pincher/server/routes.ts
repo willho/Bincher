@@ -8804,6 +8804,374 @@ export async function registerRoutes(
     res.json(status);
   });
 
+  // Dashboard endpoints
+  app.get("/api/system/fund-stats", requireAuth, async (req, res) => {
+    try {
+      const userId = req.session?.userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const tradeConfig = await getTradeConfig(userId);
+      const holdings = await getHoldings(userId);
+
+      const solAllocated = tradeConfig?.paperTradingBudget || 1;
+      let currentValue = solAllocated;
+      let totalPnl = 0;
+      let winCount = 0;
+      let totalTrades = 0;
+      let grossProfit = 0;
+      let grossLoss = 0;
+
+      const swapHistory = await db
+        .select()
+        .from(swaps)
+        .where(eq(swaps.userId, userId));
+
+      totalTrades = swapHistory.length;
+
+      swapHistory.forEach((swap) => {
+        if (swap.tokensSold && swap.solReceived) {
+          const pnl = swap.solReceived - swap.solSpent;
+          totalPnl += pnl;
+          if (pnl > 0) {
+            winCount++;
+            grossProfit += pnl;
+          } else {
+            grossLoss += Math.abs(pnl);
+          }
+        }
+      });
+
+      currentValue = solAllocated + totalPnl;
+      const winRate = totalTrades > 0 ? winCount / totalTrades : 0;
+      const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 1 : 0);
+
+      let activePosition = undefined;
+      if (holdings && holdings.length > 0) {
+        const activeHolding = holdings[0];
+        activePosition = {
+          tokenMint: activeHolding.mint,
+          entryPrice: activeHolding.purchasePrice,
+          currentPrice: activeHolding.currentPrice || activeHolding.purchasePrice,
+          tokenCount: activeHolding.quantity,
+        };
+      }
+
+      res.json({
+        solAllocated,
+        currentValue,
+        totalPnl,
+        winRate,
+        totalTrades,
+        profitFactor,
+        activePosition,
+      });
+    } catch (error) {
+      console.error("[Dashboard] Fund stats error:", error);
+      res.status(500).json({ error: "Failed to fetch fund stats" });
+    }
+  });
+
+  app.get("/api/clusters/summary", requireAuth, async (req, res) => {
+    try {
+      const clusters = await db
+        .select()
+        .from(strategyClusters);
+
+      const clusterSummaries = clusters.map((cluster) => ({
+        clusterId: cluster.id,
+        pattern: cluster.archetype || "Unknown",
+        successRate: cluster.successRate || 0,
+        medianMultiplier: cluster.medianMultiplier || 1,
+        tokenCount: cluster.tokenCount || 0,
+        topHolders: 20,
+        rugRate: cluster.rugRate || 0,
+      }));
+
+      res.json(clusterSummaries);
+    } catch (error) {
+      console.error("[Dashboard] Clusters error:", error);
+      res.status(500).json({ error: "Failed to fetch clusters" });
+    }
+  });
+
+  app.get("/api/whales/top", requireAuth, async (req, res) => {
+    try {
+      const whales = await db
+        .select()
+        .from(familiarWhales)
+        .orderBy(desc(familiarWhales.rank))
+        .limit(50);
+
+      const whaleSummaries = whales.map((whale, index) => ({
+        walletAddress: whale.walletAddress,
+        rank: index + 1,
+        winRate: whale.winRate || 0,
+        sharpeRatio: whale.sharpeRatio || 0,
+        totalPnl7d: whale.pnl7d || 0,
+        discoveryConfidence: whale.confidence || 0.5,
+      }));
+
+      res.json(whaleSummaries);
+    } catch (error) {
+      console.error("[Dashboard] Whales error:", error);
+      res.status(500).json({ error: "Failed to fetch whales" });
+    }
+  });
+
+  app.get("/api/tokens/active", requireAuth, async (req, res) => {
+    try {
+      const tokens = await db
+        .select()
+        .from(tokenDataPool)
+        .where(eq(tokenDataPool.status, "active"))
+        .orderBy(desc(tokenDataPool.createdAt))
+        .limit(100);
+
+      const tokenLaunches = tokens.map((token) => ({
+        mint: token.mint,
+        symbol: token.symbol || "UNKNOWN",
+        name: token.name || "Unknown Token",
+        bondingProgress: token.bondingProgress || 0,
+        clusterMatch: token.clusterId ? {
+          clusterId: token.clusterId,
+          confidence: 0.75,
+        } : undefined,
+        whaleSignals: [],
+        annPrediction: token.successProbability || 5,
+        age: Date.now() - (token.createdAt?.getTime() || 0),
+      }));
+
+      res.json(tokenLaunches);
+    } catch (error) {
+      console.error("[Dashboard] Tokens error:", error);
+      res.status(500).json({ error: "Failed to fetch active tokens" });
+    }
+  });
+
+  app.get("/api/tokens/leaderboard", requireAuth, async (req, res) => {
+    try {
+      const tokens = await db
+        .select()
+        .from(tokenDataPool)
+        .where(eq(tokenDataPool.status, "active"))
+        .orderBy(desc(tokenDataPool.successProbability));
+
+      const clusterMap = new Map<string, any>();
+      const clusters = await db.select().from(strategyClusters);
+      clusters.forEach((c) => {
+        clusterMap.set(c.id, c);
+      });
+
+      const leaderboard = tokens
+        .filter((token) => token.clusterId)
+        .map((token) => {
+          const medianMultiplier = token.medianMultiplier || 3;
+          const successRate = token.successProbability || 0.5;
+
+          return {
+            mint: token.mint,
+            symbol: token.symbol || "UNKNOWN",
+            name: token.name || "Unknown Token",
+            rank: 0,
+            projectedGain: medianMultiplier,
+            confidence: successRate / 10,
+            bondingProgress: token.bondingProgress || 0,
+            clusterMatch: 0.75,
+            annScore: successRate,
+            whaleCount: 0,
+            riskScore: Math.max(0, 1 - (successRate / 10)),
+          };
+        })
+        .sort((a, b) => b.projectedGain * b.confidence - a.projectedGain * a.confidence)
+        .slice(0, 50)
+        .map((token, idx) => ({
+          ...token,
+          rank: idx + 1,
+        }));
+
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("[Dashboard] Leaderboard error:", error);
+      res.status(500).json({ error: "Failed to fetch leaderboard" });
+    }
+  });
+
+  app.get("/api/wallets/leaderboard", requireAuth, async (req, res) => {
+    try {
+      const wallets = await db
+        .select()
+        .from(familiarWhales)
+        .where(and(
+          isNotNull(familiarWhales.winRate),
+          isNotNull(familiarWhales.sharpeRatio)
+        ))
+        .orderBy(desc(familiarWhales.sharpeRatio))
+        .limit(100);
+
+      const leaderboard = wallets.map((wallet, idx) => ({
+        walletAddress: wallet.walletAddress,
+        rank: idx + 1,
+        winRate: wallet.winRate || 0,
+        sharpeRatio: wallet.sharpeRatio || 0,
+        pnl7d: wallet.pnl7d || 0,
+        confidence: wallet.confidence || 0.5,
+        totalTrades: wallet.totalTrades || 0,
+        lastActive: wallet.lastSeen || new Date(),
+      }));
+
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("[Dashboard] Wallet leaderboard error:", error);
+      res.status(500).json({ error: "Failed to fetch wallet leaderboard" });
+    }
+  });
+
+  app.get("/api/tokens/:mint/details", requireAuth, async (req, res) => {
+    try {
+      const { mint } = req.params;
+
+      const token = await db
+        .select()
+        .from(tokenDataPool)
+        .where(eq(tokenDataPool.mint, mint))
+        .limit(1);
+
+      if (!token.length) {
+        return res.status(404).json({ error: "Token not found" });
+      }
+
+      const tokenData = token[0];
+
+      const clusters = tokenData.clusterId
+        ? await db
+            .select()
+            .from(strategyClusters)
+            .where(eq(strategyClusters.id, tokenData.clusterId))
+        : [];
+
+      const associatedClusters = clusters.map((cluster) => ({
+        clusterId: cluster.id,
+        pattern: cluster.archetype || "Unknown",
+        confidence: 0.75,
+        successRate: cluster.successRate || 0.5,
+        medianMultiplier: cluster.medianMultiplier || 3,
+      }));
+
+      const snapshot = await db
+        .select()
+        .from(tokenDataPool)
+        .where(eq(tokenDataPool.mint, mint))
+        .orderBy(desc(tokenDataPool.createdAt))
+        .limit(1);
+
+      const trajectoryData = snapshot[0]?.trajectory || {
+        momentum: 0,
+        acceleration: 0,
+        projectedPrice24h: tokenData.currentPrice || 0,
+        projectedPrice7d: tokenData.currentPrice || 0,
+        confidence: 0.5,
+      };
+
+      res.json({
+        mint: tokenData.mint,
+        symbol: tokenData.symbol || "UNKNOWN",
+        name: tokenData.name || "Unknown Token",
+        bondingProgress: tokenData.bondingProgress || 0,
+        currentPrice: tokenData.currentPrice || 0,
+        marketCap: tokenData.marketCap || 0,
+        createdAt: tokenData.createdAt || new Date(),
+        associatedClusters,
+        trajectory: trajectoryData,
+      });
+    } catch (error) {
+      console.error("[Token Detail] Error:", error);
+      res.status(500).json({ error: "Failed to fetch token details" });
+    }
+  });
+
+  app.get("/api/wallets/:address/detail", requireAuth, async (req, res) => {
+    try {
+      const { address } = req.params;
+
+      const whale = await db
+        .select()
+        .from(familiarWhales)
+        .where(eq(familiarWhales.walletAddress, address))
+        .limit(1);
+
+      if (!whale.length) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+
+      const whaleData = whale[0];
+
+      const walletSwaps = await db
+        .select()
+        .from(swaps)
+        .where(eq(swaps.walletAddress, address));
+
+      const clustersMap = new Map<string, any>();
+      const tradesByCluster = new Map<string, number>();
+
+      for (const swap of walletSwaps) {
+        const token = await db
+          .select()
+          .from(tokenDataPool)
+          .where(eq(tokenDataPool.mint, swap.mint))
+          .limit(1);
+
+        if (token.length && token[0].clusterId) {
+          const clusterId = token[0].clusterId;
+          tradesByCluster.set(clusterId, (tradesByCluster.get(clusterId) || 0) + 1);
+
+          if (!clustersMap.has(clusterId)) {
+            const clusterData = await db
+              .select()
+              .from(strategyClusters)
+              .where(eq(strategyClusters.id, clusterId))
+              .limit(1);
+
+            if (clusterData.length) {
+              clustersMap.set(clusterId, clusterData[0]);
+            }
+          }
+        }
+      }
+
+      const associatedClusters = Array.from(clustersMap.values()).map((cluster) => ({
+        clusterId: cluster.id,
+        pattern: cluster.archetype || "Unknown",
+        successRate: cluster.successRate || 0.5,
+        medianMultiplier: cluster.medianMultiplier || 3,
+        alignmentScore: cluster.successRate || 0.5,
+        tradesInCluster: tradesByCluster.get(cluster.id) || 0,
+      }));
+
+      const totalTrades = whaleData.totalTrades || 0;
+      const winTrades = totalTrades > 0 ? Math.round(totalTrades * (whaleData.winRate || 0)) : 0;
+      const lossTrades = totalTrades - winTrades;
+
+      res.json({
+        walletAddress: whaleData.walletAddress,
+        winRate: whaleData.winRate || 0,
+        sharpeRatio: whaleData.sharpeRatio || 0,
+        pnl7d: whaleData.pnl7d || 0,
+        totalPnl: whaleData.totalPnl || 0,
+        confidence: whaleData.confidence || 0.5,
+        totalTrades,
+        winTrades,
+        lossTrades,
+        lastActive: whaleData.lastSeen || new Date(),
+        associatedClusters,
+      });
+    } catch (error) {
+      console.error("[Wallet Detail] Error:", error);
+      res.status(500).json({ error: "Failed to fetch wallet details" });
+    }
+  });
+
   // Register diagnostic logging endpoints
   registerDiagnosticEndpoints(app);
 
