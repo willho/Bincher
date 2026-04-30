@@ -4,17 +4,15 @@ import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, ArrowLeft, Wallet, TrendingUp } from "lucide-react";
+import { Loader2, ArrowLeft, Wallet, TrendingUp, Zap } from "lucide-react";
 
-interface HolderWallet {
-  walletAddress: string;
-  rank: number;
-  winRate: number;
-  loss: number;
-  riskAdjustedPnl: number;
-  sharpeRatio: number;
-  pnl7d: number;
-  totalTrades: number;
+interface AssociatedCluster {
+  clusterId: string;
+  pattern: string;
+  successRate: number;
+  medianMultiplier: number;
+  alignmentScore: number;
+  tradesInCluster: number;
 }
 
 interface WalletDetail {
@@ -22,10 +20,13 @@ interface WalletDetail {
   winRate: number;
   sharpeRatio: number;
   pnl7d: number;
+  totalPnl: number;
   confidence: number;
   totalTrades: number;
+  winTrades: number;
+  lossTrades: number;
   lastActive: string;
-  topHolders: HolderWallet[];
+  associatedClusters: AssociatedCluster[];
 }
 
 export default function WalletDetailPage() {
@@ -90,10 +91,11 @@ export default function WalletDetailPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-5 gap-4">
             <div>
               <p className="text-sm text-muted-foreground">Win Rate</p>
               <p className="text-2xl font-bold text-green-600">{(wallet.winRate * 100).toFixed(0)}%</p>
+              <p className="text-xs text-muted-foreground">{wallet.winTrades}W / {wallet.lossTrades}L</p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Sharpe Ratio</p>
@@ -103,6 +105,12 @@ export default function WalletDetailPage() {
               <p className="text-sm text-muted-foreground">PnL 7d</p>
               <p className={`text-2xl font-bold ${wallet.pnl7d > 0 ? "text-green-600" : "text-red-600"}`}>
                 ${wallet.pnl7d.toFixed(2)}
+              </p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Total PnL</p>
+              <p className={`text-2xl font-bold ${wallet.totalPnl > 0 ? "text-green-600" : "text-red-600"}`}>
+                ${wallet.totalPnl.toFixed(2)}
               </p>
             </div>
             <div>
@@ -116,69 +124,44 @@ export default function WalletDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Top Holders */}
+      {/* Associated Clusters */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5" />
-            Top 10 Ranked Holder Wallets
+            <Zap className="h-5 w-5" />
+            Associated Clusters
           </CardTitle>
-          <CardDescription>Wallets holding this token ranked by trading quality</CardDescription>
+          <CardDescription>Token patterns this wallet trades</CardDescription>
         </CardHeader>
         <CardContent>
-          {wallet.topHolders.length === 0 ? (
-            <p className="text-muted-foreground">No holder data available</p>
+          {wallet.associatedClusters.length === 0 ? (
+            <p className="text-muted-foreground">No cluster associations</p>
           ) : (
-            <div className="space-y-3">
-              {wallet.topHolders.map((holder) => (
-                <div
-                  key={holder.walletAddress}
-                  className="border rounded p-4 hover:bg-accent transition-colors"
-                >
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      <div className="text-center min-w-[50px]">
-                        <p className="text-xl font-bold text-primary">#{holder.rank}</p>
-                      </div>
-                      <div className="flex-1">
-                        <p className="font-semibold text-sm font-mono">
-                          {holder.walletAddress.slice(0, 12)}...{holder.walletAddress.slice(-6)}
-                        </p>
-                        <div className="flex gap-4 mt-1 text-xs text-muted-foreground">
-                          <span>{holder.totalTrades} trades</span>
-                        </div>
-                      </div>
+            <div className="space-y-4">
+              {wallet.associatedClusters.map((cluster) => (
+                <div key={cluster.clusterId} className="border rounded p-4">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <p className="font-bold text-lg">{cluster.pattern}</p>
+                      <p className="text-xs text-muted-foreground">ID: {cluster.clusterId}</p>
                     </div>
-                    <div className="text-right">
-                      <p className={`text-lg font-bold ${holder.riskAdjustedPnl > 0 ? "text-green-600" : "text-red-600"}`}>
-                        ${holder.riskAdjustedPnl.toFixed(2)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">Risk-Adjusted PnL</p>
-                    </div>
+                    <Badge variant={cluster.alignmentScore > 0.7 ? "default" : "secondary"}>
+                      {(cluster.alignmentScore * 100).toFixed(0)}% Alignment
+                    </Badge>
                   </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-sm">
-                    <div className="bg-muted rounded p-2">
-                      <p className="text-muted-foreground text-xs">Win Rate</p>
-                      <p className="font-semibold text-green-600">{(holder.winRate * 100).toFixed(0)}%</p>
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Success Rate</p>
+                      <p className="font-semibold">{(cluster.successRate * 100).toFixed(0)}%</p>
                     </div>
-                    <div className="bg-muted rounded p-2">
-                      <p className="text-muted-foreground text-xs">Loss</p>
-                      <p className="font-semibold text-red-600">{(holder.loss * 100).toFixed(0)}%</p>
+                    <div>
+                      <p className="text-muted-foreground">Median Multiplier</p>
+                      <p className="font-semibold text-green-600">{cluster.medianMultiplier.toFixed(1)}x</p>
                     </div>
-                    <div className="bg-muted rounded p-2">
-                      <p className="text-muted-foreground text-xs">Sharpe</p>
-                      <p className="font-semibold">{holder.sharpeRatio.toFixed(2)}</p>
+                    <div>
+                      <p className="text-muted-foreground">Trades in Cluster</p>
+                      <p className="font-semibold">{cluster.tradesInCluster}</p>
                     </div>
-                  </div>
-
-                  <div className="flex gap-2 mt-3">
-                    <Button size="sm" variant="outline" className="flex-1">
-                      View Trades
-                    </Button>
-                    <Button size="sm" variant="ghost">
-                      Profile
-                    </Button>
                   </div>
                 </div>
               ))}

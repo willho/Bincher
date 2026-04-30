@@ -9042,23 +9042,66 @@ export async function registerRoutes(
 
       const whaleData = whale[0];
 
-      // Get top 10 holder wallets from tokens this wallet is associated with
-      // Query snapshots to find holder data for tokens this wallet influences
-      const topHolders: any[] = [];
+      // Get associated clusters from tokens this wallet trades
+      // Query swaps to find tokens traded by this wallet, then get their clusters
+      const walletSwaps = await db
+        .select()
+        .from(swaps)
+        .where(eq(swaps.walletAddress, address));
 
-      // For now, return empty - would need token holdings data
-      // This would require querying snapshots for top 20 holders of all tokens
-      // and aggregating by wallet ranking
+      const clustersMap = new Map<string, any>();
+      const tradesByCluster = new Map<string, number>();
+
+      for (const swap of walletSwaps) {
+        const token = await db
+          .select()
+          .from(tokenDataPool)
+          .where(eq(tokenDataPool.mint, swap.mint))
+          .limit(1);
+
+        if (token.length && token[0].clusterId) {
+          const clusterId = token[0].clusterId;
+          tradesByCluster.set(clusterId, (tradesByCluster.get(clusterId) || 0) + 1);
+
+          if (!clustersMap.has(clusterId)) {
+            const clusterData = await db
+              .select()
+              .from(strategyClusters)
+              .where(eq(strategyClusters.id, clusterId))
+              .limit(1);
+
+            if (clusterData.length) {
+              clustersMap.set(clusterId, clusterData[0]);
+            }
+          }
+        }
+      }
+
+      const associatedClusters = Array.from(clustersMap.values()).map((cluster) => ({
+        clusterId: cluster.id,
+        pattern: cluster.archetype || "Unknown",
+        successRate: cluster.successRate || 0.5,
+        medianMultiplier: cluster.medianMultiplier || 3,
+        alignmentScore: cluster.successRate || 0.5,
+        tradesInCluster: tradesByCluster.get(cluster.id) || 0,
+      }));
+
+      const totalTrades = whaleData.totalTrades || 0;
+      const winTrades = totalTrades > 0 ? Math.round(totalTrades * (whaleData.winRate || 0)) : 0;
+      const lossTrades = totalTrades - winTrades;
 
       res.json({
         walletAddress: whaleData.walletAddress,
         winRate: whaleData.winRate || 0,
         sharpeRatio: whaleData.sharpeRatio || 0,
         pnl7d: whaleData.pnl7d || 0,
+        totalPnl: whaleData.totalPnl || 0,
         confidence: whaleData.confidence || 0.5,
-        totalTrades: whaleData.totalTrades || 0,
+        totalTrades,
+        winTrades,
+        lossTrades,
         lastActive: whaleData.lastSeen || new Date(),
-        topHolders,
+        associatedClusters,
       });
     } catch (error) {
       console.error("[Wallet Detail] Error:", error);
