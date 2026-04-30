@@ -8929,6 +8929,54 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/wallets/leaderboard", requireAuth, async (req, res) => {
+    try {
+      const wallets = await db
+        .select()
+        .from(familiarWhales)
+        .where(and(
+          isNotNull(familiarWhales.winRate),
+          isNotNull(familiarWhales.sharpeRatio)
+        ))
+        .orderBy(desc(familiarWhales.rank));
+
+      const leaderboard = wallets
+        .map((wallet) => {
+          const winRate = wallet.winRate || 0;
+          const sharpeRatio = wallet.sharpeRatio || 0;
+          const confidence = wallet.confidence || 0.5;
+          const pnl7d = wallet.pnl7d || 0;
+          const trades = wallet.totalTrades || 0;
+
+          // Quality score: win rate × sharpe × confidence (risk-adjusted)
+          const qualityScore = Math.max(0, winRate * Math.max(0.5, sharpeRatio) * confidence);
+
+          return {
+            walletAddress: wallet.walletAddress,
+            rank: 0,
+            winRate,
+            sharpeRatio: Math.max(0, sharpeRatio),
+            pnl7d,
+            confidence,
+            qualityScore,
+            totalTrades: trades,
+            lastActive: wallet.lastSeen || new Date(),
+          };
+        })
+        .sort((a, b) => b.qualityScore - a.qualityScore)
+        .slice(0, 100)
+        .map((wallet, idx) => ({
+          ...wallet,
+          rank: idx + 1,
+        }));
+
+      res.json(leaderboard);
+    } catch (error) {
+      console.error("[Dashboard] Wallet leaderboard error:", error);
+      res.status(500).json({ error: "Failed to fetch wallet leaderboard" });
+    }
+  });
+
   app.get("/api/tokens/active", requireAuth, async (req, res) => {
     try {
       const tokens = await db

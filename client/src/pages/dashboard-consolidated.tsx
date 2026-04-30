@@ -69,6 +69,18 @@ interface TokenLeaderboardEntry {
   riskScore: number;
 }
 
+interface WalletLeaderboardEntry {
+  walletAddress: string;
+  rank: number;
+  winRate: number;
+  sharpeRatio: number;
+  pnl7d: number;
+  confidence: number;
+  qualityScore: number;
+  totalTrades: number;
+  lastActive: Date;
+}
+
 export default function DashboardConsolidated() {
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -122,7 +134,17 @@ export default function DashboardConsolidated() {
     staleTime: 30000,
   });
 
-  const isLoading = fundLoading || clustersLoading || whalesLoading || tokensLoading || leaderboardLoading;
+  // Fetch wallet leaderboard
+  const { data: walletLeaderboard, isLoading: walletLeaderboardLoading } = useQuery({
+    queryKey: ["/api/wallets/leaderboard"],
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/wallets/leaderboard");
+      return response as WalletLeaderboardEntry[];
+    },
+    staleTime: 60000,
+  });
+
+  const isLoading = fundLoading || clustersLoading || whalesLoading || tokensLoading || leaderboardLoading || walletLeaderboardLoading;
 
   if (isLoading) {
     return (
@@ -143,30 +165,34 @@ export default function DashboardConsolidated() {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-6 mb-8">
+          <TabsList className="grid w-full grid-cols-7 mb-8 gap-1">
             <TabsTrigger value="overview" className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4" />
-              Overview
+              <span className="hidden sm:inline">Overview</span>
             </TabsTrigger>
             <TabsTrigger value="clusters" className="flex items-center gap-2">
               <Zap className="h-4 w-4" />
-              Clusters
+              <span className="hidden sm:inline">Clusters</span>
             </TabsTrigger>
             <TabsTrigger value="whales" className="flex items-center gap-2">
               <TrendingUp className="h-4 w-4" />
-              Whales
+              <span className="hidden sm:inline">Whales</span>
             </TabsTrigger>
             <TabsTrigger value="fund" className="flex items-center gap-2">
               <Wallet className="h-4 w-4" />
-              Fund
+              <span className="hidden sm:inline">Fund</span>
             </TabsTrigger>
             <TabsTrigger value="tokens" className="flex items-center gap-2">
               <Compass className="h-4 w-4" />
-              Tokens
+              <span className="hidden sm:inline">Tokens</span>
             </TabsTrigger>
             <TabsTrigger value="leaderboard" className="flex items-center gap-2">
               <Flame className="h-4 w-4" />
-              Leaderboard
+              <span className="hidden sm:inline">Leaderboard</span>
+            </TabsTrigger>
+            <TabsTrigger value="wallets" className="flex items-center gap-2">
+              <TrendingUp className="h-4 w-4" />
+              <span className="hidden sm:inline">Wallets</span>
             </TabsTrigger>
           </TabsList>
 
@@ -553,6 +579,86 @@ export default function DashboardConsolidated() {
                         </Button>
                         <Button size="sm" variant="outline">
                           Details
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* WALLETS LEADERBOARD TAB */}
+          <TabsContent value="wallets">
+            <Card>
+              <CardHeader>
+                <CardTitle>Wallet Leaderboard</CardTitle>
+                <CardDescription>Discovered wallets ranked by trading quality</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {walletLeaderboard?.map((wallet) => (
+                    <div
+                      key={wallet.walletAddress}
+                      className="border rounded p-4 hover:bg-accent transition-colors"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-4 flex-1">
+                          <div className="text-center min-w-[60px]">
+                            <p className="text-2xl font-bold text-primary">#{wallet.rank}</p>
+                            <p className="text-xs text-muted-foreground">Rank</p>
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-bold text-lg font-mono">
+                              {wallet.walletAddress.slice(0, 12)}...{wallet.walletAddress.slice(-6)}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {wallet.totalTrades} trades • Active {new Date(wallet.lastActive).toLocaleDateString()}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-bold text-green-600">
+                            {(wallet.qualityScore * 100).toFixed(0)}
+                          </p>
+                          <p className="text-xs text-muted-foreground">Quality Score</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-3 text-sm">
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Win Rate</p>
+                          <p className="font-semibold">{(wallet.winRate * 100).toFixed(0)}%</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Sharpe</p>
+                          <p className="font-semibold">{wallet.sharpeRatio.toFixed(2)}</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">PnL 7d</p>
+                          <p className={`font-semibold ${wallet.pnl7d > 0 ? "text-green-600" : "text-red-600"}`}>
+                            ${wallet.pnl7d.toFixed(2)}
+                          </p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Confidence</p>
+                          <p className="font-semibold">{(wallet.confidence * 100).toFixed(0)}%</p>
+                        </div>
+                        <div className="bg-muted rounded p-2">
+                          <p className="text-muted-foreground text-xs">Status</p>
+                          <Badge variant="outline" className="mt-1">Monitored</Badge>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 mt-3">
+                        <Button size="sm" className="flex-1">
+                          Copy Trades
+                        </Button>
+                        <Button size="sm" variant="outline">
+                          History
+                        </Button>
+                        <Button size="sm" variant="ghost">
+                          Profile
                         </Button>
                       </div>
                     </div>
