@@ -19,9 +19,11 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
-import DashboardPage from "@/pages/dashboard-new";
+import DashboardConsolidated from "@/pages/dashboard-consolidated";
 import TradingPage from "@/pages/trading";
 import TokenPage from "@/pages/token";
+import TokenDetailPage from "@/pages/token-detail";
+import WalletDetailPage from "@/pages/wallet-detail";
 import SignalWalletPage from "@/pages/signal-wallet";
 import CopySettingsPage from "@/pages/copy-settings";
 import HoldingsPage from "@/pages/holdings";
@@ -235,8 +237,8 @@ function AuthenticatedApp() {
           </header>
           <main className="flex-1 p-6 overflow-auto pb-20">
             <Switch>
-              <Route path="/" component={DashboardPage} />
-              <Route path="/dashboard" component={DashboardPage} />
+              <Route path="/" component={DashboardConsolidated} />
+              <Route path="/dashboard" component={DashboardConsolidated} />
               <Route path="/discovery" component={DiscoveryPage} />
               <Route path="/holdings" component={HoldingsPage} />
               <Route path="/holdings/:token" component={HoldingsPage} />
@@ -245,6 +247,8 @@ function AuthenticatedApp() {
               <Route path="/signal/:id/copy-settings" component={CopySettingsPage} />
               <Route path="/trading" component={TradingPage} />
               <Route path="/trading/:token" component={TokenPage} />
+              <Route path="/token/:mint" component={TokenDetailPage} />
+              <Route path="/wallet/:address" component={WalletDetailPage} />
               <Route path="/paper"><Redirect to="/holdings" /></Route>
               <Route path="/settings" component={SettingsPage} />
               <Route component={NotFound} />
