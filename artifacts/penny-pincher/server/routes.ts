@@ -45,7 +45,7 @@ import {
 } from "./wallet";
 import { sellToken, sellTokenWithWallet, buyToken, getTokenPrice, getTokenInfo, estimatePriorityFee, priorityFeeToSol } from "./jupiter";
 import { db } from "./db";
-import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs, tokenDataPool, walletStrategies, discoveryEvents, systemInsights, strategyClusters, familiarWhales } from "@shared/schema";
+import { holdings, monitoredWallets, swaps, tradeRules, tradeRulePresets, signalWalletProfiles, walletRuleDefaults, tokenBlacklist, signalCumulativeTracking, copyTradingDefaults, discoveryTriggers, discoveryJobRuns, apiQueue, userBudgetUsage, adminChatMessages, userTokenViews, errorLogs, tokenDataPool, walletStrategies, discoveryEvents, systemInsights, strategyClusters, familiarWhales, users } from "@shared/schema";
 import { eq, and, or, isNotNull, desc, gte, sql, like, ilike, inArray, count, asc } from "drizzle-orm";
 import { startTradeProcessor, updateBuyCount, checkPriceRiseTrigger } from "./trade-processor";
 import { startPriceMonitor } from "./price-monitor";
@@ -57,7 +57,8 @@ import {
   triggerHolderRefresh,
   getHoldersCached,
   getAggregatesForAI,
-  checkEmergingWhale
+  checkEmergingWhale,
+  recordTick
 } from "./price-aggregator";
 import {
   handleWebhookUpdate,
@@ -125,48 +126,40 @@ async function updateSignalCumulativeTracking(
 
     if (existing.length > 0) {
       const record = existing[0];
+      const nowTs = Math.floor(Date.now() / 1000);
       if (action === "buy") {
         await db.update(signalCumulativeTracking)
           .set({
-            totalBoughtTokens: (record.totalBoughtTokens || 0) + amount,
-            totalBoughtSol: (record.totalBoughtSol || 0) + (solValue || 0),
+            totalTokensBought: (record.totalTokensBought || 0) + amount,
+            totalSolSpent: (record.totalSolSpent || 0) + (solValue || 0),
             buyCount: (record.buyCount || 0) + 1,
-            lastBuyAt: new Date(),
-            lastBuySignature: signature,
-            updatedAt: new Date()
+            lastBuyAt: nowTs,
           })
           .where(eq(signalCumulativeTracking.id, record.id));
       } else {
         await db.update(signalCumulativeTracking)
           .set({
-            totalSoldTokens: (record.totalSoldTokens || 0) + amount,
-            totalSoldSol: (record.totalSoldSol || 0) + (solValue || 0),
+            totalTokensSold: (record.totalTokensSold || 0) + amount,
             sellCount: (record.sellCount || 0) + 1,
-            lastSellAt: new Date(),
-            lastSellSignature: signature,
-            updatedAt: new Date()
+            lastSellAt: nowTs,
           })
           .where(eq(signalCumulativeTracking.id, record.id));
       }
       console.log(`[SignalTracking] Updated ${action} for signal ${signalWalletId} token ${tokenSymbol || tokenMint.slice(0,8)}`);
     } else {
+      const nowTs = Math.floor(Date.now() / 1000);
       await db.insert(signalCumulativeTracking).values({
         userId,
         signalWalletId,
         tokenMint,
         tokenSymbol: tokenSymbol || null,
-        totalBoughtTokens: action === "buy" ? amount : 0,
-        totalBoughtSol: action === "buy" ? (solValue || 0) : 0,
+        totalTokensBought: action === "buy" ? amount : 0,
+        totalSolSpent: action === "buy" ? (solValue || 0) : 0,
         buyCount: action === "buy" ? 1 : 0,
-        lastBuyAt: action === "buy" ? new Date() : null,
-        lastBuySignature: action === "buy" ? signature : null,
-        totalSoldTokens: action === "sell" ? amount : 0,
-        totalSoldSol: action === "sell" ? (solValue || 0) : 0,
+        lastBuyAt: action === "buy" ? nowTs : null,
+        totalTokensSold: action === "sell" ? amount : 0,
         sellCount: action === "sell" ? 1 : 0,
-        lastSellAt: action === "sell" ? new Date() : null,
-        lastSellSignature: action === "sell" ? signature : null,
-        createdAt: new Date(),
-        updatedAt: new Date()
+        lastSellAt: action === "sell" ? nowTs : null,
       });
       console.log(`[SignalTracking] Created tracking record for signal ${signalWalletId} token ${tokenSymbol || tokenMint.slice(0,8)}`);
     }
@@ -191,8 +184,8 @@ async function getSignalCumulativePosition(
 
     if (record.length === 0) return null;
 
-    const totalBought = record[0].totalBoughtTokens || 0;
-    const totalSold = record[0].totalSoldTokens || 0;
+    const totalBought = record[0].totalTokensBought || 0;
+    const totalSold = record[0].totalTokensSold || 0;
     const netPosition = totalBought - totalSold;
     const sellPercent = totalBought > 0 ? (totalSold / totalBought) * 100 : 0;
 
@@ -234,7 +227,8 @@ async function addToBlacklist(
       tokenMint,
       tokenSymbol: tokenSymbol || null,
       reason: reason || null,
-      createdAt: new Date()
+      addedAt: Math.floor(Date.now() / 1000),
+      addedBy: "manual",
     });
     console.log(`[TokenBlacklist] Added ${tokenSymbol || tokenMint.slice(0,8)} for user ${userId}`);
     return true;
@@ -263,7 +257,7 @@ async function getBlacklist(userId: number): Promise<any[]> {
   try {
     return await db.select().from(tokenBlacklist)
       .where(eq(tokenBlacklist.userId, userId))
-      .orderBy(desc(tokenBlacklist.createdAt));
+      .orderBy(desc(tokenBlacklist.addedAt));
   } catch (error) {
     console.error(`[TokenBlacklist] Error getting blacklist:`, error);
     return [];
@@ -306,8 +300,10 @@ export async function registerRoutes(
   // Cookie parser middleware
   app.use(cookieParser());
 
-  // Extend Express Request type
-  interface AuthenticatedRequest extends Request {
+  // Extend Express Request type.
+  // Use Record<string, string> for params to match Express v4 behaviour
+  // (Express v5 types widened params to string | string[]).
+  interface AuthenticatedRequest extends Request<Record<string, string>> {
     userId?: number;
     username?: string;
     isAdmin?: boolean;
@@ -1004,7 +1000,7 @@ export async function registerRoutes(
               const discrepancyPercent = Math.abs((pricePerTokenUsd - cachedData.priceUsd) / cachedData.priceUsd) * 100;
               if (discrepancyPercent > 10) {
                 console.error(`[Price Discrepancy] ${swapTokenSymbol}: Swap price $${pricePerTokenUsd.toFixed(10)} differs from DexScreener $${cachedData.priceUsd.toFixed(10)} by ${discrepancyPercent.toFixed(1)}%`);
-                logError("price_monitor", "discrepancy", `${swapTokenSymbol} price discrepancy: ${discrepancyPercent.toFixed(1)}%`, {
+                logError("price_monitor", "discrepancy", new Error(`${swapTokenSymbol} price discrepancy: ${discrepancyPercent.toFixed(1)}%`), {
                   tokenMint: swapTokenMint,
                   swapPriceUsd: pricePerTokenUsd,
                   dexscreenerPriceUsd: cachedData.priceUsd,
@@ -1036,7 +1032,7 @@ export async function registerRoutes(
 
           // Log that we're starting post-swap processing (fail-safe)
           logInfo("webhook", "post_swap_start", `Processing swap ${savedSwap.id} for user ${userId}`, {
-            swapId: savedSwap.id,
+            swapId: Number(savedSwap.id),
             walletAddress: swapWalletAddress,
             fromToken: swap.fromTokenSymbol,
             toToken: swap.toTokenSymbol,
@@ -1320,9 +1316,9 @@ export async function registerRoutes(
         
         // Calculate source trade USD value for filtering and logging
         const sourceTradeUsd = toTokenMetadata?.priceUsd && swap.toAmount 
-          ? parseFloat(swap.toAmount) * toTokenMetadata.priceUsd 
+          ? swap.toAmount * toTokenMetadata.priceUsd 
           : undefined;
-        const signalAmountSol = isBuy ? (swap.fromAmount ? parseFloat(swap.fromAmount) : undefined) : (swap.toAmount ? parseFloat(swap.toAmount) : undefined);
+        const signalAmountSol = isBuy ? (swap.fromAmount ? swap.fromAmount : undefined) : (swap.toAmount ? swap.toAmount : undefined);
         
         // Build base log details for all decision paths
         const baseLogDetails = {
@@ -1380,7 +1376,7 @@ export async function registerRoutes(
               toTokenMetadata?.priceUsd,
               toTokenMetadata?.liquidity,
               {
-                swapId: savedSwap.id,
+                swapId: Number(savedSwap.id),
                 walletAddress: swapWalletAddress,
                 walletLabel: sourceWallet?.label || undefined,
                 signalWalletId: sourceWallet?.id,
@@ -1443,7 +1439,7 @@ export async function registerRoutes(
               };
               
               const sourceTradeUsd = toTokenMetadata?.priceUsd && swap.toAmount 
-                ? parseFloat(swap.toAmount) * toTokenMetadata.priceUsd 
+                ? swap.toAmount * toTokenMetadata.priceUsd 
                 : undefined;
               
               await addPendingBuy(
@@ -1454,7 +1450,7 @@ export async function registerRoutes(
                 toTokenMetadata?.priceUsd,
                 toTokenMetadata?.liquidity,
                 {
-                  swapId: savedSwap.id,
+                  swapId: Number(savedSwap.id),
                   walletAddress: swapWalletAddress,
                   walletLabel: sourceWallet.label || undefined,
                   signalWalletId: sourceWallet.id,
@@ -1496,7 +1492,7 @@ export async function registerRoutes(
                   }
                 }
                 
-                const sellAmountTokens = parseFloat(swap.fromAmount?.toString() || "0");
+                const sellAmountTokens = swap.fromAmount || 0;
                 
                 // Calculate sell percentage: what % of their original position did they sell?
                 let sellPercent = 100; // Default to full sell
@@ -1535,7 +1531,7 @@ export async function registerRoutes(
               : new Error(String(postSwapError));
             // Log to legacy system logs
             await logError("webhook", "post_swap_error", errorObj, {
-              swapId: savedSwap.id,
+              swapId: Number(savedSwap.id),
               walletAddress: swapWalletAddress,
               fromToken: swap.fromTokenSymbol,
               toToken: swap.toTokenSymbol,
@@ -1543,7 +1539,7 @@ export async function registerRoutes(
             // Log to dedicated error logs
             await logErrorToTable("webhook", "post_swap_error", "unknown", errorMsg, {
               userId,
-              context: { swapId: savedSwap.id, walletAddress: swapWalletAddress },
+              context: { swapId: Number(savedSwap.id), walletAddress: swapWalletAddress },
             });
           } catch (logErr) {
             console.error("[Webhook] Failed to log error:", logErr);
@@ -2185,12 +2181,10 @@ export async function registerRoutes(
       const userBudgets = await db.select({
         userId: userBudgetUsage.userId,
         monthlyBudget: userBudgetUsage.monthlyBudget,
-        usedCredits: userBudgetUsage.usedCredits,
-        projectedEndOfMonth: userBudgetUsage.projectedEndOfMonth,
-        throttleRate: userBudgetUsage.throttleRate,
-        lastThrottleAt: userBudgetUsage.lastThrottleAt,
+        usedCredits: userBudgetUsage.creditsUsed,
+        throttleRate: userBudgetUsage.throttleFactor,
       })
-        .from(budgetUsage)
+        .from(userBudgetUsage)
         .limit(50);
 
       res.json({
@@ -2327,8 +2321,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "tokenMint is required" });
       }
 
-      const { explainTokenScore, predictTokenSuccess } = await import("./token-success-interpreter");
-      const { extractEarlyDynamicsFeatures } = await import("./token-success-ann");
+      const { explainTokenScore } = await import("./token-success-interpreter");
+      const { predictTokenSuccess, extractEarlyDynamicsFeatures } = await import("./token-success-ann");
 
       // Get ANN score for this token
       const estimatedLaunchTime = launchTimestamp
@@ -2409,13 +2403,12 @@ export async function registerRoutes(
 
       const throttledUsers = await db.select({
         userId: userBudgetUsage.userId,
-        throttleRate: userBudgetUsage.throttleRate,
-        usedCredits: userBudgetUsage.usedCredits,
+        throttleRate: userBudgetUsage.throttleFactor,
+        usedCredits: userBudgetUsage.creditsUsed,
         monthlyBudget: userBudgetUsage.monthlyBudget,
-        lastThrottleAt: userBudgetUsage.lastThrottleAt,
       })
-        .from(budgetUsage)
-        .where(sql`${userBudgetUsage.throttleRate} > 0`);
+        .from(userBudgetUsage)
+        .where(sql`${userBudgetUsage.throttleFactor} < 1.0`);
 
       const queueBacklog = await db.select({
         priority: apiQueue.priority,
@@ -3505,7 +3498,7 @@ export async function registerRoutes(
       const getMetadataCached = async (mint: string) => {
         if (metadataCache.has(mint)) return metadataCache.get(mint);
         const meta = await fetchTokenMetadata(mint);
-        metadataCache.set(mint, meta);
+        metadataCache.set(mint, meta ?? null);
         return meta;
       };
       
@@ -5286,7 +5279,7 @@ export async function registerRoutes(
             volume24h: poolData.volume24h ?? undefined,
             priceChange24h: poolData.priceChange24h ?? undefined,
             holders: poolData.holderCount ?? undefined,
-            topHolderPercent: poolData.topHolderPct ?? undefined,
+            topHolderPercent: poolData.raydiumHolderConcentration ?? undefined,
             hasTwitter: poolData.hasTwitter || false,
             hasTelegram: poolData.hasTelegram || false,
             hasWebsite: poolData.hasWebsite || false,
@@ -5749,7 +5742,7 @@ export async function registerRoutes(
                   const baseSymbol = isBuy ? (isBaseCurrencySymbol(s.fromTokenSymbol || '') ? s.fromTokenSymbol : 'SOL') 
                     : isSell ? (isBaseCurrencySymbol(s.toTokenSymbol || '') ? s.toTokenSymbol : 'SOL') : 'SOL';
                   const date = new Date((s.timestamp || 0) * 1000).toLocaleDateString();
-                  return `  ${action} ${symbol || '???'} for ${baseAmt ? parseFloat(baseAmt).toFixed(3) : '?'} ${baseSymbol} (${date})`;
+                  return `  ${action} ${symbol || '???'} for ${baseAmt ? Number(baseAmt).toFixed(3) : '?'} ${baseSymbol} (${date})`;
                 });
                 contextParts.push(`Recent trades:\n${tradeLines.join('\n')}`);
               } else {
@@ -5922,8 +5915,8 @@ export async function registerRoutes(
   // Familiar Whales - get top performing whales
   app.get("/api/whales/top", requireAuth, async (_req: AuthenticatedRequest, res) => {
     try {
-      const { getTopPerformingWhales } = await import("./familiar-whales");
-      const whales = await getTopPerformingWhales(20);
+      const { getTopFamiliarWhales } = await import("./familiar-whales");
+      const whales = await getTopFamiliarWhales(20);
       res.json(whales);
     } catch (error) {
       console.error("Error getting top whales:", error);
@@ -5934,8 +5927,8 @@ export async function registerRoutes(
   // Familiar Whales - check if familiar whales are in a token
   app.get("/api/whales/token/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const { checkTokenForFamiliarWhales } = await import("./familiar-whales");
-      const whalesInToken = await checkTokenForFamiliarWhales(req.params.tokenMint);
+      const { checkForFamiliarWhalesInToken } = await import("./familiar-whales");
+      const whalesInToken = await checkForFamiliarWhalesInToken(req.params.tokenMint);
       res.json(whalesInToken);
     } catch (error) {
       console.error("Error checking token for whales:", error);
@@ -6403,7 +6396,7 @@ export async function registerRoutes(
   // === BUDGET & API MANAGEMENT ROUTES ===
   
   // Get user's budget status
-  app.get("/api/budget/status", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/budget/status", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { calculateBudgetStatus } = await import("./budget-manager");
       const status = await calculateBudgetStatus(req.userId!);
@@ -6415,7 +6408,7 @@ export async function registerRoutes(
   });
 
   // Get surplus pool summary
-  app.get("/api/budget/pool", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/budget/pool", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getPoolSummary } = await import("./budget-manager");
       const pool = await getPoolSummary();
@@ -6427,10 +6420,10 @@ export async function registerRoutes(
   });
 
   // Get API queue stats
-  app.get("/api/budget/queue", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/budget/queue", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { getQueueStats } = await import("./budget-manager");
-      const stats = await getQueueStats(req.userId!);
+      const { calculateBudgetStatus } = await import("./budget-manager");
+      const stats = await calculateBudgetStatus(req.userId!);
       res.json(stats);
     } catch (error) {
       console.error("Error fetching queue stats:", error);
@@ -6441,7 +6434,7 @@ export async function registerRoutes(
   // === DATA POOL ROUTES ===
 
   // Get token data from pool - requires auth
-  app.get("/api/pool/token/:mint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/pool/token/:mint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getTokenData, isPriceStale, isMarketDataStale } = await import("./data-pool");
       const data = await getTokenData(req.params.mint);
@@ -6465,7 +6458,7 @@ export async function registerRoutes(
   });
 
   // Fetch token with fallback chain (DexScreener -> GeckoTerminal -> stale cache)
-  app.get("/api/pool/fetch/:mint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/pool/fetch/:mint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const maxAge = parseInt(req.query.maxAge as string) || 300;
       const { fetchTokenWithFallback } = await import("./data-pool");
@@ -6478,7 +6471,7 @@ export async function registerRoutes(
   });
 
   // Report token data from frontend (crowdsourced) - requires auth
-  app.post("/api/pool/report", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/pool/report", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const schema = z.object({
         tokenMint: z.string().min(32).max(64),
@@ -6517,7 +6510,7 @@ export async function registerRoutes(
   });
 
   // Get holder cache for token - requires auth
-  app.get("/api/pool/holders/:mint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/pool/holders/:mint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getHolderCache, isHolderCacheStale } = await import("./data-pool");
       const cache = await getHolderCache(req.params.mint);
@@ -6541,7 +6534,7 @@ export async function registerRoutes(
   // === CLUSTER DETECTION ROUTES ===
 
   // Detect coordinated buying for a token
-  app.get("/api/clusters/coordinated/:mint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/clusters/coordinated/:mint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const windowMinutes = parseInt(req.query.window as string) || 15;
       const { detectCoordinatedBuying } = await import("./cluster-detection");
@@ -6554,7 +6547,7 @@ export async function registerRoutes(
   });
 
   // Get timing clusters for a token
-  app.get("/api/clusters/timing/:mint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/clusters/timing/:mint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const lookbackHours = parseInt(req.query.hours as string) || 24;
       const { detectTimingClusters } = await import("./cluster-detection");
@@ -6567,7 +6560,7 @@ export async function registerRoutes(
   });
 
   // Get cluster for a specific wallet
-  app.get("/api/clusters/wallet/:address", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/clusters/wallet/:address", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getClusterForWallet } = await import("./cluster-detection");
       const cluster = await getClusterForWallet(req.params.address);
@@ -6579,7 +6572,7 @@ export async function registerRoutes(
   });
 
   // Get cluster stats (admin)
-  app.get("/api/clusters/stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/clusters/stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getClusterStats } = await import("./cluster-detection");
       const stats = await getClusterStats();
@@ -6591,7 +6584,7 @@ export async function registerRoutes(
   });
 
   // Refresh cluster cache (admin)
-  app.post("/api/clusters/refresh", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/clusters/refresh", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { refreshClusterCache, getClusterStats } = await import("./cluster-detection");
       await refreshClusterCache();
@@ -6604,7 +6597,7 @@ export async function registerRoutes(
   });
 
   // Trigger opportunistic refresh (admin)
-  app.post("/api/pool/opportunistic-refresh", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/pool/opportunistic-refresh", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { runOpportunisticRefresh } = await import("./data-pool");
       const maxCredits = parseInt(req.query.maxCredits as string) || 1000;
@@ -6617,7 +6610,7 @@ export async function registerRoutes(
   });
 
   // Get data pool stats (admin)
-  app.get("/api/pool/stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/pool/stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getDataPoolStats } = await import("./data-pool");
       const stats = await getDataPoolStats();
@@ -6629,7 +6622,7 @@ export async function registerRoutes(
   });
 
   // Claim fetch work from queue (crowdsourcing)
-  app.post("/api/pool/claim-work", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/pool/claim-work", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const limit = parseInt(req.body.limit) || 5;
       const { claimFetchWork } = await import("./data-pool");
@@ -6642,7 +6635,7 @@ export async function registerRoutes(
   });
 
   // Complete fetch work
-  app.post("/api/pool/complete-work", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/pool/complete-work", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { itemId, success, error } = req.body;
       if (!itemId) {
@@ -6660,7 +6653,7 @@ export async function registerRoutes(
 
   // === TOKEN SAFETY ROUTES ===
 
-  app.get("/api/tokens/:mint/safety", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/tokens/:mint/safety", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getTokenData, bumpTokenPriority } = await import("./data-pool");
       const data = await getTokenData(req.params.mint);
@@ -6690,7 +6683,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/tokens/:mint/check-safety", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/tokens/:mint/check-safety", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { checkTokenSafety } = await import("./safety-checker");
       const { bumpTokenPriority } = await import("./data-pool");
@@ -6710,7 +6703,7 @@ export async function registerRoutes(
     goplusData: z.record(z.unknown()).optional(),
   });
 
-  app.post("/api/tokens/report-safety", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/tokens/report-safety", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const tokenMint = req.body.tokenMint;
       if (!tokenMint || typeof tokenMint !== 'string') {
@@ -6748,7 +6741,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/safety/api-health", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/safety/api-health", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getApiHealthStats } = await import("./safety-checker");
       const stats = await getApiHealthStats();
@@ -6759,7 +6752,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/tokens/bump-priority", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/tokens/bump-priority", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { tokenMints, level } = req.body;
       if (!Array.isArray(tokenMints)) {
@@ -6778,7 +6771,7 @@ export async function registerRoutes(
 
   // === BEHAVIOR ANALYSIS ROUTES ===
 
-  app.get("/api/wallet/:address/behavior", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/wallet/:address/behavior", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { classifyWalletBehavior } = await import("./cluster-detection");
       const behavior = await classifyWalletBehavior(req.params.address);
@@ -6789,7 +6782,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/wallet/:address/fingerprint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/wallet/:address/fingerprint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { analyzeWalletFingerprint, getStoredFingerprint } = await import("./wallet-fingerprint");
       
@@ -6805,7 +6798,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/wallet/:address/fingerprint/refresh", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/wallet/:address/fingerprint/refresh", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { analyzeWalletFingerprint, persistFingerprint, getFingerprintSummary } = await import("./wallet-fingerprint");
       const fingerprint = await analyzeWalletFingerprint(req.params.address);
@@ -6821,7 +6814,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tokens/:mint/copytrade-window", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/tokens/:mint/copytrade-window", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { analyzeCopytradeWindow, getCopytradeWindowSummary } = await import("./cluster-detection");
       const window = await analyzeCopytradeWindow(req.params.mint);
@@ -6840,7 +6833,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tokens/:mint/synchronized-buying", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/tokens/:mint/synchronized-buying", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { detectSynchronizedBuying } = await import("./cluster-detection");
       const result = await detectSynchronizedBuying(req.params.mint);
@@ -6851,7 +6844,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/clusters/stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/clusters/stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getClusterStats, getCachedClusters, enrichClusterWithWhaleData } = await import("./cluster-detection");
       const stats = await getClusterStats();
@@ -6871,7 +6864,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/clusters/refresh", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/clusters/refresh", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const user = await storage.getUserById(req.userId!);
       if (!user?.isAdmin) return res.status(403).json({ error: "Admin only" });
@@ -6887,7 +6880,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/discovery/source-outcomes", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/discovery/source-outcomes", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getDiscoverySourceOutcomes } = await import("./discovery-paper-trading");
       const outcomes = await getDiscoverySourceOutcomes();
@@ -6900,7 +6893,7 @@ export async function registerRoutes(
 
   // === DISCOVERY ENGINE ROUTES ===
 
-  app.get("/api/discovery/stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/discovery/stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getDiscoveryStats, getDiverseDiscoveryStats } = await import("./discovery-engine");
       const [triggerStats, diverseStats] = await Promise.all([
@@ -6915,7 +6908,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/indicator-vectors/stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/indicator-vectors/stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getIndicatorVectorStats } = await import("./indicator-vectors");
       const stats = await getIndicatorVectorStats();
@@ -6926,7 +6919,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/indicator-vectors/score/:tokenMint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/indicator-vectors/score/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { scoreTokenAgainstCluster } = await import("./indicator-vectors");
       const { tokenMint } = req.params;
@@ -6950,7 +6943,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/discovery/run-diverse", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/discovery/run-diverse", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { runDiverseDiscovery } = await import("./discovery-engine");
       const result = await runDiverseDiscovery();
@@ -6961,7 +6954,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/discovery/events", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/discovery/events", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getRecentEvents } = await import("./discovery-engine");
       const limit = parseInt(req.query.limit as string) || 20;
@@ -6984,6 +6977,7 @@ export async function registerRoutes(
     entrySol: z.number().positive(),
     signalWallet: z.string().optional(),
     strategyId: z.number().optional(),
+    strategyTheory: z.string().optional(),
     experimentId: z.number().optional(),
     takeProfitMultiplier: z.number().optional(),
     stopLossPercent: z.number().optional(),
@@ -6991,7 +6985,7 @@ export async function registerRoutes(
     trailingStopPercent: z.number().optional(),
   });
 
-  app.post("/api/paper/positions", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/positions", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const parsed = openPaperPositionSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -7042,7 +7036,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/token-lookup/:mint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/token-lookup/:mint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { fetchTokenWithFallback } = await import("./data-pool");
       const tokenData = await fetchTokenWithFallback(req.params.mint);
@@ -7061,7 +7055,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/positions", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/positions", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getOpenPositions } = await import("./paper-trading");
       const positions = await getOpenPositions(req.userId!);
@@ -7072,7 +7066,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/positions/history", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/positions/history", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const limit = parseInt(req.query.limit as string) || 50;
       const { getPositionHistory } = await import("./paper-trading");
@@ -7084,7 +7078,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/paper/positions/:id/close", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/positions/:id/close", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const positionId = parseInt(req.params.id);
       const { reason } = req.body;
@@ -7100,7 +7094,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getPaperTradingStats } = await import("./paper-trading");
       const stats = await getPaperTradingStats(req.userId!);
@@ -7111,7 +7105,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/strategies/:wallet", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/strategies/:wallet", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getWalletStrategy, analyzeWalletStrategy, saveWalletStrategy, generateAiRecommendations } = await import("./paper-trading");
       const walletAddress = req.params.wallet;
@@ -7241,7 +7235,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/paper/strategies/:wallet/analyze", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/strategies/:wallet/analyze", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const walletAddr = req.params.wallet;
     const userId = req.userId!;
     try {
@@ -7273,21 +7267,21 @@ export async function registerRoutes(
             } catch (saveErr: any) {
               console.error(`[StrategyAnalyze] Failed to save AI recs:`, saveErr.message);
               try {
-                await db.insert(errorLogs).values({ category: 'trade', message: `Strategy AI rec save failed: ${saveErr.message}`, details: JSON.stringify({ walletAddr, userId }), createdAt: Math.floor(Date.now() / 1000) });
+                await db.insert(errorLogs).values({ service: 'ai', action: 'save_recommendations', errorType: 'unknown', errorMessage: `Strategy AI rec save failed: ${saveErr.message}`, context: { walletAddr, userId }, createdAt: Math.floor(Date.now() / 1000) });
               } catch {}
             }
           }
         }).catch((aiErr: any) => {
           console.error(`[StrategyAnalyze] AI recommendations failed:`, aiErr.message);
           try {
-            db.insert(errorLogs).values({ category: 'ai', message: `Strategy AI gen failed: ${aiErr.message}`, details: JSON.stringify({ walletAddr, userId }), createdAt: Math.floor(Date.now() / 1000) }).then(() => {});
+            db.insert(errorLogs).values({ service: 'ai', action: 'generate_recommendations', errorType: 'unknown', errorMessage: `Strategy AI gen failed: ${aiErr.message}`, context: { walletAddr, userId }, createdAt: Math.floor(Date.now() / 1000) }).then(() => {});
           } catch {}
         });
       }
     } catch (error: any) {
       console.error("[StrategyAnalyze] Error:", error?.message);
       try {
-        await db.insert(errorLogs).values({ category: 'trade', message: `Strategy analysis failed: ${error?.message}`, details: JSON.stringify({ wallet: walletAddr, userId, stack: error?.stack?.slice(0, 500) }), createdAt: Math.floor(Date.now() / 1000) });
+        await db.insert(errorLogs).values({ service: 'ai', action: 'strategy_analysis', errorType: 'unknown', errorMessage: `Strategy analysis failed: ${error?.message}`, context: { wallet: walletAddr, userId, stack: error?.stack?.slice(0, 500) }, createdAt: Math.floor(Date.now() / 1000) });
       } catch {}
       res.status(500).json({ error: "Failed to analyze strategy", details: error?.message });
     }
@@ -7304,7 +7298,7 @@ export async function registerRoutes(
     durationDays: z.number().positive().optional(),
   });
 
-  app.post("/api/paper/experiments", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/experiments", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const parsed = createExperimentSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -7319,7 +7313,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/experiments", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/experiments", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getActiveExperiments } = await import("./paper-trading");
       const experiments = await getActiveExperiments(req.userId!);
@@ -7330,7 +7324,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/paper/experiments/:id/complete", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/experiments/:id/complete", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { completeExperiment } = await import("./paper-trading");
       const experiment = await completeExperiment(parseInt(req.params.id), req.userId!);
@@ -7344,7 +7338,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/experiment-stats", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/experiment-stats", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getPaperExperimentStats } = await import("./paper-experiments");
       const stats = await getPaperExperimentStats(req.userId!);
@@ -7355,7 +7349,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/theories", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/theories", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { getActiveTheories, getBestTheory } = await import("./paper-experiments");
       const [theories, best] = await Promise.all([
@@ -7369,7 +7363,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/theories/:id/validate", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/theories/:id/validate", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { validateTheory } = await import("./paper-experiments");
       const validation = await validateTheory(req.params.id);
@@ -7380,7 +7374,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/paper/trading-gate", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/trading-gate", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { checkRealTradingGate } = await import("./paper-experiments");
       const signalWallet = req.query.wallet as string | undefined;
@@ -7392,7 +7386,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/paper/experiment-trade", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/experiment-trade", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { openExperimentTrade } = await import("./paper-experiments");
       const { experimentId, tokenMint, tokenSymbol, entrySol, signalWallet, takeProfitMultiplier, stopLossPercent, isVariant } = req.body;
@@ -7414,7 +7408,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/paper/best-theory-trade", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/best-theory-trade", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { openBestTheoryTrade, getBestTheory } = await import("./paper-experiments");
       const { tokenMint, tokenSymbol, entrySol, signalWallet, takeProfitMultiplier, stopLossPercent, theoryId } = req.body;
@@ -7444,7 +7438,7 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/paper/validate-theories", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/paper/validate-theories", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { runBestTheoryValidationCycle } = await import("./paper-experiments");
       const result = await runBestTheoryValidationCycle();
@@ -7519,7 +7513,7 @@ export async function registerRoutes(
    * GET /api/paper/exit-strategies/:tokenMint
    * Get calculated exit strategy for a token based on retrolearner patterns
    */
-  app.get("/api/paper/exit-strategies/:tokenMint", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/paper/exit-strategies/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const { calculateDynamicExitStrategy } = await import("./paper-trading-simulation");
 
@@ -7871,7 +7865,7 @@ export async function registerRoutes(
 
   app.get("/api/discovery/ranked-wallets", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const userId = req.session?.userId;
+      const userId = req.userId;
       if (!userId) return res.status(401).json({ error: "Unauthorized" });
       const limit = Math.min(parseInt(req.query.limit as string) || 30, 50);
       const cacheKey = `ranked-wallets:${userId}:${limit}`;
@@ -7886,8 +7880,8 @@ export async function registerRoutes(
       if (wallets.length > 0) {
         const enriched = wallets.map(w => {
           const winRate = w.winRate ?? 0;
-          const totalTrades = w.totalTrades ?? 0;
-          const avgHoldTime = w.avgHoldTimeMinutes ?? 0;
+          const totalTrades = w.sampleSize ?? 0;
+          const avgHoldTime = w.avgHoldDuration ? Math.round(w.avgHoldDuration / 60) : 0;
           const profitFactor = w.profitFactor ?? 0;
 
           let score = 0;
@@ -7938,7 +7932,7 @@ export async function registerRoutes(
 
   app.get("/api/discovery/page-stats", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
-      const userId = req.session?.userId;
+      const userId = req.userId;
       if (!userId) return res.status(401).json({ error: "Unauthorized" });
       const cacheKey = `page-stats:${userId}`;
       const cached = getCached(cacheKey);
@@ -8961,17 +8955,17 @@ function startPollingFallback() {
                 const pendingBuy = await addPendingBuy(
                   wallet.userId,
                   histSwap.tokenMint,
-                  swapData.toTokenSymbol,
+                  swapData.toTokenSymbol ?? "",
                   toTokenMetadata?.name,
                   toTokenMetadata?.priceUsd,
                   toTokenMetadata?.liquidity,
                   {
-                    swapId: savedSwap.id,
+                    swapId: Number(savedSwap.id),
                     walletAddress: wallet.walletAddress,
-                    walletLabel: wallet.label,
+                    walletLabel: wallet.label ?? undefined,
                     signalWalletId: wallet.id,
-                    config: walletCopyConfig,
-                  }
+                  },
+                  walletCopyConfig
                 );
                 if (pendingBuy) {
                   console.log(`[PollingFallback] Copy trade queued: ${swapData.toTokenSymbol} (pending buy #${pendingBuy.id})`);

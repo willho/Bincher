@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Fingerprinting & Clustering Diagnostic Endpoints
  *

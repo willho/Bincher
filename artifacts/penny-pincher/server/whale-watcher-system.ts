@@ -173,7 +173,7 @@ export async function generateWhaleSignal(
     if (positions.length === 0) continue;
 
     const latestPosition = positions[positions.length - 1];
-    const entryPrice = latestPosition.entryPrice || 1;
+    const entryPrice = latestPosition.entryPriceUsd || 1;
     const currentMultiplier = currentPrice / entryPrice;
     const positionChange = ((currentPrice - entryPrice) / entryPrice) * 100;
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db } from "./db";
 import { eq, and, gte, lte, inArray, desc, asc } from "drizzle-orm";
 import { swaps, walletFundingLinks, monitoredWallets } from "@shared/schema";

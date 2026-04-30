@@ -51,7 +51,7 @@ export async function getTopHoldersWithPnL(
         tokensHeld: 0,
         totalBuyCost: 0,
         totalTokensBought: 0,
-        firstBuyPrice: trade.price,
+        firstBuyPrice: trade.price ?? 0,
         firstBuyTime: trade.timestamp,
       });
     }
@@ -64,7 +64,7 @@ export async function getTopHoldersWithPnL(
       holder.totalTokensBought += trade.amountTokens;
       // Update first buy price if this is earlier
       if (trade.timestamp < holder.firstBuyTime) {
-        holder.firstBuyPrice = trade.price;
+        holder.firstBuyPrice = trade.price ?? 0;
         holder.firstBuyTime = trade.timestamp;
       }
     } else {

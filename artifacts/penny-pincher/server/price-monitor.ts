@@ -945,9 +945,9 @@ async function executeReclaim(
     }).where(eq(holdings.id, holding.id));
     
     // Resolve position score snapshots for learning (profitable partial exit)
-    const currentPrice = (holding.buyPrice || 0) * reclaimMultiplier;
+    const snapshotPrice = currentPrice || (holding.buyPrice || 0) * reclaimMultiplier;
     try {
-      await resolvePositionScoreSnapshots(holding.id, currentPrice, "profit_exit");
+      await resolvePositionScoreSnapshots(holding.id, snapshotPrice, "profit_exit");
     } catch (e) {
       console.error(`Failed to resolve position snapshots:`, e);
     }
@@ -1200,7 +1200,7 @@ async function executeStopLoss(
     console.log(`  Tokens sold: ${tokensToSell.toLocaleString()}`);
     console.log(`  SOL recovered: ~${result.inputAmount} SOL`);
 
-    await sendStopLossNotification(userId, holding, tokensToSell, result.inputAmount || 0, lossPercent, result.signature);
+    await sendStopLossNotification(userId, holding, tokensToSell, result.inputAmount || 0, lossPercent, result.signature ?? "");
     
     // Record trade result for autonomous mode tracking (stop-loss = loss)
     const { getSolPriceUsd } = await import("./jupiter");
@@ -1288,8 +1288,6 @@ export async function executeAutoMirrorSell(
 
     await db.update(holdings).set({
       currentAmount: newAmount,
-      lastSellTimestamp: now,
-      lastSellSignature: result.signature,
     }).where(eq(holdings.id, holding.id));
     
     // Resolve position score snapshots for learning (signal wallet exited)
@@ -1318,7 +1316,7 @@ export async function executeAutoMirrorSell(
     console.log(`  Remaining: ${newAmount.toLocaleString()} tokens`);
 
     // Send notification
-    await sendAutoMirrorSellNotification(userId, holding, tokensToSell, result.inputAmount || 0, sellPercent, result.signature, reason);
+    await sendAutoMirrorSellNotification(userId, holding, tokensToSell, result.inputAmount || 0, sellPercent, result.signature ?? "", reason);
     
     // Record trade result for autonomous mode (proportional cost basis)
     const { getSolPriceUsd } = await import("./jupiter");
@@ -1382,7 +1380,7 @@ async function sendAutoMirrorSellNotification(
   `;
 
   try {
-    await sendEmail(settings.emails, subject, html);
+    await sendEmail(settings.emails.join(","), subject, html);
     console.log(`Auto-mirror sell notification sent for ${holding.tokenSymbol}`);
   } catch (error) {
     console.error(`Failed to send auto-mirror sell notification:`, error);
@@ -1434,7 +1432,7 @@ async function sendStopLossNotification(
   `;
 
   try {
-    await sendEmail(settings.emails, subject, html);
+    await sendEmail(settings.emails.join(","), subject, html);
     console.log(`Stop-loss notification sent for ${holding.tokenSymbol}`);
   } catch (error) {
     console.error(`Failed to send stop-loss notification:`, error);
@@ -1522,32 +1520,7 @@ async function sendStopLossAlert(
 ): Promise<void> {
   const settings = await storage.getNotificationSettings(userId);
   
-  // Priority: Telegram > Email
-  const telegramSettings = await storage.getTelegramSettings(userId);
-  if (telegramSettings?.enabled && telegramSettings.chatId) {
-    try {
-      const { sendTelegramMessage } = await import("./telegram");
-      const message = `*STOP-LOSS ALERT*
-
-*${holding.tokenSymbol}* has dropped ${lossPercent.toFixed(1)}%
-
-Current Price: $${currentPrice < 0.0001 ? currentPrice.toExponential(2) : currentPrice.toFixed(6)}
-Entry Price: $${holding.buyPrice < 0.0001 ? holding.buyPrice.toExponential(2) : holding.buyPrice.toFixed(6)}
-Position Value: ${(holding.currentAmount * currentPrice).toFixed(2)} USD
-
-Mode is set to *alert* - position will NOT auto-sell.
-
-Reply with "sell ${holding.tokenSymbol}" to execute stop-loss manually.`;
-      
-      await sendTelegramMessage(telegramSettings.chatId, message, { parse_mode: "Markdown" });
-      console.log(`Stop-loss Telegram alert sent for ${holding.tokenSymbol}`);
-      return;
-    } catch (error) {
-      console.error(`Failed to send stop-loss Telegram alert:`, error);
-    }
-  }
-  
-  // Fallback to email
+  // Email notification
   if (!settings?.enabled || !settings.emails?.length) {
     console.log(`No notification channels available for stop-loss alert on ${holding.tokenSymbol}`);
     return;

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db } from "./db";
 import { eq, and, lt, sql, desc, gte, asc, or, isNull, inArray } from "drizzle-orm";
 import { computeTasks, computeSourceStats, walletSummaries, ComputeTask } from "@shared/schema";

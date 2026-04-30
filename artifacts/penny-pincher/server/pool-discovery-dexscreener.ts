@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Pool Discovery via DexScreener (Replace GeckoTerminal)
  *

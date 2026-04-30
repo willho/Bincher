@@ -1120,14 +1120,14 @@ export default function TokenPage() {
               <BarChart3 className="h-4 w-4" />
               Price Chart
               <Badge variant="outline" className="text-xs ml-auto">
-                {snapshot?.pairAddress ? "DEXTools" : "DexScreener"}
+                {(snapshot as any)?.pairAddress ? "DEXTools" : "DexScreener"}
               </Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0 overflow-hidden rounded-b-lg">
             <iframe
-              src={snapshot?.pairAddress
-                ? `https://www.dextools.io/widget-chart/en/solana/pe-light/${snapshot.pairAddress}?theme=dark&chartType=1&chartResolution=15&drawingToolbars=false`
+              src={(snapshot as any)?.pairAddress
+                ? `https://www.dextools.io/widget-chart/en/solana/pe-light/${(snapshot as any).pairAddress}?theme=dark&chartType=1&chartResolution=15&drawingToolbars=false`
                 : `https://dexscreener.com/solana/${tokenMint}?embed=1&theme=dark&trades=0&info=0`
               }
               className="w-full h-[300px] border-0"

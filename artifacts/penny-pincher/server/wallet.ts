@@ -224,6 +224,9 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
       slippageMode: (result[0].slippageMode as "auto" | "fixed") ?? "auto",
       slippageMaxBps: result[0].slippageMaxBps ?? 500,
       slippageMinBps: result[0].slippageMinBps ?? 50,
+      dumpAlertEnabled: result[0].dumpAlertEnabled ?? true,
+      dumpAlertThreshold: result[0].dumpAlertThreshold ?? 50,
+      dailySpentUsd: result[0].dailySpentUsd ?? 0,
     };
   }
   
@@ -245,6 +248,9 @@ export async function getTradeConfig(userId: number): Promise<TradeConfig> {
     slippageMode: (rows[0].slippageMode as "auto" | "fixed") ?? "auto",
     slippageMaxBps: rows[0].slippageMaxBps ?? 500,
     slippageMinBps: rows[0].slippageMinBps ?? 50,
+    dumpAlertEnabled: rows[0].dumpAlertEnabled ?? true,
+    dumpAlertThreshold: rows[0].dumpAlertThreshold ?? 50,
+    dailySpentUsd: rows[0].dailySpentUsd ?? 0,
   };
 }
 
@@ -272,7 +278,6 @@ export async function getHoldings(userId: number): Promise<Holding[]> {
   const rows = await db.select().from(holdings).where(eq(holdings.userId, userId));
   return rows.map(row => ({
     id: row.id,
-    userId: row.userId ?? undefined,
     tokenMint: row.tokenMint,
     tokenSymbol: row.tokenSymbol,
     tokenName: row.tokenName ?? undefined,
@@ -290,12 +295,29 @@ export async function getHoldings(userId: number): Promise<Holding[]> {
     highestMultiplier: row.highestMultiplier ?? 1,
     alertedMilestones: (row.alertedMilestones as number[]) ?? [],
     reclaimedMilestones: (row.reclaimedMilestones as number[]) ?? [],
+    dumpAlertSent: row.dumpAlertSent ?? false,
     tokenWalletPublicKey: row.tokenWalletPublicKey ?? undefined,
     sourceSwapId: row.sourceSwapId ?? undefined,
     sourceWalletAddress: row.sourceWalletAddress ?? undefined,
     sourceWalletLabel: row.sourceWalletLabel ?? undefined,
+    sourceWalletBuyCount: row.sourceWalletBuyCount ?? undefined,
+    sourceWalletSellCount: row.sourceWalletSellCount ?? undefined,
+    sourceWalletMaxHeldPct: row.sourceWalletMaxHeldPct ?? undefined,
+    sourceWalletCurrentPct: row.sourceWalletCurrentPct ?? undefined,
+    isDead: row.isDead ?? false,
+    isDust: row.isDust ?? false,
+    takeProfitThresholds: (row.takeProfitThresholds as number[]) ?? undefined,
+    takeProfitPercentages: (row.takeProfitPercentages as number[]) ?? undefined,
+    takeProfitEnabled: (row.takeProfitEnabled as boolean[]) ?? undefined,
+    stopLossPercent: row.stopLossPercent ?? undefined,
+    stopLossFloorUsd: row.stopLossFloorUsd ?? undefined,
+    stopLossMode: (row.stopLossMode as "auto" | "alert") ?? "auto",
+    autoMirrorSells: row.autoMirrorSells ?? false,
     signalWalletId: row.signalWalletId ?? undefined,
     positionSource: row.positionSource ?? "copy",
+    entryReason: row.entryReason ?? undefined,
+    positionStatus: (row.positionStatus as "active" | "pending" | "inactive") ?? "active",
+    autonomyEnabled: row.autonomyEnabled ?? false,
   }));
 }
 
@@ -309,7 +331,6 @@ export async function getPendingBuys(userId: number): Promise<PendingBuy[]> {
   );
   return rows.map(row => ({
     id: row.id,
-    userId: row.userId ?? undefined,
     tokenMint: row.tokenMint,
     tokenSymbol: row.tokenSymbol,
     tokenName: row.tokenName ?? undefined,
@@ -322,6 +343,16 @@ export async function getPendingBuys(userId: number): Promise<PendingBuy[]> {
     initialBuyCount: row.initialBuyCount ?? 0,
     status: (row.status ?? "active") as "active" | "paused" | "cancelled" | "completed",
     pauseReason: row.pauseReason ?? undefined,
+    segmentIndex: row.segmentIndex ?? 1,
+    totalSegments: row.totalSegments ?? 1,
+    parentBuyId: row.parentBuyId ?? undefined,
+    solAmount: row.solAmount ?? undefined,
+    tokenWalletPublicKey: row.tokenWalletPublicKey ?? undefined,
+    snapshotId: row.snapshotId ?? undefined,
+    aiScore: row.aiScore ?? undefined,
+    sourceSwapId: row.sourceSwapId ?? undefined,
+    sourceWalletAddress: row.sourceWalletAddress ?? undefined,
+    sourceWalletLabel: row.sourceWalletLabel ?? undefined,
   }));
 }
 
@@ -598,7 +629,8 @@ export async function addPendingBuy(
       sourceWalletLabel: sourceWalletData?.walletLabel,
       signalWalletId: sourceWalletData?.signalWalletId,
       copyTiming: timing, // Store timing mode for execution logic
-    }).returning();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }).returning() as any[];
     
     // First segment becomes the parent for subsequent segments
     if (i === 0) {
@@ -746,6 +778,16 @@ export async function getAllPendingBuys(): Promise<(PendingBuy & { userId: numbe
     initialBuyCount: row.initialBuyCount ?? 0,
     status: (row.status ?? "active") as "active" | "paused" | "cancelled" | "completed",
     pauseReason: row.pauseReason ?? undefined,
+    segmentIndex: row.segmentIndex ?? 1,
+    totalSegments: row.totalSegments ?? 1,
+    parentBuyId: row.parentBuyId ?? undefined,
+    solAmount: row.solAmount ?? undefined,
+    tokenWalletPublicKey: row.tokenWalletPublicKey ?? undefined,
+    snapshotId: row.snapshotId ?? undefined,
+    aiScore: row.aiScore ?? undefined,
+    sourceSwapId: row.sourceSwapId ?? undefined,
+    sourceWalletAddress: row.sourceWalletAddress ?? undefined,
+    sourceWalletLabel: row.sourceWalletLabel ?? undefined,
   }));
 }
 
@@ -771,6 +813,29 @@ export async function getAllHoldings(): Promise<(Holding & { userId: number })[]
     highestMultiplier: row.highestMultiplier ?? 1,
     alertedMilestones: (row.alertedMilestones as number[]) ?? [],
     reclaimedMilestones: (row.reclaimedMilestones as number[]) ?? [],
+    dumpAlertSent: row.dumpAlertSent ?? false,
+    tokenWalletPublicKey: row.tokenWalletPublicKey ?? undefined,
+    sourceSwapId: row.sourceSwapId ?? undefined,
+    sourceWalletAddress: row.sourceWalletAddress ?? undefined,
+    sourceWalletLabel: row.sourceWalletLabel ?? undefined,
+    sourceWalletBuyCount: row.sourceWalletBuyCount ?? undefined,
+    sourceWalletSellCount: row.sourceWalletSellCount ?? undefined,
+    sourceWalletMaxHeldPct: row.sourceWalletMaxHeldPct ?? undefined,
+    sourceWalletCurrentPct: row.sourceWalletCurrentPct ?? undefined,
+    isDead: row.isDead ?? false,
+    isDust: row.isDust ?? false,
+    takeProfitThresholds: (row.takeProfitThresholds as number[]) ?? undefined,
+    takeProfitPercentages: (row.takeProfitPercentages as number[]) ?? undefined,
+    takeProfitEnabled: (row.takeProfitEnabled as boolean[]) ?? undefined,
+    stopLossPercent: row.stopLossPercent ?? undefined,
+    stopLossFloorUsd: row.stopLossFloorUsd ?? undefined,
+    stopLossMode: (row.stopLossMode as "auto" | "alert") ?? "auto",
+    autoMirrorSells: row.autoMirrorSells ?? false,
+    signalWalletId: row.signalWalletId ?? undefined,
+    positionSource: row.positionSource ?? "copy",
+    entryReason: row.entryReason ?? undefined,
+    positionStatus: (row.positionStatus as "active" | "pending" | "inactive") ?? "active",
+    autonomyEnabled: row.autonomyEnabled ?? false,
   }));
 }
 

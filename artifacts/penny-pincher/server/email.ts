@@ -182,6 +182,7 @@ export async function sendEmail(to: string, subject: string, html: string, apiKe
 }
 
 export async function sendPasswordResetEmail(to: string, resetLink: string, username: string): Promise<boolean> {
+  const resend = getResendClient();
   try {
     const { data, error } = await resend.emails.send({
       from: "Swap Monitor <onboarding@resend.dev>",

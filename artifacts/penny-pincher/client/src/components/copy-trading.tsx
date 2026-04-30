@@ -914,7 +914,7 @@ export function CopyTrading() {
                         return aMultiplier - bMultiplier;
                       case "recent":
                       default:
-                        return new Date(b.boughtAt).getTime() - new Date(a.boughtAt).getTime();
+                        return b.buyTimestamp - a.buyTimestamp;
                     }
                   });
                 };

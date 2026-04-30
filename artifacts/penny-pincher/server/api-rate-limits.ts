@@ -113,6 +113,8 @@ export const CIRCUIT_BREAKER_THRESHOLDS = {
   helius: 0.95,
   dexPaprika: 0.95,
   dexScreener: 0.95,
+  shyftHttp: 0.95,
+  pumpPortal: 0.95,
   rugCheck: 0.95,
   constantK: 0.95,
 };
@@ -280,6 +282,7 @@ export const quotaTrackers = {
   helius: new DailyQuotaTracker(STRICT_RATE_LIMITS.helius.perDay),
   dexPaprika: new DailyQuotaTracker(STRICT_RATE_LIMITS.dexPaprika.perDay),
   dexScreener: new DailyQuotaTracker(STRICT_RATE_LIMITS.dexScreener.perDay),
+  shyftHttp: new DailyQuotaTracker(STRICT_RATE_LIMITS.shyftHttp.perDay),
   pumpPortal: new DailyQuotaTracker(STRICT_RATE_LIMITS.pumpPortal.perDay),
   rugCheck: new DailyQuotaTracker(STRICT_RATE_LIMITS.rugCheck.perDay),
   constantK: new DailyQuotaTracker(STRICT_RATE_LIMITS.constantK.perDay),

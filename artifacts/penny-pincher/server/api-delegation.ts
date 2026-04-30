@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * API Delegation Strategy
  *

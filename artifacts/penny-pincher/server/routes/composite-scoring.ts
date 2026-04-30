@@ -22,7 +22,8 @@ const router = Router();
  */
 router.get("/token-score/:mint", async (req: Request, res: Response) => {
   try {
-    const { mint } = req.params;
+    const mintStr = String(req.params.mint);
+    const mint = mintStr;
     const { annScore } = req.query;
 
     if (!mint) {
@@ -42,9 +43,9 @@ router.get("/token-score/:mint", async (req: Request, res: Response) => {
     const explanation = await explainCompositeScore(mint, ann);
 
     res.json({
+      ...explanation,
       mint,
       compositeScore,
-      ...explanation,
     });
   } catch (error) {
     res.status(500).json({ error: (error as Error).message });

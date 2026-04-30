@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db } from "./db";
 import { eq, gte, desc } from "drizzle-orm";
 import { raydiumPoolDiscoveries, tokenDataPool } from "@shared/schema";

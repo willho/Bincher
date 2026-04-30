@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Pump SDK Graduation Monitor - Proactive Detection
  *

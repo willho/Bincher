@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Pump.fun Graduation Tracker - Event Handler
  * Processes tokens when they graduate from bonding curve

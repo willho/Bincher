@@ -6,7 +6,7 @@
  * subscriptions based on quality scores.
  */
 
-interface ProviderMetrics {
+interface ProviderMetricsSnapshot {
   provider: string;
   messageLatency: number; // ms, estimated from timestamp lag
   messageBacklog: number; // number of pending messages
@@ -70,7 +70,7 @@ class ProviderMetrics {
     }
   }
 
-  getMetrics(): ProviderMetrics {
+  getMetrics(): ProviderMetricsSnapshot {
     const now = Date.now();
     const recentMs = this.messageTimestamps.filter(t => t > now - 60000);
 

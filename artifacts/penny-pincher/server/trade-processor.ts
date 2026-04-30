@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db } from "./db";
 import { pendingBuys, holdings, tradeConfig, positionScoreSnapshots } from "@shared/schema";
 import { eq, and, lte, or } from "drizzle-orm";

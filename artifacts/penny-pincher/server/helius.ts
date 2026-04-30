@@ -276,7 +276,7 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
     const largestAccounts = await rpcGetLargestAccounts(mintAddress);
     
     if (!largestAccounts || largestAccounts.length === 0) {
-      return [];
+      return { holders: [], totalHolderCount: null };
     }
 
     const supplyInfo = await rpcCall("getTokenSupply", async (connection) => {
@@ -297,7 +297,7 @@ export async function fetchTopHolders(mintAddress: string, limit: number = 100):
       );
     }
 
-    if (totalSupply === 0) return [];
+    if (totalSupply === 0) return { holders: [], totalHolderCount: null };
 
     const sliced = largestAccounts.slice(0, limit);
     

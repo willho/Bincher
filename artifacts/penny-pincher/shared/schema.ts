@@ -942,6 +942,7 @@ export const swapSchema = z.object({
   slot: z.number(),
   notificationSent: z.boolean().default(false),
   toTokenMetadata: tokenMetadataSchema.optional(),
+  solPriceAtTrade: z.number().optional(),
 });
 
 export type Swap = z.infer<typeof swapSchema>;
@@ -973,6 +974,7 @@ export const hotWalletSchema = z.object({
   id: z.number(),
   publicKey: z.string(),
   createdAt: z.number(),
+  userId: z.number().optional(),
 });
 
 export type HotWallet = z.infer<typeof hotWalletSchema>;
@@ -1055,6 +1057,7 @@ export type PendingBuy = z.infer<typeof pendingBuySchema>;
 
 export const tradeConfigSchema = z.object({
   id: z.number(),
+  userId: z.number().optional(),
   enabled: z.boolean().default(false),
   buyPercentage: z.number().default(10),
   minDelayMinutes: z.number().default(20),
@@ -4498,7 +4501,7 @@ export const tokenFingerprintClusters = pgTable("token_fingerprint_clusters", {
   lifecycleStage: text("lifecycle_stage"), // Derived from snapshot age/multiplier/concentration
 
   // Centroid vector (average of all snapshots in this archetype)
-  centroid: vector("centroid", 26).notNull(), // 26-dim fingerprint vector for fast similarity search
+  centroid: vector("centroid", { dimensions: 26 }).notNull(), // 26-dim fingerprint vector for fast similarity search
 
   // Outcome probability distribution (verified from completed tokens)
   // { "pump_100x": 0.60, "slow_bleed": 0.25, "crash_fast": 0.15 }
@@ -4549,7 +4552,7 @@ export const activeTokenTrajectories = pgTable("active_token_trajectories", {
   triggerContext: jsonb("trigger_context").$type<Record<string, any>>(), // volume count, time elapsed, etc.
 
   // Fingerprint vector (26-dim) - matches archetype centroids for fast similarity matching
-  fingerprintVector: vector("fingerprint_vector", 26).notNull(),
+  fingerprintVector: vector("fingerprint_vector", { dimensions: 26 }).notNull(),
 
   // State at snapshot time
   currentMultiplier: real("current_multiplier"), // Price relative to entry

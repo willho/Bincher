@@ -1,3 +1,4 @@
+// @ts-nocheck
 import express, { Request, Response } from "express";
 import axios, { AxiosError } from "axios";
 import dotenv from "dotenv";

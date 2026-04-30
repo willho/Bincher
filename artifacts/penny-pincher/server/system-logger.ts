@@ -10,7 +10,7 @@ import {
 import { desc, sql } from "drizzle-orm";
 
 type LogStatus = "success" | "error" | "warning" | "info";
-type LogService = "copy_trade" | "alert" | "webhook" | "swap" | "sell" | "system" | "telegram" | "helius" | "jupiter" | "ai" | "dexscreener" | "geckoterminal";
+type LogService = "copy_trade" | "alert" | "webhook" | "swap" | "sell" | "system" | "telegram" | "helius" | "jupiter" | "ai" | "dexscreener" | "geckoterminal" | "price_monitor";
 type ApiService = "jupiter" | "dexscreener" | "geckoterminal" | "binance";
 type ErrorType = "timeout" | "validation" | "network" | "auth" | "rate_limit" | "unknown";
 type PipelineCategory =

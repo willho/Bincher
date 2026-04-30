@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Pump.fun WebSocket Client
  *

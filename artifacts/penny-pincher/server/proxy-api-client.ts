@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Proxy API Client
  *

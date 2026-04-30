@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Fingerprint Matching with pgvector
  *

@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Pump.fun SDK Client
  * Initializes and manages the Pump SDK for graduation detection

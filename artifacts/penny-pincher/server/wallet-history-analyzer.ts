@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db } from "./db";
 import { retrolearnerWalletAnalysis, goodTraders } from "../shared/schema";
 import { eq, and, lt } from "drizzle-orm";

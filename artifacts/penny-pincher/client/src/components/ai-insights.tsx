@@ -270,7 +270,7 @@ export function AIInsights() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => summarizeEvents.mutate()}
+                onClick={() => summarizeEvents.mutate(undefined)}
                 disabled={summarizeEvents.isPending || !canSummarize || eventsLoading || !events?.length}
                 title={!canSummarize ? `Wait ${cooldownRemaining}s` : "Ask Pincher to summarize"}
                 data-testid="button-summarize-events"

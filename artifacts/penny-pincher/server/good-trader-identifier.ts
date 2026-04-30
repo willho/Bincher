@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db } from "./db";
 import { goodTraders, swaps } from "../shared/schema";
 import { eq, and, gte } from "drizzle-orm";

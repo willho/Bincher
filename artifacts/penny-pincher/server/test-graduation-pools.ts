@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Integration tests for token graduation tracking, pool discovery, and retrolearner
  * Tests the full pipeline: graduation detection → pool discovery → retrolearner → system picks

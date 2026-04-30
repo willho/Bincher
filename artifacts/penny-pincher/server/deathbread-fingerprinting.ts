@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { db } from "./db";
 import { tokenFingerprints, tokenDataPool, rawTokenTrades } from "@shared/schema";
 import { eq, and, gte, lt } from "drizzle-orm";

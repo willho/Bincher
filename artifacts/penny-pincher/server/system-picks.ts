@@ -321,6 +321,7 @@ async function getTrackedWalletsForToken(tokenMint: string): Promise<string[]> {
 async function validateWithJupiter(mint: string, entryAmountSol: number = 1.0): Promise<boolean> {
   try {
     const tokenData = await getTokenData(mint);
+    if (!tokenData) return false;
 
     if (!tokenData.raydiumPoolAddress) {
       return false;
@@ -358,6 +359,7 @@ async function openSystemPickPosition(pick: SystemPick): Promise<boolean> {
   try {
     // Get current token price
     const tokenData = await getTokenData(pick.tokenMint);
+    if (!tokenData) { console.error("[SystemPicks] No token data for", pick.tokenMint); return false; }
     const entryPrice = tokenData.priceUsd || 1;
 
     // Calculate tokens expected today (for dynamic allocation)

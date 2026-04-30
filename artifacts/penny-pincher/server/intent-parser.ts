@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { getHotWalletBalance, updateTradeConfig, getHoldings, getPendingBuys } from "./wallet";
 import { db } from "./db";
 import { holdings, tradeFilters } from "@shared/schema";

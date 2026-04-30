@@ -425,9 +425,7 @@ export default function TradingPage() {
               ) : inactiveHoldings.length > 0 ? (
                 <div className="space-y-3">
                   {inactiveHoldings.slice(0, 10).map((holding) => {
-                    const pnlPercent = holding.solSpent > 0 && holding.solReclaimed
-                      ? ((holding.solReclaimed - holding.solSpent) / holding.solSpent) * 100
-                      : 0;
+                    const pnlPercent = 0;
                     const wasProfit = pnlPercent >= 0;
                     return (
                       <div
@@ -442,7 +440,7 @@ export default function TradingPage() {
                           <div>
                             <div className="flex items-center gap-2">
                               <span className="font-medium text-muted-foreground">{holding.tokenSymbol}</span>
-                              {holding.solReclaimed ? (
+                              {holding.reclaimed ? (
                                 <Badge variant="secondary">
                                   {wasProfit ? "+" : ""}{pnlPercent.toFixed(1)}%
                                 </Badge>
@@ -452,7 +450,7 @@ export default function TradingPage() {
                             </div>
                             <p className="text-xs text-muted-foreground">
                               {holding.solSpent.toFixed(4)} SOL spent
-                              {holding.solReclaimed ? ` → ${holding.solReclaimed.toFixed(4)} SOL returned` : ''}
+                              {holding.reclaimed ? ` (reclaimed)` : ''}
                             </p>
                           </div>
                         </div>

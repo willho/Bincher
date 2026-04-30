@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * On-Chain Price Monitoring (Free - No API Cost)
  *

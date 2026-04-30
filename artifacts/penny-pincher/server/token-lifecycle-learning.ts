@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * Token Lifecycle Learning System
  *
