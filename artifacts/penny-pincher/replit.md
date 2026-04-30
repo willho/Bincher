@@ -97,6 +97,33 @@ PostgreSQL stores user accounts, sessions, monitored wallets, swap history, sett
 - Show key metrics per row: win rate, total trades, hold time, style badge, composite score
 - Data available: 50 active, 200 watch, 2,959 archive whale wallets
 
+## Development Setup
+
+### Running Locally
+The app server boots into a startup wizard on first run. To skip the wizard during local development or CI:
+
+```
+SKIP_STARTUP_WIZARD=true pnpm --filter @workspace/penny-pincher run dev
+```
+
+The Replit artifact workflow sets `SKIP_STARTUP_WIZARD=true` automatically.
+
+### Required Secrets
+Copy `.env.example` to `.env` (or use Replit Secrets) and fill in at minimum:
+- `DATABASE_URL` — Postgres connection string (auto-set in Replit)
+- `SESSION_SECRET` — random 32-byte hex string for cookie signing
+- `HELIUS_API_KEY` — real-time Solana data
+- `TELEGRAM_ADMIN_CODEWORD` — required to use Telegram admin commands (set a strong random value)
+- `ENCRYPTION_KEY` — 32-byte hex key for encrypting stored private keys (optional but recommended)
+
+See `.env.example` for the full list with instructions.
+
+### TypeScript Check
+```
+pnpm --filter @workspace/penny-pincher run check
+```
+Must exit with code 0 (zero errors).
+
 ## External Dependencies
 
 - **Helius**: Real-time Solana blockchain data, swap transaction webhooks, and dynamic priority fee estimation.
