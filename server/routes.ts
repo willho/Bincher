@@ -8992,6 +8992,22 @@ export async function registerRoutes(
         medianMultiplier: cluster.medianMultiplier || 3,
       }));
 
+      // Get trajectory from latest snapshot (cached)
+      const snapshot = await db
+        .select()
+        .from(tokenDataPool)
+        .where(eq(tokenDataPool.mint, mint))
+        .orderBy(desc(tokenDataPool.createdAt))
+        .limit(1);
+
+      const trajectoryData = snapshot[0]?.trajectory || {
+        momentum: 0,
+        acceleration: 0,
+        projectedPrice24h: tokenData.currentPrice || 0,
+        projectedPrice7d: tokenData.currentPrice || 0,
+        confidence: 0.5,
+      };
+
       res.json({
         mint: tokenData.mint,
         symbol: tokenData.symbol || "UNKNOWN",
@@ -9001,13 +9017,7 @@ export async function registerRoutes(
         marketCap: tokenData.marketCap || 0,
         createdAt: tokenData.createdAt || new Date(),
         associatedClusters,
-        trajectory: {
-          momentum: tokenData.trajectory?.momentum || 0,
-          acceleration: tokenData.trajectory?.acceleration || 0,
-          projectedPrice24h: tokenData.trajectory?.projectedPrice24h || tokenData.currentPrice || 0,
-          projectedPrice7d: tokenData.trajectory?.projectedPrice7d || tokenData.currentPrice || 0,
-          confidence: tokenData.trajectory?.confidence || 0.5,
-        },
+        trajectory: trajectoryData,
       });
     } catch (error) {
       console.error("[Token Detail] Error:", error);
@@ -9032,9 +9042,13 @@ export async function registerRoutes(
 
       const whaleData = whale[0];
 
-      // Get top 10 ranked holder wallets (this would come from snapshot data)
-      // For now, return empty array - would need to enhance to track holders per wallet
-      const topHolders = [];
+      // Get top 10 holder wallets from tokens this wallet is associated with
+      // Query snapshots to find holder data for tokens this wallet influences
+      const topHolders: any[] = [];
+
+      // For now, return empty - would need token holdings data
+      // This would require querying snapshots for top 20 holders of all tokens
+      // and aggregating by wallet ranking
 
       res.json({
         walletAddress: whaleData.walletAddress,
