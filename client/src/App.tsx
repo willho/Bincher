@@ -19,7 +19,7 @@ import {
   SidebarFooter,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
-import DashboardPage from "@/pages/dashboard-new";
+import DashboardConsolidated from "@/pages/dashboard-consolidated";
 import TradingPage from "@/pages/trading";
 import TokenPage from "@/pages/token";
 import SignalWalletPage from "@/pages/signal-wallet";
@@ -235,8 +235,8 @@ function AuthenticatedApp() {
           </header>
           <main className="flex-1 p-6 overflow-auto pb-20">
             <Switch>
-              <Route path="/" component={DashboardPage} />
-              <Route path="/dashboard" component={DashboardPage} />
+              <Route path="/" component={DashboardConsolidated} />
+              <Route path="/dashboard" component={DashboardConsolidated} />
               <Route path="/discovery" component={DiscoveryPage} />
               <Route path="/holdings" component={HoldingsPage} />
               <Route path="/holdings/:token" component={HoldingsPage} />
