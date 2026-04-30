@@ -8938,37 +8938,19 @@ export async function registerRoutes(
           isNotNull(familiarWhales.winRate),
           isNotNull(familiarWhales.sharpeRatio)
         ))
-        .orderBy(desc(familiarWhales.rank));
+        .orderBy(desc(familiarWhales.sharpeRatio))
+        .limit(100);
 
-      const leaderboard = wallets
-        .map((wallet) => {
-          const winRate = wallet.winRate || 0;
-          const sharpeRatio = wallet.sharpeRatio || 0;
-          const confidence = wallet.confidence || 0.5;
-          const pnl7d = wallet.pnl7d || 0;
-          const trades = wallet.totalTrades || 0;
-
-          // Quality score: win rate × sharpe × confidence (risk-adjusted)
-          const qualityScore = Math.max(0, winRate * Math.max(0.5, sharpeRatio) * confidence);
-
-          return {
-            walletAddress: wallet.walletAddress,
-            rank: 0,
-            winRate,
-            sharpeRatio: Math.max(0, sharpeRatio),
-            pnl7d,
-            confidence,
-            qualityScore,
-            totalTrades: trades,
-            lastActive: wallet.lastSeen || new Date(),
-          };
-        })
-        .sort((a, b) => b.qualityScore - a.qualityScore)
-        .slice(0, 100)
-        .map((wallet, idx) => ({
-          ...wallet,
-          rank: idx + 1,
-        }));
+      const leaderboard = wallets.map((wallet, idx) => ({
+        walletAddress: wallet.walletAddress,
+        rank: idx + 1,
+        winRate: wallet.winRate || 0,
+        sharpeRatio: wallet.sharpeRatio || 0,
+        pnl7d: wallet.pnl7d || 0,
+        confidence: wallet.confidence || 0.5,
+        totalTrades: wallet.totalTrades || 0,
+        lastActive: wallet.lastSeen || new Date(),
+      }));
 
       res.json(leaderboard);
     } catch (error) {

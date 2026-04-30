@@ -76,7 +76,6 @@ interface WalletLeaderboardEntry {
   sharpeRatio: number;
   pnl7d: number;
   confidence: number;
-  qualityScore: number;
   totalTrades: number;
   lastActive: Date;
 }
@@ -619,20 +618,16 @@ export default function DashboardConsolidated() {
                         </div>
                         <div className="text-right">
                           <p className="text-2xl font-bold text-green-600">
-                            {(wallet.qualityScore * 100).toFixed(0)}
+                            {wallet.sharpeRatio.toFixed(2)}
                           </p>
-                          <p className="text-xs text-muted-foreground">Quality Score</p>
+                          <p className="text-xs text-muted-foreground">Sharpe Ratio</p>
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-5 gap-3 text-sm">
+                      <div className="grid grid-cols-4 gap-3 text-sm">
                         <div className="bg-muted rounded p-2">
                           <p className="text-muted-foreground text-xs">Win Rate</p>
                           <p className="font-semibold">{(wallet.winRate * 100).toFixed(0)}%</p>
-                        </div>
-                        <div className="bg-muted rounded p-2">
-                          <p className="text-muted-foreground text-xs">Sharpe</p>
-                          <p className="font-semibold">{wallet.sharpeRatio.toFixed(2)}</p>
                         </div>
                         <div className="bg-muted rounded p-2">
                           <p className="text-muted-foreground text-xs">PnL 7d</p>
@@ -645,8 +640,8 @@ export default function DashboardConsolidated() {
                           <p className="font-semibold">{(wallet.confidence * 100).toFixed(0)}%</p>
                         </div>
                         <div className="bg-muted rounded p-2">
-                          <p className="text-muted-foreground text-xs">Status</p>
-                          <Badge variant="outline" className="mt-1">Monitored</Badge>
+                          <p className="text-muted-foreground text-xs">Trades</p>
+                          <p className="font-semibold">{wallet.totalTrades}</p>
                         </div>
                       </div>
 
