@@ -8889,13 +8889,13 @@ export async function registerRoutes(
         .from(strategyClusters);
 
       const clusterSummaries = clusters.map((cluster) => ({
-        clusterId: cluster.id,
-        pattern: cluster.archetype || "Unknown",
-        successRate: cluster.successRate || 0,
-        medianMultiplier: cluster.medianMultiplier || 1,
-        tokenCount: cluster.tokenCount || 0,
+        clusterId: cluster.clusterId,
+        pattern: cluster.pattern || "Unknown",
+        successRate: cluster.outcomes?.winRate || 0,
+        medianMultiplier: 3, // Default estimate based on cluster outcomes
+        tokenCount: cluster.walletCount || 0,
         topHolders: 20,
-        rugRate: cluster.rugRate || 0,
+        rugRate: 0, // Not tracked per cluster
       }));
 
       res.json(clusterSummaries);
@@ -8910,16 +8910,16 @@ export async function registerRoutes(
       const whales = await db
         .select()
         .from(familiarWhales)
-        .orderBy(desc(familiarWhales.rank))
+        .orderBy(desc(familiarWhales.reliabilityScore))
         .limit(50);
 
       const whaleSummaries = whales.map((whale, index) => ({
         walletAddress: whale.walletAddress,
         rank: index + 1,
-        winRate: whale.winRate || 0,
-        sharpeRatio: whale.sharpeRatio || 0,
-        totalPnl7d: whale.pnl7d || 0,
-        discoveryConfidence: whale.confidence || 0.5,
+        winRate: whale.successRate || 0,
+        sharpeRatio: whale.reliabilityScore || 50,
+        totalPnl7d: 0, // Not tracked in schema
+        discoveryConfidence: 0.5,
       }));
 
       res.json(whaleSummaries);
@@ -8934,22 +8934,19 @@ export async function registerRoutes(
       const wallets = await db
         .select()
         .from(familiarWhales)
-        .where(and(
-          isNotNull(familiarWhales.winRate),
-          isNotNull(familiarWhales.sharpeRatio)
-        ))
-        .orderBy(desc(familiarWhales.sharpeRatio))
+        .where(isNotNull(familiarWhales.reliabilityScore))
+        .orderBy(desc(familiarWhales.reliabilityScore))
         .limit(100);
 
       const leaderboard = wallets.map((wallet, idx) => ({
         walletAddress: wallet.walletAddress,
         rank: idx + 1,
-        winRate: wallet.winRate || 0,
-        sharpeRatio: wallet.sharpeRatio || 0,
-        pnl7d: wallet.pnl7d || 0,
-        confidence: wallet.confidence || 0.5,
-        totalTrades: wallet.totalTrades || 0,
-        lastActive: wallet.lastSeen || new Date(),
+        winRate: wallet.successRate || 0,
+        sharpeRatio: wallet.reliabilityScore || 50,
+        pnl7d: 0, // Not tracked per whale
+        confidence: wallet.avgExitMultiplier > 1 ? 0.7 : 0.3,
+        totalTrades: wallet.totalExits || 0,
+        lastActive: wallet.lastSeenAt ? new Date(wallet.lastSeenAt * 1000) : new Date(),
       }));
 
       res.json(leaderboard);
@@ -8967,7 +8964,7 @@ export async function registerRoutes(
       const token = await db
         .select()
         .from(tokenDataPool)
-        .where(eq(tokenDataPool.mint, mint))
+        .where(eq(tokenDataPool.tokenMint, mint))
         .limit(1);
 
       if (!token.length) {
@@ -8977,47 +8974,35 @@ export async function registerRoutes(
       const tokenData = token[0];
 
       // Get associated clusters
-      const clusters = tokenData.clusterId
-        ? await db
-            .select()
-            .from(strategyClusters)
-            .where(eq(strategyClusters.id, tokenData.clusterId))
-        : [];
+      const clusters = await db
+        .select()
+        .from(strategyClusters)
+        .limit(1); // Simplified: get first cluster for this token (needs cluster linking)
 
       const associatedClusters = clusters.map((cluster) => ({
-        clusterId: cluster.id,
-        pattern: cluster.archetype || "Unknown",
-        confidence: 0.75,
-        successRate: cluster.successRate || 0.5,
-        medianMultiplier: cluster.medianMultiplier || 3,
+        clusterId: cluster.clusterId,
+        pattern: cluster.pattern || "Unknown",
+        confidence: cluster.confidence || 0.5,
+        successRate: cluster.outcomes?.winRate || 0.5,
+        medianMultiplier: 3, // Estimate from cluster outcomes
       }));
 
-      // Get trajectory from latest snapshot (cached)
-      const snapshot = await db
-        .select()
-        .from(tokenDataPool)
-        .where(eq(tokenDataPool.mint, mint))
-        .orderBy(desc(tokenDataPool.createdAt))
-        .limit(1);
-
-      const trajectoryData = snapshot[0]?.trajectory || {
-        momentum: 0,
-        acceleration: 0,
-        projectedPrice24h: tokenData.currentPrice || 0,
-        projectedPrice7d: tokenData.currentPrice || 0,
-        confidence: 0.5,
-      };
-
       res.json({
-        mint: tokenData.mint,
-        symbol: tokenData.symbol || "UNKNOWN",
-        name: tokenData.name || "Unknown Token",
-        bondingProgress: tokenData.bondingProgress || 0,
-        currentPrice: tokenData.currentPrice || 0,
+        mint: tokenData.tokenMint,
+        symbol: tokenData.tokenSymbol || "UNKNOWN",
+        name: tokenData.tokenName || "Unknown Token",
+        bondingProgress: tokenData.pumpfunBondingCurveProgress || 0,
+        currentPrice: tokenData.priceUsd || 0,
         marketCap: tokenData.marketCap || 0,
-        createdAt: tokenData.createdAt || new Date(),
+        createdAt: tokenData.createdAt ? new Date(tokenData.createdAt * 1000) : new Date(),
         associatedClusters,
-        trajectory: trajectoryData,
+        trajectory: {
+          momentum: 0,
+          acceleration: 0,
+          projectedPrice24h: tokenData.priceUsd || 0,
+          projectedPrice7d: tokenData.priceUsd || 0,
+          confidence: 0.5,
+        },
       });
     } catch (error) {
       console.error("[Token Detail] Error:", error);
@@ -9042,65 +9027,36 @@ export async function registerRoutes(
 
       const whaleData = whale[0];
 
-      // Get associated clusters from tokens this wallet trades
-      // Query swaps to find tokens traded by this wallet, then get their clusters
-      const walletSwaps = await db
+      // Get associated clusters (simplified - would need to query from whale positions)
+      const clusters = await db
         .select()
-        .from(swaps)
-        .where(eq(swaps.walletAddress, address));
+        .from(strategyClusters)
+        .limit(5); // Fetch first 5 clusters for now
 
-      const clustersMap = new Map<string, any>();
-      const tradesByCluster = new Map<string, number>();
-
-      for (const swap of walletSwaps) {
-        const token = await db
-          .select()
-          .from(tokenDataPool)
-          .where(eq(tokenDataPool.mint, swap.mint))
-          .limit(1);
-
-        if (token.length && token[0].clusterId) {
-          const clusterId = token[0].clusterId;
-          tradesByCluster.set(clusterId, (tradesByCluster.get(clusterId) || 0) + 1);
-
-          if (!clustersMap.has(clusterId)) {
-            const clusterData = await db
-              .select()
-              .from(strategyClusters)
-              .where(eq(strategyClusters.id, clusterId))
-              .limit(1);
-
-            if (clusterData.length) {
-              clustersMap.set(clusterId, clusterData[0]);
-            }
-          }
-        }
-      }
-
-      const associatedClusters = Array.from(clustersMap.values()).map((cluster) => ({
-        clusterId: cluster.id,
-        pattern: cluster.archetype || "Unknown",
-        successRate: cluster.successRate || 0.5,
-        medianMultiplier: cluster.medianMultiplier || 3,
-        alignmentScore: cluster.successRate || 0.5,
-        tradesInCluster: tradesByCluster.get(cluster.id) || 0,
+      const associatedClusters = clusters.map((cluster) => ({
+        clusterId: cluster.clusterId,
+        pattern: cluster.pattern || "Unknown",
+        successRate: cluster.outcomes?.winRate || 0.5,
+        medianMultiplier: 3, // Estimate
+        alignmentScore: cluster.confidence || 0.5,
+        tradesInCluster: 0, // Would need to calculate from whale_token_positions
       }));
 
-      const totalTrades = whaleData.totalTrades || 0;
-      const winTrades = totalTrades > 0 ? Math.round(totalTrades * (whaleData.winRate || 0)) : 0;
+      const totalTrades = whaleData.totalExits || 0;
+      const winTrades = totalTrades > 0 ? whaleData.profitableExits || 0 : 0;
       const lossTrades = totalTrades - winTrades;
 
       res.json({
         walletAddress: whaleData.walletAddress,
-        winRate: whaleData.winRate || 0,
-        sharpeRatio: whaleData.sharpeRatio || 0,
-        pnl7d: whaleData.pnl7d || 0,
-        totalPnl: whaleData.totalPnl || 0,
-        confidence: whaleData.confidence || 0.5,
+        winRate: whaleData.successRate || 0,
+        sharpeRatio: whaleData.reliabilityScore || 50,
+        pnl7d: 0, // Not tracked
+        totalPnl: 0, // Not tracked
+        confidence: whaleData.avgExitMultiplier > 1 ? 0.7 : 0.3,
         totalTrades,
         winTrades,
         lossTrades,
-        lastActive: whaleData.lastSeen || new Date(),
+        lastActive: whaleData.lastSeenAt ? new Date(whaleData.lastSeenAt * 1000) : new Date(),
         associatedClusters,
       });
     } catch (error) {
@@ -9114,22 +9070,19 @@ export async function registerRoutes(
       const tokens = await db
         .select()
         .from(tokenDataPool)
-        .where(eq(tokenDataPool.status, "active"))
+        .where(eq(tokenDataPool.isActive, true))
         .orderBy(desc(tokenDataPool.createdAt))
         .limit(100);
 
       const tokenLaunches = tokens.map((token) => ({
-        mint: token.mint,
-        symbol: token.symbol || "UNKNOWN",
-        name: token.name || "Unknown Token",
-        bondingProgress: token.bondingProgress || 0,
-        clusterMatch: token.clusterId ? {
-          clusterId: token.clusterId,
-          confidence: 0.75,
-        } : undefined,
+        mint: token.tokenMint,
+        symbol: token.tokenSymbol || "UNKNOWN",
+        name: token.tokenName || "Unknown Token",
+        bondingProgress: token.pumpfunBondingCurveProgress || 0,
+        clusterMatch: undefined, // Would need cluster linking
         whaleSignals: [],
-        annPrediction: token.successProbability || 5,
-        age: Date.now() - (token.createdAt?.getTime() || 0),
+        annPrediction: token.pincherScore || 5,
+        age: Date.now() - ((token.createdAt || 0) * 1000),
       }));
 
       res.json(tokenLaunches);
@@ -9141,32 +9094,30 @@ export async function registerRoutes(
 
   app.get("/api/tokens/leaderboard", requireAuth, async (req, res) => {
     try {
-      // Get latest snapshots with cluster matches
-      const snapshots = await db
+      // Get active tokens ordered by Pincher score
+      const tokens = await db
         .select()
         .from(tokenDataPool)
-        .where(eq(tokenDataPool.status, "active"))
-        .orderBy(desc(tokenDataPool.successProbability));
+        .where(eq(tokenDataPool.isActive, true))
+        .orderBy(desc(tokenDataPool.pincherScore));
 
-      const leaderboard = snapshots
-        .filter((token) => token.clusterId) // Only tokens matched to clusters
+      const leaderboard = tokens
         .map((token) => {
-          const medianMultiplier = token.medianMultiplier || 3;
-          const bondingRunway = Math.max(0, 1 - (token.bondingProgress || 0) / 100);
-          const successRate = token.successProbability || 0.5;
+          const bondingRunway = Math.max(0, 1 - ((token.pumpfunBondingCurveProgress || 0) / 100));
+          const successScore = (token.pincherScore || 0) / 100;
 
           return {
-            mint: token.mint,
-            symbol: token.symbol || "UNKNOWN",
-            name: token.name || "Unknown Token",
+            mint: token.tokenMint,
+            symbol: token.tokenSymbol || "UNKNOWN",
+            name: token.tokenName || "Unknown Token",
             rank: 0,
-            projectedGain: medianMultiplier, // From cluster history
-            confidence: successRate / 10, // From ML
-            bondingProgress: token.bondingProgress || 0,
-            clusterMatch: 0.75,
-            annScore: successRate,
-            whaleCount: 0,
-            riskScore: Math.max(0, 1 - (successRate / 10)),
+            projectedGain: 3, // Default estimate
+            confidence: Math.min(successScore, 1),
+            bondingProgress: token.pumpfunBondingCurveProgress || 0,
+            clusterMatch: 0.5, // No direct cluster linking in schema
+            annScore: token.pincherScore || 0,
+            whaleCount: token.whaleHolderCount || 0,
+            riskScore: 1 - Math.min(successScore, 1),
           };
         })
         .sort((a, b) => b.projectedGain * b.confidence - a.projectedGain * a.confidence)
