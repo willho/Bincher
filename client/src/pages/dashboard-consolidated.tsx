@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -81,6 +82,7 @@ interface WalletLeaderboardEntry {
 }
 
 export default function DashboardConsolidated() {
+  const [, navigate] = useRouter();
   const [activeTab, setActiveTab] = useState("overview");
 
   // Fetch fund stats
@@ -576,7 +578,11 @@ export default function DashboardConsolidated() {
                         <Button size="sm" className="flex-1">
                           Enter Trade
                         </Button>
-                        <Button size="sm" variant="outline">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigate(`/token/${token.mint}`)}
+                        >
                           Details
                         </Button>
                       </div>
@@ -652,7 +658,11 @@ export default function DashboardConsolidated() {
                         <Button size="sm" variant="outline">
                           History
                         </Button>
-                        <Button size="sm" variant="ghost">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => navigate(`/wallet/${wallet.walletAddress}`)}
+                        >
                           Profile
                         </Button>
                       </div>

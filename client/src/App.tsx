@@ -22,6 +22,8 @@ import { Button } from "@/components/ui/button";
 import DashboardConsolidated from "@/pages/dashboard-consolidated";
 import TradingPage from "@/pages/trading";
 import TokenPage from "@/pages/token";
+import TokenDetailPage from "@/pages/token-detail";
+import WalletDetailPage from "@/pages/wallet-detail";
 import SignalWalletPage from "@/pages/signal-wallet";
 import CopySettingsPage from "@/pages/copy-settings";
 import HoldingsPage from "@/pages/holdings";
@@ -245,6 +247,8 @@ function AuthenticatedApp() {
               <Route path="/signal/:id/copy-settings" component={CopySettingsPage} />
               <Route path="/trading" component={TradingPage} />
               <Route path="/trading/:token" component={TokenPage} />
+              <Route path="/token/:mint" component={TokenDetailPage} />
+              <Route path="/wallet/:address" component={WalletDetailPage} />
               <Route path="/paper"><Redirect to="/holdings" /></Route>
               <Route path="/settings" component={SettingsPage} />
               <Route component={NotFound} />

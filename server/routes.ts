@@ -8959,6 +8959,99 @@ export async function registerRoutes(
     }
   });
 
+  // Token detail endpoint
+  app.get("/api/tokens/:mint/details", requireAuth, async (req, res) => {
+    try {
+      const { mint } = req.params;
+
+      const token = await db
+        .select()
+        .from(tokenDataPool)
+        .where(eq(tokenDataPool.mint, mint))
+        .limit(1);
+
+      if (!token.length) {
+        return res.status(404).json({ error: "Token not found" });
+      }
+
+      const tokenData = token[0];
+
+      // Get associated clusters
+      const clusters = tokenData.clusterId
+        ? await db
+            .select()
+            .from(strategyClusters)
+            .where(eq(strategyClusters.id, tokenData.clusterId))
+        : [];
+
+      const associatedClusters = clusters.map((cluster) => ({
+        clusterId: cluster.id,
+        pattern: cluster.archetype || "Unknown",
+        confidence: 0.75,
+        successRate: cluster.successRate || 0.5,
+        medianMultiplier: cluster.medianMultiplier || 3,
+      }));
+
+      res.json({
+        mint: tokenData.mint,
+        symbol: tokenData.symbol || "UNKNOWN",
+        name: tokenData.name || "Unknown Token",
+        bondingProgress: tokenData.bondingProgress || 0,
+        currentPrice: tokenData.currentPrice || 0,
+        marketCap: tokenData.marketCap || 0,
+        createdAt: tokenData.createdAt || new Date(),
+        associatedClusters,
+        trajectory: {
+          momentum: tokenData.trajectory?.momentum || 0,
+          acceleration: tokenData.trajectory?.acceleration || 0,
+          projectedPrice24h: tokenData.trajectory?.projectedPrice24h || tokenData.currentPrice || 0,
+          projectedPrice7d: tokenData.trajectory?.projectedPrice7d || tokenData.currentPrice || 0,
+          confidence: tokenData.trajectory?.confidence || 0.5,
+        },
+      });
+    } catch (error) {
+      console.error("[Token Detail] Error:", error);
+      res.status(500).json({ error: "Failed to fetch token details" });
+    }
+  });
+
+  // Wallet detail endpoint
+  app.get("/api/wallets/:address/detail", requireAuth, async (req, res) => {
+    try {
+      const { address } = req.params;
+
+      const whale = await db
+        .select()
+        .from(familiarWhales)
+        .where(eq(familiarWhales.walletAddress, address))
+        .limit(1);
+
+      if (!whale.length) {
+        return res.status(404).json({ error: "Wallet not found" });
+      }
+
+      const whaleData = whale[0];
+
+      // Get top 10 ranked holder wallets (this would come from snapshot data)
+      // For now, return empty array - would need to enhance to track holders per wallet
+      const topHolders = [];
+
+      res.json({
+        walletAddress: whaleData.walletAddress,
+        winRate: whaleData.winRate || 0,
+        sharpeRatio: whaleData.sharpeRatio || 0,
+        pnl7d: whaleData.pnl7d || 0,
+        confidence: whaleData.confidence || 0.5,
+        totalTrades: whaleData.totalTrades || 0,
+        lastActive: whaleData.lastSeen || new Date(),
+        topHolders,
+      });
+    } catch (error) {
+      console.error("[Wallet Detail] Error:", error);
+      res.status(500).json({ error: "Failed to fetch wallet details" });
+    }
+  });
+
   app.get("/api/tokens/active", requireAuth, async (req, res) => {
     try {
       const tokens = await db
