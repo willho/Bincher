@@ -1,0 +1,721 @@
+import { db } from "./db";
+import { holdings, pendingBuys, tokenSnapshots, heatFactorConfig, discoverySources } from "@shared/schema";
+import { eq, gte, and, or, desc, sql } from "drizzle-orm";
+import { getHoldersCached } from "./price-aggregator";
+import { logSystemEvent } from "./system-events";
+
+export interface TokenHeatData {
+  tokenMint: string;
+  tokenSymbol: string;
+  heatScore: number;
+  heatTier: "hot" | "warm" | "cold";
+  factors: {
+    recentBuys: number;
+    priceVolatility: number;
+    userAttention: number;
+    recency: number;
+    whaleActivity: number;
+    discoveryQuality: number;
+  };
+  weights: {
+    recentBuys: number;
+    volatility: number;
+    userAttention: number;
+    recency: number;
+    whaleActivity: number;
+    discoveryQuality: number;
+  };
+  lastUpdated: number;
+}
+
+export interface HeatFactorWeights {
+  recentBuys: number;
+  volatility: number;
+  userAttention: number;
+  recency: number;
+  whaleActivity: number;
+  discoveryQuality: number;
+}
+
+const heatCache = new Map<string, TokenHeatData>();
+const CACHE_TTL_MS = 60 * 1000;
+
+let weightsCache: HeatFactorWeights | null = null;
+let weightsCacheTime = 0;
+const WEIGHTS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+export async function getHeatFactorWeights(): Promise<HeatFactorWeights> {
+  if (weightsCache && Date.now() - weightsCacheTime < WEIGHTS_CACHE_TTL) {
+    return weightsCache;
+  }
+  
+  const config = await db.select()
+    .from(heatFactorConfig)
+    .where(eq(heatFactorConfig.configKey, "global"))
+    .limit(1);
+  
+  if (!config[0]) {
+    const now = Math.floor(Date.now() / 1000);
+    await db.insert(heatFactorConfig).values({
+      configKey: "global",
+      createdAt: now
+    });
+    
+    weightsCache = {
+      recentBuys: 0.25,
+      volatility: 0.20,
+      userAttention: 0.20,
+      recency: 0.15,
+      whaleActivity: 0.20,
+      discoveryQuality: 0
+    };
+    weightsCacheTime = Date.now();
+    return weightsCache;
+  }
+  
+  weightsCache = {
+    recentBuys: config[0].recentBuysWeight || 0.25,
+    volatility: config[0].volatilityWeight || 0.20,
+    userAttention: config[0].userAttentionWeight || 0.20,
+    recency: config[0].recencyWeight || 0.15,
+    whaleActivity: config[0].whaleActivityWeight || 0.20,
+    discoveryQuality: config[0].discoveryQualityWeight || 0
+  };
+  weightsCacheTime = Date.now();
+  return weightsCache;
+}
+
+export function clearWeightsCache(): void {
+  weightsCache = null;
+  weightsCacheTime = 0;
+}
+
+export async function calculateTokenHeat(tokenMint: string): Promise<TokenHeatData> {
+  const cached = heatCache.get(tokenMint);
+  if (cached && Date.now() - cached.lastUpdated < CACHE_TTL_MS) {
+    return cached;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const oneDayAgo = now - 86400;
+  const oneHourAgo = now - 3600;
+
+  let tokenSymbol = tokenMint.slice(0, 6) + "...";
+  let recentBuysScore = 0;
+  let priceVolatilityScore = 0;
+  let userAttentionScore = 0;
+  let recencyScore = 0;
+  let whaleActivityScore = 0;
+
+  const recentHoldings = await db.select().from(holdings)
+    .where(and(
+      eq(holdings.tokenMint, tokenMint),
+      gte(holdings.buyTimestamp, oneDayAgo)
+    ));
+
+  if (recentHoldings.length > 0) {
+    tokenSymbol = recentHoldings[0].tokenSymbol;
+    recentBuysScore = Math.min(100, recentHoldings.length * 20);
+    
+    const latestBuy = Math.max(...recentHoldings.map(h => h.buyTimestamp));
+    const hoursSinceBuy = (now - latestBuy) / 3600;
+    recencyScore = Math.max(0, 100 - hoursSinceBuy * 4);
+    
+    const uniqueUsers = new Set(recentHoldings.map(h => h.userId)).size;
+    userAttentionScore = Math.min(100, uniqueUsers * 25);
+  }
+
+  const recentPending = await db.select().from(pendingBuys)
+    .where(and(
+      eq(pendingBuys.tokenMint, tokenMint),
+      gte(pendingBuys.detectedAt, oneDayAgo)
+    ));
+
+  if (recentPending.length > 0) {
+    recentBuysScore = Math.min(100, recentBuysScore + recentPending.length * 15);
+    
+    const uniquePendingUsers = new Set(recentPending.map(p => p.userId)).size;
+    userAttentionScore = Math.min(100, userAttentionScore + uniquePendingUsers * 20);
+    
+    const latestPending = Math.max(...recentPending.map(p => p.detectedAt));
+    const hoursSincePending = (now - latestPending) / 3600;
+    recencyScore = Math.max(recencyScore, 100 - hoursSincePending * 4);
+  }
+
+  const snapshots = await db.select().from(tokenSnapshots)
+    .where(eq(tokenSnapshots.tokenMint, tokenMint))
+    .orderBy(desc(tokenSnapshots.capturedAt))
+    .limit(5);
+
+  if (snapshots.length >= 2) {
+    const priceChanges: number[] = [];
+    let netDirection = 0;
+    for (let i = 1; i < snapshots.length; i++) {
+      const prev = snapshots[i].priceUsd || 0;
+      const curr = snapshots[i - 1].priceUsd || 0;
+      if (prev > 0) {
+        const pctChange = ((curr - prev) / prev) * 100;
+        priceChanges.push(Math.abs(pctChange));
+        netDirection += pctChange;
+      }
+    }
+    const avgChange = priceChanges.reduce((a, b) => a + b, 0) / (priceChanges.length || 1);
+    priceVolatilityScore = Math.min(100, avgChange * 2);
+    if (netDirection < -30) priceVolatilityScore *= 0.2;
+    else if (netDirection < -15) priceVolatilityScore *= 0.5;
+    else if (netDirection < -5) priceVolatilityScore *= 0.75;
+  } else if (snapshots.length === 1 && snapshots[0].priceChange24h) {
+    const pc24 = snapshots[0].priceChange24h;
+    if (pc24 >= 0) {
+      priceVolatilityScore = Math.min(100, pc24 * 2);
+    } else {
+      priceVolatilityScore = Math.max(0, Math.min(100, Math.abs(pc24) * 2) * (pc24 <= -50 ? 0.1 : pc24 <= -20 ? 0.3 : 0.6));
+    }
+  }
+
+  // Whale activity score based on recent holder cache activity
+  try {
+    const holderData = await getHoldersCached(tokenMint);
+    if (holderData && holderData.lastEventTriggerAt > 0) {
+      // If there was a whale event in the last hour, boost whale score
+      const hoursSinceWhaleEvent = (Date.now() - holderData.lastEventTriggerAt) / (1000 * 3600);
+      if (hoursSinceWhaleEvent < 1) {
+        // Very recent whale activity - high score
+        whaleActivityScore = Math.max(0, 100 - hoursSinceWhaleEvent * 50);
+      } else if (hoursSinceWhaleEvent < 24) {
+        // Recent whale activity within a day - moderate score
+        whaleActivityScore = Math.max(0, 50 - (hoursSinceWhaleEvent - 1) * 2);
+      }
+      
+      // Boost score if top 10 holder concentration is high (indicates whale interest)
+      if (holderData.holders.length >= 10) {
+        const top10Percent = holderData.holders.slice(0, 10).reduce((sum, h) => sum + h.percent, 0);
+        if (top10Percent > 50) {
+          whaleActivityScore = Math.min(100, whaleActivityScore + 25);
+        } else if (top10Percent > 30) {
+          whaleActivityScore = Math.min(100, whaleActivityScore + 10);
+        }
+      }
+    }
+  } catch (error) {
+    // Don't fail heat calculation if holder cache fails
+    console.warn("Failed to get holder data for heat score:", error);
+  }
+
+  // Calculate discovery quality score based on source performance
+  let discoveryQualityScore = 0;
+  try {
+    const sources = await db.select()
+      .from(discoverySources)
+      .where(eq(discoverySources.isActive, true));
+    
+    // Check if this token was discovered by high-performing sources
+    // This is a simplified check - in practice, would track source per token
+    const avgSuccessRate = sources.length > 0 
+      ? sources.reduce((sum, s) => sum + (s.successRate || 0), 0) / sources.length 
+      : 0;
+    discoveryQualityScore = Math.min(100, avgSuccessRate * 100);
+  } catch (err) {
+    // Don't fail if discovery sources unavailable
+  }
+
+  // Get dynamic weights
+  const weights = await getHeatFactorWeights();
+
+  const heatScore = Math.round(
+    (recentBuysScore * weights.recentBuys) +
+    (priceVolatilityScore * weights.volatility) +
+    (userAttentionScore * weights.userAttention) +
+    (recencyScore * weights.recency) +
+    (whaleActivityScore * weights.whaleActivity) +
+    (discoveryQualityScore * weights.discoveryQuality)
+  );
+
+  let heatTier: "hot" | "warm" | "cold";
+  if (heatScore >= 60) {
+    heatTier = "hot";
+  } else if (heatScore >= 30) {
+    heatTier = "warm";
+  } else {
+    heatTier = "cold";
+  }
+
+  const heatData: TokenHeatData = {
+    tokenMint,
+    tokenSymbol,
+    heatScore,
+    heatTier,
+    factors: {
+      recentBuys: recentBuysScore,
+      priceVolatility: priceVolatilityScore,
+      userAttention: userAttentionScore,
+      recency: recencyScore,
+      whaleActivity: whaleActivityScore,
+      discoveryQuality: discoveryQualityScore,
+    },
+    weights,
+    lastUpdated: Date.now(),
+  };
+
+  heatCache.set(tokenMint, heatData);
+  
+  if (heatTier === 'hot') {
+    try {
+      await logSystemEvent({
+        eventType: 'heat_threshold_crossed',
+        sourceSystem: 'heat_score',
+        tokenMint,
+        payload: {
+          heatScore,
+          heatTier,
+          factors: heatData.factors,
+        },
+        metrics: {
+          heatScore,
+          recentBuys: recentBuysScore,
+          volatility: priceVolatilityScore,
+          userAttention: userAttentionScore,
+          recency: recencyScore,
+          whaleActivity: whaleActivityScore,
+          discoveryQuality: discoveryQualityScore,
+        },
+      });
+      
+      // Publish insight for hot tokens
+      const { publishInsight } = await import("./insight-bus");
+      await publishInsight({
+        source: 'heat_score',
+        type: 'pattern',
+        title: `Hot token detected: ${tokenSymbol}`,
+        payload: {
+          pattern: 'hot_token',
+          heatScore,
+          factors: heatData.factors,
+          topFactor: whaleActivityScore > 30 ? 'whale_activity' :
+                     recentBuysScore > 30 ? 'recent_buys' :
+                     priceVolatilityScore > 20 ? 'volatility' : 'mixed',
+        },
+        confidence: Math.min(heatScore / 100, 0.9),
+        tokenMint,
+        expiresInHours: 4,
+      });
+    } catch (err) {
+      // Silent fail for logging
+    }
+  }
+  
+  return heatData;
+}
+
+export async function getHotTokens(): Promise<TokenHeatData[]> {
+  const allTokenMints = new Set<string>();
+
+  const recentHoldings = await db.select({ tokenMint: holdings.tokenMint })
+    .from(holdings)
+    .where(gte(holdings.buyTimestamp, Math.floor(Date.now() / 1000) - 86400 * 3));
+
+  recentHoldings.forEach(h => allTokenMints.add(h.tokenMint));
+
+  const activePending = await db.select({ tokenMint: pendingBuys.tokenMint })
+    .from(pendingBuys)
+    .where(or(eq(pendingBuys.status, "active"), eq(pendingBuys.status, "paused")));
+
+  activePending.forEach(p => allTokenMints.add(p.tokenMint));
+
+  const heatScores: TokenHeatData[] = [];
+  for (const tokenMint of Array.from(allTokenMints)) {
+    const heat = await calculateTokenHeat(tokenMint);
+    heatScores.push(heat);
+  }
+
+  return heatScores.sort((a, b) => b.heatScore - a.heatScore);
+}
+
+export async function getTokensByTier(tier: "hot" | "warm" | "cold"): Promise<TokenHeatData[]> {
+  const allTokens = await getHotTokens();
+  return allTokens.filter(t => t.heatTier === tier);
+}
+
+export function clearHeatCache(): void {
+  heatCache.clear();
+}
+
+// =====================
+// HEAT FACTOR LEARNING
+// =====================
+
+import { vectorUpdates } from "@shared/schema";
+
+/**
+ * Record heat factor values at trade entry time for later learning
+ */
+export async function recordHeatFactorSnapshot(
+  tokenMint: string,
+  positionId: string
+): Promise<{ snapshotId: string; factors: TokenHeatData["factors"] }> {
+  const heat = await calculateTokenHeat(tokenMint);
+  const now = Math.floor(Date.now() / 1000);
+  const bucketId = getCurrentBucketId();
+  
+  // Store factor snapshot in vectorUpdates for later correlation
+  await db.insert(vectorUpdates).values({
+    vectorType: "heat_factor_snapshot",
+    targetId: positionId,
+    signalType: "entry_snapshot",
+    signalData: {
+      tokenMint,
+      factors: heat.factors,
+      weights: heat.weights,
+      heatScore: heat.heatScore
+    },
+    weight: 1.0,
+    bucketId,
+    processed: false,
+    createdAt: now
+  });
+  
+  return { snapshotId: positionId, factors: heat.factors };
+}
+
+/**
+ * Record trade outcome and correlate with heat factors
+ */
+export async function recordHeatFactorOutcome(
+  positionId: string,
+  outcome: {
+    isWin: boolean;
+    pnlPercent: number;
+  }
+): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const bucketId = getCurrentBucketId();
+  
+  // Find the entry snapshot
+  const snapshot = await db.select()
+    .from(vectorUpdates)
+    .where(and(
+      eq(vectorUpdates.vectorType, "heat_factor_snapshot"),
+      eq(vectorUpdates.targetId, positionId),
+      eq(vectorUpdates.signalType, "entry_snapshot")
+    ))
+    .limit(1);
+  
+  if (!snapshot[0]) return;
+  
+  const snapshotData = snapshot[0].signalData as {
+    factors: TokenHeatData["factors"];
+    weights: HeatFactorWeights;
+    heatScore: number;
+  };
+  
+  // Record outcome update for each factor
+  // Map factor names to match bounds keys
+  const factorMapping: Record<string, keyof typeof snapshotData.factors> = {
+    "recentBuys": "recentBuys",
+    "volatility": "priceVolatility", // align with bounds key
+    "userAttention": "userAttention",
+    "recency": "recency",
+    "whaleActivity": "whaleActivity",
+    "discoveryQuality": "discoveryQuality"
+  };
+  
+  for (const [factorId, factorKey] of Object.entries(factorMapping)) {
+    const factorValue = snapshotData.factors[factorKey];
+    
+    // Weight based on factor's contribution to the trade
+    const contributionWeight = factorValue / 100; // 0-1 based on how high the factor was
+    
+    await db.insert(vectorUpdates).values({
+      vectorType: "heat_factor",
+      targetId: factorId,
+      signalType: outcome.isWin ? "factor_win" : "factor_loss",
+      signalData: {
+        positionId,
+        factorValue,
+        pnlPercent: outcome.pnlPercent
+      },
+      weight: contributionWeight * (outcome.isWin ? 2.0 : 1.5),
+      bucketId,
+      processed: false,
+      createdAt: now
+    });
+  }
+  
+  // Mark snapshot as processed
+  await db.update(vectorUpdates)
+    .set({ processed: true })
+    .where(eq(vectorUpdates.id, snapshot[0].id));
+}
+
+function getCurrentBucketId(): string {
+  const now = new Date();
+  const hour = now.getUTCHours();
+  const bucket = hour < 8 ? "00" : hour < 16 ? "08" : "16";
+  return `${now.toISOString().slice(0, 10)}-${bucket}`;
+}
+
+/**
+ * Process heat factor updates - called during 8-hour aggregation
+ * Uses same dampened learning pattern as discovery sources
+ */
+export async function processHeatFactorUpdates(bucketId: string): Promise<number> {
+  const updates = await db.select()
+    .from(vectorUpdates)
+    .where(and(
+      eq(vectorUpdates.vectorType, "heat_factor"),
+      eq(vectorUpdates.bucketId, bucketId),
+      eq(vectorUpdates.processed, false)
+    ));
+  
+  if (updates.length === 0) return 0;
+  
+  // Aggregate updates per factor
+  const factorUpdates = new Map<string, { wins: number; losses: number; totalWeight: number }>();
+  
+  for (const update of updates) {
+    const factorId = update.targetId;
+    const current = factorUpdates.get(factorId) || { wins: 0, losses: 0, totalWeight: 0 };
+    
+    if (update.signalType === "factor_win") {
+      current.wins += update.weight || 1;
+    } else {
+      current.losses += update.weight || 1;
+    }
+    current.totalWeight += update.weight || 1;
+    
+    factorUpdates.set(factorId, current);
+  }
+  
+  // Get current config
+  const config = await db.select()
+    .from(heatFactorConfig)
+    .where(eq(heatFactorConfig.configKey, "global"))
+    .limit(1);
+  
+  if (!config[0]) return 0;
+  
+  const currentPerf = (config[0].factorPerformance || {}) as Record<string, {
+    winCorrelation: number;
+    sampleCount: number;
+    confidence: number;
+  }>;
+  
+  const bounds = (config[0].weightBounds || {}) as Record<string, { min: number; max: number }>;
+  
+  const now = Math.floor(Date.now() / 1000);
+  const weightUpdates: Record<string, number> = {};
+  
+  for (const [factorId, data] of Array.from(factorUpdates.entries())) {
+    const current = currentPerf[factorId] || { winCorrelation: 0.5, sampleCount: 0, confidence: 0.5 };
+    
+    // Dampened learning: slower updates as sample count grows
+    const dampening = 1 / (1 + Math.log10(Math.max(1, current.sampleCount)));
+    
+    const recentWinRate = data.wins / (data.wins + data.losses);
+    const newWinCorrelation = current.winCorrelation + dampening * (recentWinRate - current.winCorrelation) * 0.1;
+    
+    currentPerf[factorId] = {
+      winCorrelation: newWinCorrelation,
+      sampleCount: current.sampleCount + data.wins + data.losses,
+      confidence: Math.min(1, current.confidence + 0.02)
+    };
+    
+    // Calculate new weight based on win correlation
+    // Higher win correlation = higher weight (within bounds)
+    const factorBounds = bounds[factorId] || { min: 0.05, max: 0.35 };
+    const baseWeight = 0.15; // neutral weight
+    const adjustment = (newWinCorrelation - 0.5) * 0.2; // max ±10% adjustment
+    
+    weightUpdates[factorId] = Math.min(
+      factorBounds.max,
+      Math.max(factorBounds.min, baseWeight + adjustment)
+    );
+  }
+  
+  // Build complete weight set (include all factors, not just updated ones)
+  const allFactors = ["recentBuys", "volatility", "userAttention", "recency", "whaleActivity", "discoveryQuality"];
+  
+  // Standardized bounds (use these as source of truth)
+  const standardBounds: Record<string, { min: number; max: number }> = {
+    recentBuys: { min: 0.05, max: 0.40 },
+    volatility: { min: 0.05, max: 0.35 },
+    userAttention: { min: 0.05, max: 0.35 },
+    recency: { min: 0.05, max: 0.30 },
+    whaleActivity: { min: 0.05, max: 0.35 },
+    discoveryQuality: { min: 0, max: 0.25 }
+  };
+  
+  const currentWeights = {
+    recentBuys: config[0].recentBuysWeight || 0.25,
+    volatility: config[0].volatilityWeight || 0.20,
+    userAttention: config[0].userAttentionWeight || 0.20,
+    recency: config[0].recencyWeight || 0.15,
+    whaleActivity: config[0].whaleActivityWeight || 0.20,
+    discoveryQuality: config[0].discoveryQualityWeight || 0
+  };
+  
+  // Merge updated weights with current weights
+  const allWeights: Record<string, number> = { ...currentWeights };
+  for (const [factorId, weight] of Object.entries(weightUpdates)) {
+    allWeights[factorId] = weight;
+  }
+  
+  // Merge config bounds with standard defaults (config overrides defaults)
+  const configBounds = config[0].weightBounds as Record<string, { min: number; max: number }> || {};
+  const mergedBounds: Record<string, { min: number; max: number }> = { ...standardBounds };
+  for (const [key, val] of Object.entries(configBounds)) {
+    if (val && typeof val.min === 'number' && typeof val.max === 'number') {
+      mergedBounds[key] = val;
+    }
+  }
+  
+  // Bounded simplex projection: normalize to sum=1.0 while respecting min/max bounds
+  // Uses iterative clamp-and-redistribute until convergence
+  // Returns null if normalization fails (weights should not be updated)
+  const normalizeWithBounds = (
+    weights: Record<string, number>, 
+    bounds: Record<string, { min: number; max: number }>
+  ): Record<string, number> | null => {
+    const result = { ...weights };
+    const factors = Object.keys(result);
+    const fixed = new Set<string>();
+    
+    // Check feasibility: sum(mins) <= 1 <= sum(maxs)
+    const sumMins = factors.reduce((sum, k) => sum + (bounds[k]?.min || 0.05), 0);
+    const sumMaxs = factors.reduce((sum, k) => sum + (bounds[k]?.max || 0.35), 0);
+    
+    if (sumMins > 1.0 || sumMaxs < 1.0) {
+      // Infeasible bounds - cannot achieve sum=1.0, abort update
+      console.warn(`[HeatFactor] Infeasible bounds: sumMins=${sumMins.toFixed(4)}, sumMaxs=${sumMaxs.toFixed(4)}. Aborting weight update.`);
+      return null;
+    }
+    
+    // Iterative bounded simplex projection
+    for (let iter = 0; iter < 50; iter++) {
+      // Get unfixed factors
+      const unfixed = factors.filter(k => !fixed.has(k));
+      if (unfixed.length === 0) break;
+      
+      // Calculate target sum for unfixed factors
+      const fixedSum = factors.filter(k => fixed.has(k)).reduce((sum, k) => sum + result[k], 0);
+      const targetSum = 1.0 - fixedSum;
+      const unfixedSum = unfixed.reduce((sum, k) => sum + result[k], 0);
+      
+      if (Math.abs(unfixedSum - targetSum) < 0.0001) break; // Converged
+      
+      // Scale unfixed factors proportionally
+      const scale = unfixedSum > 0 ? targetSum / unfixedSum : 1;
+      let newlyFixed = false;
+      
+      for (const key of unfixed) {
+        const scaled = result[key] * scale;
+        const b = bounds[key] || { min: 0.05, max: 0.35 };
+        
+        if (scaled < b.min) {
+          result[key] = b.min;
+          fixed.add(key);
+          newlyFixed = true;
+        } else if (scaled > b.max) {
+          result[key] = b.max;
+          fixed.add(key);
+          newlyFixed = true;
+        } else {
+          result[key] = scaled;
+        }
+      }
+      
+      // If no factors were newly fixed, we've converged
+      if (!newlyFixed) break;
+    }
+    
+    // Final exact correction with bounds enforcement
+    // Continue iterating until sum=1.0 and all within bounds
+    for (let finalIter = 0; finalIter < 20; finalIter++) {
+      const unfixedFinal = factors.filter(k => !fixed.has(k));
+      if (unfixedFinal.length === 0) break;
+      
+      const fixedSumFinal = factors.filter(k => fixed.has(k)).reduce((sum, k) => sum + result[k], 0);
+      const targetSumFinal = 1.0 - fixedSumFinal;
+      const unfixedSumFinal = unfixedFinal.reduce((sum, k) => sum + result[k], 0);
+      
+      if (Math.abs(unfixedSumFinal - targetSumFinal) < 0.0001) break; // Converged
+      
+      // Scale unfixed factors
+      const scaleFinal = unfixedSumFinal > 0 ? targetSumFinal / unfixedSumFinal : 1;
+      let newlyFixedFinal = false;
+      
+      for (const key of unfixedFinal) {
+        const scaled = result[key] * scaleFinal;
+        const b = bounds[key] || { min: 0.05, max: 0.35 };
+        
+        if (scaled < b.min) {
+          result[key] = b.min;
+          fixed.add(key);
+          newlyFixedFinal = true;
+        } else if (scaled > b.max) {
+          result[key] = b.max;
+          fixed.add(key);
+          newlyFixedFinal = true;
+        } else {
+          result[key] = scaled;
+        }
+      }
+      
+      if (!newlyFixedFinal) break;
+    }
+    
+    // Final validation: verify sum=1.0 and all within bounds
+    const finalSum = Object.values(result).reduce((sum, w) => sum + w, 0);
+    let allWithinBounds = true;
+    for (const key of factors) {
+      const b = bounds[key] || { min: 0.05, max: 0.35 };
+      if (result[key] < b.min - 0.0001 || result[key] > b.max + 0.0001) {
+        allWithinBounds = false;
+        break;
+      }
+    }
+    
+    if (Math.abs(finalSum - 1.0) > 0.001 || !allWithinBounds) {
+      console.warn(`[HeatFactor] Normalization failed: sum=${finalSum.toFixed(4)}, withinBounds=${allWithinBounds}. Aborting weight update.`);
+      // Return null to signal update should be aborted
+      return null;
+    }
+    
+    return result;
+  };
+  
+  const normalizedWeights = normalizeWithBounds(allWeights, mergedBounds);
+  if (!normalizedWeights) {
+    // Normalization failed - abort weight update, keep current weights
+    console.log(`[HeatFactor] Weight update aborted due to normalization failure`);
+    return 0;
+  }
+  Object.assign(allWeights, normalizedWeights);
+  
+  // Update config with normalized weights
+  await db.update(heatFactorConfig)
+    .set({
+      recentBuysWeight: allWeights["recentBuys"],
+      volatilityWeight: allWeights["volatility"],
+      userAttentionWeight: allWeights["userAttention"],
+      recencyWeight: allWeights["recency"],
+      whaleActivityWeight: allWeights["whaleActivity"],
+      discoveryQualityWeight: allWeights["discoveryQuality"],
+      factorPerformance: currentPerf,
+      updatedAt: now
+    })
+    .where(eq(heatFactorConfig.configKey, "global"));
+  
+  // Mark updates as processed
+  for (const update of updates) {
+    await db.update(vectorUpdates)
+      .set({ processed: true })
+      .where(eq(vectorUpdates.id, update.id));
+  }
+  
+  // Clear weights cache to pick up new values
+  clearWeightsCache();
+  
+  console.log(`[HeatScore] Processed ${updates.length} factor updates for bucket ${bucketId}`);
+  return updates.length;
+}

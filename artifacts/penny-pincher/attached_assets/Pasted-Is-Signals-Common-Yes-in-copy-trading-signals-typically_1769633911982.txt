@@ -1,0 +1,46 @@
+Is "Signals" Common?
+Yes - in copy trading, "signals" typically refers to trade alerts from other traders you follow. It's used by platforms like 3Commas, Cornix, and crypto Telegram groups. However, it usually implies the alert itself, not the wallet being watched.
+
+Verdict: "Watchlist" is clearer for wallet monitoring. "Signals" works better if you ever add a feed of trade alerts.
+
+Trading Page - Expanded Layout
+┌─────────────────────────────────────────────────┐
+│  TRADING                                        │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  ⚙️ Copy Trade Settings                         │
+│  ┌───────────────────────────────────────────┐  │
+│  │ Enabled: [ON]                             │  │
+│  │ Buy Amount: [0.1 SOL]                     │  │
+│  │ Take Profit: [2x / 3x / 5x]               │  │
+│  │ Split Buys: [ON] Stealth mode             │  │
+│  └───────────────────────────────────────────┘  │
+│                                                 │
+│  💰 Trading Wallet                              │
+│  ┌───────────────────────────────────────────┐  │
+│  │ Address: 7xK2...9fQm  [Copy]              │  │
+│  │ Total Value: ~$892                        │  │
+│  │                                           │  │
+│  │ ▸ Holdings (4 tokens)          [Expand]   │  │
+│  └───────────────────────────────────────────┘  │
+│                                                 │
+└─────────────────────────────────────────────────┘
+--- EXPANDED HOLDINGS ---
+│  ▾ Holdings                                     │
+│  ┌───────────────────────────────────────────┐  │
+│  │ SOL      2.5      $425    [Send] [Swap]   │  │
+│  │ USDC     150      $150    [Send] [Swap]   │  │
+│  │ BONK     50,000   $12     [Send] [Swap]   │  │
+│  │ WIF      200      $305    [Send] [Swap]   │  │
+│  └───────────────────────────────────────────┘  │
+│                                                 │
+│  📤 Send Tokens                                 │
+│  ┌───────────────────────────────────────────┐  │
+│  │ Token: [SOL ▼]    Amount: [________]      │  │
+│  │ To: [5yN3...withdrawal wallet...8kP2  ]   │  │
+│  │      ↳ Your Withdrawal Wallet             │  │
+│  │                              [Send]       │  │
+│  └───────────────────────────────────────────┘  │
+Clicking [Send] next to a token could auto-select that token in the send form below. Keeps everything in one flow.
+
+Trade wallet has swap as well as send. Users have a unique wallet for buying each token for obfuscation to oursiders. users can view keys to all wallet in their app after a password check. They sould be able to select which wallets they are copying and set parameters for each individual wallet.

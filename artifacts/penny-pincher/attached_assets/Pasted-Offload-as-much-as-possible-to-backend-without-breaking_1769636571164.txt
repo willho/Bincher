@@ -1,0 +1,118 @@
+Offload as much as possible to backend without breaking ux. Look at whatelse can be bundled
+
+Good call. Here's what can be backend logic vs AI:
+
+Offload to Backend (No AI)
+Task	Backend handles
+Price alerts (up/down X%)	Simple threshold check
+Whale detection	Holder list lookup
+Stop loss / take profit	Math against entry price
+Volume spike	Compare to rolling average
+Liquidity change	Delta calculation
+Wallet activity	Webhook triggered
+Heat scoring	Formula, not vibes
+Alert delivery	Template + send
+Still Needs AI
+Task	Why AI
+"Is this sketchy?"	Pattern interpretation
+User chat	Conversation
+Strategy recommendations	Context-dependent
+Alert message generation	Pincher voice (once, cached)
+Admin instruction interpretation	Natural language
+Bundle Opportunities
+Batch analysis call (1 AI call covers multiple things):
+
+Every 15-30 min, send to Pincher:
+"Here's the hot tokens summary:
+- BONK: +40%, volume 3x, dev moved 5%
+- WIF: flat, whale sold 10%
+- POPCAT: -20%, liquidity down
+Any magic alerts to trigger? Any patterns worth noting?
+User priority: BONK > WIF"
+→ One call, all hot tokens analyzed
+→ Returns: alerts to send, notes to cache
+One call instead of five
+
+UX Stays Clean
+User sees	Backend reality
+Pincher alerts them	Template fired
+Pincher "watching"	Backend loop checking
+Pincher "notices patterns"	Batched AI every 15 min
+Pincher responds in chat	Real AI, but only when user talks
+User feels Pincher is always watching. Reality: backend does 95%, AI handles interpretation in batches.
+
+Say if pincher finds a signal pattern can she add that to the back end alerts. Could she refine when ai analysis is prudent or not using backend alerts? Eg volume spike and timing of whale entry is a signal she has noticed so she tells the back end to trigger her analysis when backend sees that pattern
+
+Yes! Self-improving pattern detection. Pincher teaches the backend:
+
+Flow
+Pincher notices during batch analysis:
+"Volume spike + whale entry within 5 min = pump incoming"
+Pincher creates backend rule:
+→ "When volume 3x AND whale buys within 5 min, trigger my analysis"
+Backend now watches for that pattern (cheap)
+Only calls AI when pattern matches (rare, valuable)
+How It Works
+Pincher-generated backend triggers:
+
+pattern_triggers
+├── id
+├── name ("volume_whale_combo")
+├── conditions [
+│     { type: "volume_spike", threshold: 3x },
+│     { type: "whale_buy", within: "5min" }
+│   ]
+├── action ("trigger_ai_analysis" | "send_alert" | "both")
+├── created_by ("pincher")
+├── hit_count (tracks usefulness)
+├── last_triggered
+Pincher Refines Over Time
+Batch analysis:
+Pincher: "That volume+whale pattern I set up? 
+Triggered 10 times this week, 8 were real pumps. 
+Keeping it. 
+The liquidity dip pattern though - 12 triggers, 
+2 were real. Deleting that one, waste of my time."
+→ Removes bad pattern
+→ Keeps good pattern
+Backend Becomes Smarter
+| Week 1 | Pincher analyzes everything hot |
+| Week 2 | Pincher adds 3 patterns to backend |
+| Week 3 | Backend catches 60% of signals, AI handles edge cases |
+| Week 4 | Backend handles 80%, Pincher only wakes for weird stuff |
+
+Pincher trains her own assistant. AI costs drop as patterns crystallize.
+
+She would need a max budget and throttling rules so that she can last the day without going over budget. Throttling should be gradual and dynamic. Not a sudden 50% slowdown 2hrs into the day
+
+Smart. Smooth pacing, not cliff edges:
+
+Budget Pacing Model
+Daily budget: $1.00
+Current time: 2pm (58% of day gone)
+Spent so far: $0.70 (70% of budget)
+Status: Running hot (+12% over pace)
+Action: Gentle slowdown, not panic
+Dynamic Throttling
+Pace vs Budget	Adjustment
+On track (±10%)	Normal speed
+Slightly hot (+10-20%)	Stretch batch interval 15→20 min
+Running hot (+20-30%)	Stretch to 25 min, skip low-heat tokens
+Burning (+30%+)	30 min batches, priority tokens only
+Underspent (-20%+)	Speed up, more analysis
+Gradual, Not Sudden
+Hour 1:  Batch every 15 min (normal)
+Hour 3:  Spent 40% of budget, 25% of day gone
+         → Stretch to 18 min
+Hour 6:  Spent 55% of budget, 50% of day gone  
+         → Back to 15 min (on pace now)
+Hour 10: Spent 85% of budget, 80% of day gone
+         → Stay at 15 min, slight buffer
+Hour 12: 5% budget left
+         → Priority tokens only, 30 min intervals
+What Pincher Tells User
+Pincher: "Running a bit hot today - lots of action. 
+I'm stretching my check intervals a little so I 
+last till midnight. Your priority tokens still 
+get the good stuff."
+No sudden "I'm offline" - just graceful slowdown that user barely notices.

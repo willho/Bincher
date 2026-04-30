@@ -1,0 +1,145 @@
+Copytraders read wallets the way bird-watchers read the sky. Not one omen, but a pattern of flight 🦅📊
+Here are the main signals they actually watch, grouped by how serious they are.
+
+
+---
+
+1. Wallet quality signals (who to follow)
+
+Before a single trade is copied, the wallet itself is judged.
+
+Core indicators
+
+Win rate. Not raw percent, but consistency across many trades.
+
+Realised PnL. Closed profit only. Paper gains lie.
+
+Trade count. 5 wins is luck. 200 trades is a fingerprint.
+
+Time-in-market. Holds long enough to dodge MEV churn, short enough to exit hype.
+
+
+Advanced tells
+
+Buys before volume spikes, not during.
+
+Partial sells on the way up, not full rage exits.
+
+Survives multiple market regimes, not just one meme season.
+
+
+Red flags 🚩
+
+One massive win carrying the stats.
+
+Repeated round-trip losses on low liquidity pairs.
+
+Always first in but never first out.
+
+
+
+---
+
+2. Entry signals (when they buy)
+
+This is where most copytraders bleed.
+
+On-chain
+
+Fresh buy after a deploy wallet but before socials light up.
+
+Multiple smart wallets entering within a narrow time window.
+
+Size discipline. Entry is meaningful, not dust, not YOLO.
+
+
+Market
+
+Liquidity added before the buy, not after.
+
+Slippage tolerance tight. Sloppy slippage screams panic.
+
+Price still near local VWAP, not vertical.
+
+
+
+---
+
+3. Exit signals (when they sell)
+
+Exits matter more than entries.
+
+Partial sells at predefined multiples.
+
+Sell clustering. Smart wallets quietly leaving together.
+
+First sell before trend breaks, not after.
+
+
+Red flags
+
+No sells ever. That’s not conviction, that’s denial.
+
+Full exit at first green candle every time.
+
+
+
+---
+
+4. Risk & sizing behavior
+
+Copytraders love boring discipline.
+
+Position size scales with conviction, not mood.
+
+Losses capped. No “double down because vibes”.
+
+Gas paid deliberately. No frantic spam.
+
+
+
+---
+
+5. Behavioral fingerprints (hard to fake)
+
+These separate humans from bots and lucky gamblers.
+
+Repeats the same playbook across tokens.
+
+Reacts rationally to bad fills.
+
+Stops trading during chaos instead of forcing entries.
+
+
+
+---
+
+6. Meta signals (copytrade-specific)
+
+What you look for if you’re running or choosing a copy bot.
+
+Latency sensitivity. If edge disappears in 2 blocks, copying is pointless.
+
+Crowding risk. Wallets already being copied lose alpha fast.
+
+Copy survivability. Strategy still works after fees + slippage.
+
+
+
+---
+
+TL;DR
+
+Copytraders aren’t chasing green candles.
+They’re chasing repeatable behavior under pressure.
+
+If you want, I can:
+
+Rank these by what actually survives copying
+
+Help design filters for auto-following wallets
+
+Or map these into features for your copytrade bot
+
+
+Just say the word 🧭

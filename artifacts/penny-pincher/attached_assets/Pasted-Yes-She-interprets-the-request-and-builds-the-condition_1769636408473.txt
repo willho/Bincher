@@ -1,0 +1,137 @@
+Yes. She interprets the request and builds the condition:
+
+Predefined vs Dynamic
+Predefined pool (fast checks):
+
+price_drop, price_rise, whale_buy, whale_sell, 
+target_hit, stop_triggered, wallet_active
+User asks for something custom:
+
+User: "Let me know if BONK volume spikes"
+Pincher: "Volume spike alert? Sure. I'll watch for 
+anything 3x above average. That work?"
+→ Creates new condition: { 
+    type: "volume_spike", 
+    params: { token: "BONK", multiplier: 3 }
+  }
+How It Works
+Request	Pincher interprets	Creates
+"Alert if whale sells"	whale + sell + token	whale_sell
+"Tell me if it crabs for 2 hours"	price sideways + duration	price_stagnant
+"Ping me if liquidity drops"	liquidity decrease	liquidity_drop
+Limits
+She can only create conditions the system can actually monitor:
+
+Can monitor	Can't monitor
+Price, volume, liquidity	Twitter sentiment
+Whale activity, holder count	"Vibes"
+Your portfolio changes	Other platforms
+If user asks for something impossible:
+
+User: "Alert me if the dev seems sketchy"
+Pincher: "I'm good, but I'm not psychic. Best I can 
+do is flag wallet concentration or liquidity pulls. 
+Want that instead?"
+She creates what's trackable, pushes back on magic.
+
+Maybe allow magic (the ai does the alert) if it is not expected to happen more than once. Pincher notices patterns to suggest dev is sketchy and alerts user via telegram
+
+Smart. Two-tier alert system:
+
+Tier 1: Cached (Free)
+Standard conditions, no AI per trigger
+
+price_drop, whale_move, target_hit, etc.
+Tier 2: Magic (AI-evaluated)
+Pincher analyzes and decides. Limited triggers.
+
+User: "Let me know if the dev seems sketchy"
+Pincher: "Alright. I'll keep an eye on the wallet 
+patterns. If something smells off, I'll ping you. 
+Can't promise I'll catch everything - but I notice 
+things."
+How Magic Alerts Work
+Every price check (30 sec), system gathers:
+- Dev wallet movements
+- Liquidity changes
+- Holder concentration shifts
+- Unusual transaction patterns
+Periodically (every 15-30 min), batch to Pincher:
+"Here's what BONK's been doing. User asked to 
+flag sketchy dev behavior. Anything to report?"
+Pincher: "Dev wallet just moved 20% to a fresh 
+address. Could be nothing. Could be exit prep. 
+Worth flagging."
+→ Sends TG alert
+Cost Control
+Guard	How
+Batch evaluations	Check magic alerts every 15-30 min, not per tick
+One-shot expected	If triggered, disable or cooldown
+Limit per user	Max 2-3 magic alerts active
+Data summary	Send stats, not raw data to AI
+Pincher watches the weird stuff humans can't quantify. But only glances occasionally to keep costs sane.
+
+Have the ai analysis be tied to heat
+
+Perfect. Heat-gated AI analysis:
+
+Heat Triggers Deeper Look
+Low heat token → No AI analysis (why bother)
+Medium heat → Basic pattern check (cheap)
+High heat → Full Pincher analysis (magic alerts active)
+Flow
+Price tick comes in
+        ↓
+Update heat score (cheap, always runs)
+        ↓
+Heat > threshold?
+   No → Skip AI
+   Yes → Queue for Pincher batch analysis
+        ↓
+Pincher reviews hot tokens every 15 min
+        ↓
+Notices sketchy pattern → TG alert
+Why It Works
+Heat Level	What's Checked	AI Cost
+Cold	Just price	None
+Warm	Price + basic rules	None
+Hot	Pincher looks at patterns	Batched, occasional
+On fire	Faster checks, full analysis	Worth it
+User Experience
+User: "Alert me if dev gets sketchy on BONK"
+Pincher: "I'll watch it when things heat up. If BONK 
+stays cold, I won't waste cycles on it. Fair?"
+Heat = attention. Attention = AI budget. Cold tokens don't deserve Pincher's time.
+
+Users can get pincher to change priority
+
+Right. User-overridden heat:
+
+Manual Priority Boost
+User: "Keep a close eye on BONK even if it's quiet"
+Pincher: "You want me watching BONK like a hawk? 
+Fine. I'll treat it like it's hot even when it's 
+crabbing. Don't blame me if I get obsessive."
+→ Sets: user_priority_override = high
+Priority Levels
+Source	Effect
+Organic heat (price/volume/whales)	Normal analysis schedule
+User says "watch this"	Bumps to hot tier
+User says "ignore this"	Drops to cold, skip AI
+User says "this one's important"	Always in batch analysis
+Examples
+User: "Don't waste time on WIF anymore"
+Pincher: "WIF's dead to me. I'll stop checking 
+unless it catches fire on its own."
+→ Sets: user_priority_override = ignore
+User: "POPCAT is my baby, watch it close"
+Pincher: "Your baby. Got it. I'll be hovering 
+like an overprotective... bottom-dweller."
+→ Sets: user_priority_override = priority
+Combined Score
+effective_heat = max(organic_heat, user_override)
+If user says priority → always hot
+If user says ignore → cold unless organic heat is extreme
+User attention overrides the algorithm when they care.
+
+She should comment that changing priorities will mean less checks for other tokens. She should be clear about it and give opinion
