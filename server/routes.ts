@@ -8961,60 +8961,35 @@ export async function registerRoutes(
 
   app.get("/api/tokens/leaderboard", requireAuth, async (req, res) => {
     try {
-      const tokens = await db
+      // Get latest snapshots with cluster matches
+      const snapshots = await db
         .select()
         .from(tokenDataPool)
         .where(eq(tokenDataPool.status, "active"))
-        .orderBy(desc(tokenDataPool.successProbability))
-        .limit(100);
+        .orderBy(desc(tokenDataPool.successProbability));
 
-      const clusterMap = new Map<string, any>();
-      const clusters = await db.select().from(strategyClusters);
-      clusters.forEach((c) => {
-        clusterMap.set(c.id, c);
-      });
-
-      const leaderboard = tokens
-        .map((token, idx) => {
-          const clusterData = token.clusterId ? clusterMap.get(token.clusterId) : null;
-          const annScore = token.successProbability || 5;
+      const leaderboard = snapshots
+        .filter((token) => token.clusterId) // Only tokens matched to clusters
+        .map((token) => {
+          const medianMultiplier = token.medianMultiplier || 3;
           const bondingRunway = Math.max(0, 1 - (token.bondingProgress || 0) / 100);
-          const clusterConfidence = clusterData ? clusterData.successRate || 0.5 : 0.3;
-          const clusterMultiplier = clusterData ? clusterData.medianMultiplier || 5 : 3;
-          const rugRiskFactor = clusterData ? clusterData.rugRate || 0.1 : 0.2;
-
-          // Projected gain: base cluster multiplier + bonding runway bonus + ANN score boost
-          const baseGain = clusterMultiplier;
-          const runwayBonus = bondingRunway * 2; // 0-2x additional from runway
-          const annBoost = (annScore / 10) * 1; // 0-1x from ANN confidence
-          const projectedGain = Math.max(1.5, baseGain + runwayBonus * 0.3 + annBoost);
-
-          // Overall confidence: weighted average of cluster confidence and ANN score
-          const confidence = (clusterConfidence * 0.6 + (annScore / 10) * 0.4);
-
-          // Risk score: 0 = safe, 1 = max risk
-          const riskScore = Math.min(1, rugRiskFactor * 0.5 + (1 - confidence) * 0.5);
+          const successRate = token.successProbability || 0.5;
 
           return {
             mint: token.mint,
             symbol: token.symbol || "UNKNOWN",
             name: token.name || "Unknown Token",
-            rank: idx + 1,
-            projectedGain: Math.max(1, projectedGain),
-            confidence: Math.min(1, Math.max(0, confidence)),
+            rank: 0,
+            projectedGain: medianMultiplier, // From cluster history
+            confidence: successRate / 10, // From ML
             bondingProgress: token.bondingProgress || 0,
-            clusterMatch: clusterConfidence,
-            annScore,
+            clusterMatch: 0.75,
+            annScore: successRate,
             whaleCount: 0,
-            riskScore: Math.min(1, Math.max(0, riskScore)),
+            riskScore: Math.max(0, 1 - (successRate / 10)),
           };
         })
-        .sort((a, b) => {
-          // Sort by risk-adjusted projected gain (higher confidence + higher gain = higher rank)
-          const scoreA = a.projectedGain * a.confidence * (1 - a.riskScore * 0.3);
-          const scoreB = b.projectedGain * b.confidence * (1 - b.riskScore * 0.3);
-          return scoreB - scoreA;
-        })
+        .sort((a, b) => b.projectedGain * b.confidence - a.projectedGain * a.confidence)
         .slice(0, 50)
         .map((token, idx) => ({
           ...token,
