@@ -8761,7 +8761,7 @@ export async function registerRoutes(
   }
 
   // Proxy Registration API
-  const { proxyRegistry } = await import("./proxy-registry");
+  const { proxyRegistry } = await import("./proxy/proxy-registry");
   const proxyAuthPassword = process.env.PROXY_AUTH_PASSWORD || "penny-pincher";
 
   // POST /api/proxy/register - Register proxy server with key validation

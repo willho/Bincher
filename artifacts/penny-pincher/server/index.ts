@@ -5,7 +5,7 @@ import { createServer } from "http";
 import { storage } from "./storage";
 import fs from "fs";
 import path from "path";
-import registerSetupEndpoints from "./web-setup-server";
+import registerSetupEndpoints from "./proxy/web-setup-server";
 
 const app = express();
 const httpServer = createServer(app);

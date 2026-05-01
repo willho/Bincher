@@ -11,7 +11,7 @@
  * 4. Critical metadata → Either source, failover available
  */
 
-import { requestViaProxyWithFallback } from "./proxy-api-client";
+import { requestViaProxyWithFallback } from "./proxy/proxy-api-client";
 import { rateLimiter } from "./unified-rate-limiter";
 
 /**
