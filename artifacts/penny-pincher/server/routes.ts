@@ -8764,16 +8764,16 @@ export async function registerRoutes(
   const { proxyRegistry } = await import("./proxy-registry");
   const proxyAuthPassword = process.env.PROXY_AUTH_PASSWORD || "penny-pincher";
 
-  // POST /api/proxy/register - Register proxy server
-  app.post("/api/proxy/register", (req: Request, res: Response) => {
+  // POST /api/proxy/register - Register proxy server with key validation
+  app.post("/api/proxy/register", async (req: Request, res: Response) => {
     const authHeader = req.headers.authorization;
     const expectedAuth = `Bearer ${proxyAuthPassword}`;
 
     if (!authHeader || authHeader !== expectedAuth) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ error: "Unauthorized - invalid PROXY_AUTH_PASSWORD" });
     }
 
-    const { proxyName, outboundIP, port } = req.body;
+    const { proxyName, outboundIP, port, shyftKeyHash, chainstackUrlHash } = req.body;
 
     if (!proxyName || !outboundIP) {
       return res.status(400).json({
@@ -8782,14 +8782,59 @@ export async function registerRoutes(
     }
 
     try {
+      // Check for key hash conflicts with already-registered proxies
+      if (shyftKeyHash || chainstackUrlHash) {
+        const registeredConfigs = await require("./proxy-config-db").getAllProxyConfigs();
+
+        // Check Shyft key hash overlap
+        if (shyftKeyHash) {
+          const existingShyft = registeredConfigs.find(
+            (cfg: any) => cfg.shyftKeyHash === shyftKeyHash && cfg.proxyName !== proxyName
+          );
+          if (existingShyft) {
+            return res.status(409).json({
+              error: "API Key Conflict",
+              details: `Shyft key is already registered to ${existingShyft.proxyName}. Each proxy must use a unique Shyft API key.`,
+              suggestion: "Use a different Shyft API key or regenerate a new one from Shyft dashboard",
+            });
+          }
+        }
+
+        // Check Chainstack URL hash overlap
+        if (chainstackUrlHash) {
+          const existingChainstack = registeredConfigs.find(
+            (cfg: any) => cfg.chainstackUrlHash === chainstackUrlHash && cfg.proxyName !== proxyName
+          );
+          if (existingChainstack) {
+            return res.status(409).json({
+              error: "API Endpoint Conflict",
+              details: `Chainstack endpoint is already registered to ${existingChainstack.proxyName}. Each proxy must use a unique Chainstack RPC endpoint.`,
+              suggestion: "Use a different Chainstack free-tier account or endpoint",
+            });
+          }
+        }
+
+        // Upsert proxy config with key hashes
+        await require("./proxy-config-db").upsertProxyConfig({
+          proxyName,
+          outboundIp: outboundIP,
+          port: port || 3000,
+          status: "healthy",
+          shyftKeyHash: shyftKeyHash || "",
+          chainstackUrlHash: chainstackUrlHash || "",
+        });
+      }
+
       const proxy = proxyRegistry.registerProxy(
         proxyName,
         outboundIP,
         port || 3000
       );
+
       res.json({
         registered: true,
-        proxy
+        proxy,
+        message: `✓ ${proxyName} registered successfully with unique API keys`,
       });
     } catch (error) {
       res.status(500).json({
@@ -8883,8 +8928,8 @@ export async function registerRoutes(
       const clusterSummaries = clusters.map((cluster) => ({
         clusterId: cluster.clusterId,
         pattern: cluster.patternDescription || cluster.pattern || "Unknown",
-        successRate: 0,
-        medianMultiplier: 1,
+        successRate: cluster.outcomes?.winRate || 0,
+        medianMultiplier: cluster.outcomes?.avgPnlPercent ? 1 + (cluster.outcomes.avgPnlPercent / 100) : 1,
         tokenCount: cluster.walletCount || 0,
         topHolders: 20,
         rugRate: 0,
@@ -8902,14 +8947,14 @@ export async function registerRoutes(
       const whales = await db
         .select()
         .from(familiarWhales)
-        .orderBy(desc(familiarWhales.profitableExits))
+        .orderBy(desc(familiarWhales.avgExitMultiplier))
         .limit(50);
 
       const whaleSummaries = whales.map((whale, index) => ({
         walletAddress: whale.walletAddress,
         rank: index + 1,
         winRate: whale.totalExits ? (whale.profitableExits || 0) / whale.totalExits : 0,
-        sharpeRatio: 0,
+        sharpeRatio: whale.reliabilityScore ? whale.reliabilityScore / 100 : 0,
         totalPnl7d: (whale.avgExitMultiplier || 1) - 1,
         discoveryConfidence: Math.min(1, (whale.totalExits || 0) / 20),
       }));
@@ -8926,17 +8971,18 @@ export async function registerRoutes(
       const tokens = await db
         .select()
         .from(tokenDataPool)
-        .orderBy(desc(tokenDataPool.createdAt))
+        .where(eq(tokenDataPool.isActive, true))
+        .orderBy(desc(tokenDataPool.updatedAt))
         .limit(100);
 
       const tokenLaunches = tokens.map((token) => ({
         mint: token.tokenMint,
         symbol: token.tokenSymbol || "UNKNOWN",
         name: token.tokenName || "Unknown Token",
-        bondingProgress: 0,
+        bondingProgress: token.pumpfunBondingCurveProgress || 0,
         clusterMatch: undefined,
         whaleSignals: [],
-        annPrediction: 5,
+        annPrediction: token.pincherScore ? Math.round((token.pincherScore / 100) * 10) : 5,
         age: Date.now() - (token.createdAt || 0),
       }));
 
@@ -8952,22 +8998,29 @@ export async function registerRoutes(
       const tokens = await db
         .select()
         .from(tokenDataPool)
+        .where(eq(tokenDataPool.isActive, true))
         .orderBy(desc(tokenDataPool.priceUsd))
         .limit(50);
 
-      const leaderboard = tokens.map((token, idx) => ({
-        mint: token.tokenMint,
-        symbol: token.tokenSymbol || "UNKNOWN",
-        name: token.tokenName || "Unknown Token",
-        rank: idx + 1,
-        projectedGain: 3,
-        confidence: 0.5,
-        bondingProgress: 0,
-        clusterMatch: 0.75,
-        annScore: 0.5,
-        whaleCount: 0,
-        riskScore: 0.5,
-      }));
+      const leaderboard = tokens
+        .map((token, idx) => ({
+          mint: token.tokenMint,
+          symbol: token.tokenSymbol || "UNKNOWN",
+          name: token.tokenName || "Unknown Token",
+          rank: idx + 1,
+          projectedGain: token.priceChange24h ? 1 + (token.priceChange24h / 100) : 1,
+          confidence: token.pincherConfidence === "high" ? 0.8 : token.pincherConfidence === "medium" ? 0.5 : 0.2,
+          bondingProgress: token.pumpfunBondingCurveProgress || 0,
+          clusterMatch: 0,
+          annScore: token.pincherScore || 5,
+          whaleCount: token.whaleHolderCount || 0,
+          riskScore: token.pincherScore ? 1 - (token.pincherScore / 100) : 0.5,
+        }))
+        .sort((a, b) => b.projectedGain * b.confidence - a.projectedGain * a.confidence)
+        .map((token, idx) => ({
+          ...token,
+          rank: idx + 1,
+        }));
 
       res.json(leaderboard);
     } catch (error) {
@@ -8982,18 +9035,18 @@ export async function registerRoutes(
         .select()
         .from(familiarWhales)
         .where(isNotNull(familiarWhales.totalExits))
-        .orderBy(desc(familiarWhales.avgExitMultiplier))
+        .orderBy(desc(familiarWhales.reliabilityScore))
         .limit(100);
 
       const leaderboard = wallets.map((wallet, idx) => ({
         walletAddress: wallet.walletAddress,
         rank: idx + 1,
         winRate: wallet.totalExits ? (wallet.profitableExits || 0) / wallet.totalExits : 0,
-        sharpeRatio: 0,
+        sharpeRatio: wallet.reliabilityScore ? wallet.reliabilityScore / 100 : 0,
         pnl7d: (wallet.avgExitMultiplier || 1) - 1,
         confidence: Math.min(1, (wallet.totalExits || 0) / 20),
         totalTrades: wallet.totalExits || 0,
-        lastActive: new Date(wallet.lastSeenAt),
+        lastActive: new Date((wallet.lastSeenAt || 0) * 1000),
       }));
 
       res.json(leaderboard);
