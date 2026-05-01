@@ -3,6 +3,9 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { storage } from "./storage";
+import fs from "fs";
+import path from "path";
+import registerSetupEndpoints from "./web-setup-server";
 
 const app = express();
 const httpServer = createServer(app);
@@ -61,6 +64,32 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Check if config files exist
+  const pincher2ConfigExists = fs.existsSync(path.join(process.cwd(), ".env.pincher2"));
+  const port = parseInt(process.env.PORT || "5000", 10);
+
+  if (!pincher2ConfigExists) {
+    console.log("[Setup] Missing .env.pincher2 configuration file");
+    console.log("[Setup] Serving setup wizard UI at http://localhost:" + port + "/setup");
+
+    // Serve setup UI only (skip full app initialization)
+    registerSetupEndpoints(app);
+
+    httpServer.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      },
+      () => {
+        log(`serving setup wizard on port ${port}`);
+        log(`Visit http://localhost:${port}/setup to configure Pincher2 and proxies`);
+      }
+    );
+
+    return; // Exit here, don't initialize full app
+  }
+
   let dbAvailable = false;
   try {
     await storage.initialize();
@@ -234,7 +263,6 @@ app.use((req, res, next) => {
   // Other ports are firewalled. Default to 5000 if not specified.
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
   httpServer.listen(
     {
       port,
