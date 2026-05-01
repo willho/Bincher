@@ -8770,16 +8770,16 @@ export async function registerRoutes(
   const { proxyRegistry } = await import("./proxy-registry");
   const proxyAuthPassword = process.env.PROXY_AUTH_PASSWORD || "penny-pincher";
 
-  // POST /api/proxy/register - Register proxy server
-  app.post("/api/proxy/register", (req: Request, res: Response) => {
+  // POST /api/proxy/register - Register proxy server with key validation
+  app.post("/api/proxy/register", async (req: Request, res: Response) => {
     const authHeader = req.headers.authorization;
     const expectedAuth = `Bearer ${proxyAuthPassword}`;
 
     if (!authHeader || authHeader !== expectedAuth) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return res.status(401).json({ error: "Unauthorized - invalid PROXY_AUTH_PASSWORD" });
     }
 
-    const { proxyName, outboundIP, port } = req.body;
+    const { proxyName, outboundIP, port, shyftKeyHash, chainstackUrlHash } = req.body;
 
     if (!proxyName || !outboundIP) {
       return res.status(400).json({
@@ -8788,14 +8788,59 @@ export async function registerRoutes(
     }
 
     try {
+      // Check for key hash conflicts with already-registered proxies
+      if (shyftKeyHash || chainstackUrlHash) {
+        const registeredConfigs = await require("./proxy-config-db").getAllProxyConfigs();
+
+        // Check Shyft key hash overlap
+        if (shyftKeyHash) {
+          const existingShyft = registeredConfigs.find(
+            (cfg) => cfg.shyftKeyHash === shyftKeyHash && cfg.proxyName !== proxyName
+          );
+          if (existingShyft) {
+            return res.status(409).json({
+              error: "API Key Conflict",
+              details: `Shyft key is already registered to ${existingShyft.proxyName}. Each proxy must use a unique Shyft API key.`,
+              suggestion: "Use a different Shyft API key or regenerate a new one from Shyft dashboard",
+            });
+          }
+        }
+
+        // Check Chainstack URL hash overlap
+        if (chainstackUrlHash) {
+          const existingChainstack = registeredConfigs.find(
+            (cfg) => cfg.chainstackUrlHash === chainstackUrlHash && cfg.proxyName !== proxyName
+          );
+          if (existingChainstack) {
+            return res.status(409).json({
+              error: "API Endpoint Conflict",
+              details: `Chainstack endpoint is already registered to ${existingChainstack.proxyName}. Each proxy must use a unique Chainstack RPC endpoint.`,
+              suggestion: "Use a different Chainstack free-tier account or endpoint",
+            });
+          }
+        }
+
+        // Upsert proxy config with key hashes
+        await require("./proxy-config-db").upsertProxyConfig({
+          proxyName,
+          outboundIp: outboundIP,
+          port: port || 3000,
+          status: "healthy",
+          shyftKeyHash: shyftKeyHash || "",
+          chainstackUrlHash: chainstackUrlHash || "",
+        });
+      }
+
       const proxy = proxyRegistry.registerProxy(
         proxyName,
         outboundIP,
         port || 3000
       );
+
       res.json({
         registered: true,
-        proxy
+        proxy,
+        message: `✓ ${proxyName} registered successfully with unique API keys`,
       });
     } catch (error) {
       res.status(500).json({
