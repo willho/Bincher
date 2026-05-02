@@ -15,7 +15,7 @@ import { checkTradeAllowed, getSecuritySettings } from "./security";
 
 // In-memory store for pending admin instructions (expires after 5 minutes)
 const pendingAdminInstructions: Map<number, { instruction: string; expiresAt: number }> = new Map();
-const ADMIN_CODEWORD = "Admin1112";
+const ADMIN_CODEWORD = "Cheesebuddy";
 const PENDING_INSTRUCTION_TTL = 5 * 60 * 1000; // 5 minutes
 
 // Pending trade confirmations - Miss Pincher proposes, user confirms

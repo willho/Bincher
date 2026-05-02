@@ -388,7 +388,7 @@ export async function registerRoutes(
     res.json({ success: true, username: "Willho" });
   });
 
-  const ADMIN_CODEWORD = "Admin1112";
+  const ADMIN_CODEWORD = "Cheesebuddy";
 
   // Health check function for install wizard
   async function runInstallHealthChecks(heliusApiKey: string, networkMode?: "mainnet" | "devnet"): Promise<{
