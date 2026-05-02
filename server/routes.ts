@@ -507,6 +507,9 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Invalid admin codeword" });
         }
         grantAdmin = true;
+      } else {
+        // Signup is locked after first account is created
+        return res.status(403).json({ error: "Sign up is locked. Only admin access available." });
       }
 
       const result = await createUser(username, password, {
