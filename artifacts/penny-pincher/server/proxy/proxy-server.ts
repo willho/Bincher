@@ -31,6 +31,7 @@ interface ProxyConfig {
   shyftKeyHash: string;
   chainstackRpcUrl: string;
   chainstackUrlHash: string;
+  heliusApiKey?: string;
 }
 
 interface HealthStatus {
