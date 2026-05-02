@@ -806,7 +806,6 @@ export function AdminDashboard() {
                       <SelectValue placeholder="Select service" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="helius">Helius</SelectItem>
                       <SelectItem value="dexscreener">DexScreener</SelectItem>
                     </SelectContent>
                   </Select>
@@ -827,7 +826,7 @@ export function AdminDashboard() {
                 <Input
                   value={newApiKeyLabel}
                   onChange={(e) => setNewApiKeyLabel(e.target.value)}
-                  placeholder="e.g., Helius Key 1"
+                  placeholder="e.g., API Key 1"
                   data-testid="input-admin-key-label"
                 />
               </div>

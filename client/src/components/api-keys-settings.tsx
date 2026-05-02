@@ -256,7 +256,6 @@ export function ApiKeysSettings() {
                     <SelectValue placeholder="Select service" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="helius">Helius (Solana RPC)</SelectItem>
                     <SelectItem value="dexscreener">DexScreener (Price Data)</SelectItem>
                     <SelectItem value="resend">Resend (Email Notifications)</SelectItem>
                   </SelectContent>
@@ -315,7 +314,6 @@ export function ApiKeysSettings() {
 
           <div className="text-xs text-muted-foreground bg-muted/30 rounded p-3 space-y-1">
             <p><strong>Get free API keys:</strong></p>
-            <p>Helius: <a href="https://dev.helius.xyz" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">dev.helius.xyz</a> (free tier: 30 req/s)</p>
             <p>DexScreener: Generally rate-limited for anonymous use</p>
           </div>
         </CardContent>
