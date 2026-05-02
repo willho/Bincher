@@ -2300,50 +2300,12 @@ export async function registerRoutes(
   });
 
   // Token Score Explanation: Get LLM interpretation of ANN confidence score
-  app.get("/api/token-score/:tokenMint", requireAuth, async (req: AuthenticatedRequest, res) => {
-    try {
-      const { tokenMint } = req.params;
-      const { launchTimestamp } = req.query;
-
-      if (!tokenMint) {
-        return res.status(400).json({ error: "tokenMint is required" });
-      }
-
-      const { explainTokenScore, predictTokenSuccess } = await import("./token-success-interpreter");
-      const { extractEarlyDynamicsFeatures } = await import("./token-success-ann");
-
-      // Get ANN score for this token
-      const estimatedLaunchTime = launchTimestamp
-        ? parseInt(launchTimestamp as string)
-        : Math.floor(Date.now() / 1000) - 600; // Default to 10 min ago
-
-      const annScore = await predictTokenSuccess(tokenMint, estimatedLaunchTime);
-
-      // Get human-readable explanation
-      const explanation = await explainTokenScore(tokenMint, annScore, estimatedLaunchTime);
-
-      res.json({
-        tokenMint,
-        annScore: parseFloat(annScore.toFixed(4)),
-        explanation,
-        launchTimestamp: estimatedLaunchTime,
-      });
-    } catch (error) {
-      console.error(`[TokenScore] Failed to explain score for ${req.params.tokenMint}:`, error);
-      res.status(500).json({
-        error: "Failed to generate token score explanation",
-        details: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
-  });
-
   // Get trajectory outcome probabilities for a token
   app.get("/api/token/:tokenMint/trajectory", requireAuth, async (req: AuthenticatedRequest, res) => {
     try {
       const { tokenMint } = req.params;
 
       const { clusterSnapshotToArchetype } = await import("./fingerprint-cluster-management");
-      const { extractEarlyDynamicsFeatures } = await import("./token-success-ann");
       const { db } = await import("./db");
       const { tokenFingerprints } = await import("@shared/schema");
       const { eq, desc } = await import("drizzle-orm");

@@ -28,26 +28,26 @@ import SignalWalletPage from "@/pages/signal-wallet";
 import CopySettingsPage from "@/pages/copy-settings";
 import HoldingsPage from "@/pages/holdings";
 import SignalsPage from "@/pages/signals";
+import PortfolioPage from "@/pages/portfolio";
 import { Redirect } from "wouter";
 import SettingsPage from "@/pages/settings";
 import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
-import DiscoveryPage from "@/pages/discovery";
 import NotFound from "@/pages/not-found";
 import { PincherFooter } from "@/components/pincher-footer";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, Coins, Radio, FlaskConical, Compass } from "lucide-react";
+import { Loader2, LayoutDashboard, TrendingUp, Settings, LogOut, Shell, Wallet, Coins, Radio, Zap, Briefcase } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { SidebarGroupLabel } from "@/components/ui/sidebar";
 import { apiRequest } from "@/lib/queryClient";
 
 const overviewItems = [
   { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { title: "Discovery", href: "/discovery", icon: Compass },
 ];
 
 const tradingItems = [
+  { title: "Signals", href: "/signals", icon: Zap, description: "Tokens & Wallets" },
   { title: "Holdings", href: "/holdings", icon: Coins, description: "Your Positions" },
-  { title: "Signals", href: "/signals", icon: Radio, description: "Signal Wallets" },
+  { title: "Portfolio", href: "/portfolio", icon: Briefcase, description: "Autotrading & Picks" },
   { title: "Trading", href: "/trading", icon: TrendingUp, description: "Hot Wallet" },
 ];
 
@@ -239,17 +239,16 @@ function AuthenticatedApp() {
             <Switch>
               <Route path="/" component={DashboardConsolidated} />
               <Route path="/dashboard" component={DashboardConsolidated} />
-              <Route path="/discovery" component={DiscoveryPage} />
               <Route path="/holdings" component={HoldingsPage} />
               <Route path="/holdings/:token" component={HoldingsPage} />
               <Route path="/signals" component={SignalsPage} />
               <Route path="/signal/:id" component={SignalWalletPage} />
               <Route path="/signal/:id/copy-settings" component={CopySettingsPage} />
+              <Route path="/portfolio" component={PortfolioPage} />
               <Route path="/trading" component={TradingPage} />
               <Route path="/trading/:token" component={TokenPage} />
               <Route path="/token/:mint" component={TokenDetailPage} />
               <Route path="/wallet/:address" component={WalletDetailPage} />
-              <Route path="/paper"><Redirect to="/holdings" /></Route>
               <Route path="/settings" component={SettingsPage} />
               <Route component={NotFound} />
             </Switch>
