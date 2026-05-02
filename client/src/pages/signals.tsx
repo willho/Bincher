@@ -12,12 +12,13 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { 
-  Wallet, 
-  TrendingUp, 
-  TrendingDown, 
-  ExternalLink, 
+import {
+  Wallet,
+  TrendingUp,
+  TrendingDown,
+  ExternalLink,
   ChevronRight,
   ChevronDown,
   Coins,
@@ -31,7 +32,8 @@ import {
   RefreshCw,
   Activity,
   Clock,
-  Settings as SettingsIcon
+  Settings as SettingsIcon,
+  Zap
 } from "lucide-react";
 import type { Holding, Swap } from "@shared/schema";
 
@@ -45,25 +47,95 @@ interface MonitoredWallet {
   createdAt: number;
 }
 
+interface RankedToken {
+  tokenMint: string;
+  tokenSymbol: string | null;
+  tokenName: string | null;
+  priceUsd: number | null;
+  marketCap: number | null;
+  liquidity: number | null;
+  volume24h: number | null;
+  priceChange1h: number | null;
+  priceChange24h: number | null;
+  pincherScore: number | null;
+  pincherConfidence: string | null;
+  createdAt: number;
+}
+
+interface TrajectoryOutcome {
+  outcome: string;
+  probability: number;
+}
+
+interface TrajectoryData {
+  tokenMint: string;
+  trajectoryOutcomes: TrajectoryOutcome[];
+  confidenceScore: number;
+  matchedClusters: number;
+}
+
 export default function SignalsPage() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
-  
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState("tokens");
+
   // Wallet management state
   const [showAddWallet, setShowAddWallet] = useState(false);
   const [newWalletAddress, setNewWalletAddress] = useState("");
   const [newWalletLabel, setNewWalletLabel] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editLabel, setEditLabel] = useState("");
-  
+
   // Position detail modal state
   const [selectedHolding, setSelectedHolding] = useState<Holding | null>(null);
 
   useDocumentMeta({
-    title: "Signal Wallets | Penny Pincher",
-    description: "Monitor and copy trades from signal wallets on Solana. View wallet performance, positions, and P&L."
+    title: "Signals | Penny Pincher",
+    description: "Promising tokens and signal wallets on Solana."
   });
 
+  // Fetch tokens with promising trajectories
+  const { data: tokens, isLoading: tokensLoading } = useQuery<RankedToken[]>({
+    queryKey: ["/api/discovery/ranked-tokens", "heat", "24h"],
+    queryFn: async () => {
+      const res = await fetch("/api/discovery/ranked-tokens?sort=heat&timeframe=24h&limit=50", {
+        credentials: "include"
+      });
+      if (!res.ok) throw new Error("Failed to fetch tokens");
+      return res.json();
+    },
+  });
+
+  // Fetch trajectory data for tokens
+  const { data: trajectories, isLoading: trajectoriesLoading } = useQuery<
+    Record<string, TrajectoryData>
+  >({
+    queryKey: ["trajectories", tokens?.map(t => t.tokenMint).join(",")],
+    queryFn: async () => {
+      if (!tokens || tokens.length === 0) return {};
+      const result: Record<string, TrajectoryData> = {};
+
+      // Fetch trajectories in parallel for first 20 tokens
+      const promises = tokens.slice(0, 20).map(token =>
+        fetch(`/api/token/${token.tokenMint}/trajectory`, { credentials: "include" })
+          .then(res => res.json())
+          .then(data => {
+            result[token.tokenMint] = data;
+          })
+          .catch(() => {
+            // Silently skip tokens that fail
+          })
+      );
+
+      await Promise.all(promises);
+      return result;
+    },
+    enabled: !!tokens && tokens.length > 0,
+  });
+
+  // Fetch monitored wallets
   const { data: wallets, isLoading: walletsLoading } = useQuery<MonitoredWallet[]>({
     queryKey: ["/api/monitored-wallets"],
   });
@@ -253,116 +325,228 @@ export default function SignalsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-2xl font-bold" data-testid="text-page-title">Signal Wallets</h1>
-          <p className="text-muted-foreground" data-testid="text-page-subtitle">Manage and monitor signal wallets</p>
+          <h1 className="text-2xl font-bold" data-testid="text-page-title">Signals</h1>
+          <p className="text-muted-foreground" data-testid="text-page-subtitle">Track promising tokens and signal wallets</p>
         </div>
-        <Button 
-          onClick={() => setShowAddWallet(!showAddWallet)}
-          data-testid="button-toggle-add-wallet"
-        >
-          {showAddWallet ? <ChevronDown className="h-4 w-4 mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
-          {showAddWallet ? "Hide" : "Add Wallet"}
-        </Button>
       </div>
 
-      {showAddWallet && (
-        <Card data-testid="card-add-wallet">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-lg">Add Signal Wallet</CardTitle>
-            <CardDescription>Enter a Solana wallet address to monitor for trade signals</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="wallet-address">Wallet Address</Label>
-                <Input
-                  id="wallet-address"
-                  data-testid="input-wallet-address"
-                  placeholder="Enter Solana wallet address"
-                  value={newWalletAddress}
-                  onChange={(e) => setNewWalletAddress(e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="wallet-label">Label (optional)</Label>
-                <Input
-                  id="wallet-label"
-                  data-testid="input-wallet-label"
-                  placeholder="e.g., Main Trader, Alpha Wallet"
-                  value={newWalletLabel}
-                  onChange={(e) => setNewWalletLabel(e.target.value)}
-                />
-              </div>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="tokens" className="flex items-center gap-2">
+            <Zap className="h-4 w-4" />
+            Promising Tokens
+          </TabsTrigger>
+          <TabsTrigger value="wallets" className="flex items-center gap-2">
+            <Wallet className="h-4 w-4" />
+            Signal Wallets
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="tokens" className="space-y-4">
+          {tokensLoading || trajectoriesLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
+              <Skeleton className="h-20" />
             </div>
+          ) : !tokens || tokens.length === 0 ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                <Zap className="h-10 w-10 mb-2 opacity-50" />
+                <p>No tokens discovered yet</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-3">
+              {tokens.slice(0, 20).map((token) => {
+                const traj = trajectories?.[token.tokenMint];
+                const topOutcome = traj?.trajectoryOutcomes?.[0];
+                const confidence = (traj?.confidenceScore ?? 0) * 100;
+
+                return (
+                  <Card key={token.tokenMint} className="overflow-hidden hover:shadow-lg transition-shadow">
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between gap-4 flex-wrap">
+                        <Link href={`/token/${token.tokenMint}`}>
+                          <div className="cursor-pointer hover:opacity-80 transition-opacity">
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="font-semibold">{token.tokenSymbol || "Unknown"}</div>
+                              {token.pincherConfidence && (
+                                <Badge variant="outline" className="text-xs">
+                                  {token.pincherConfidence}
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-muted-foreground line-clamp-1">
+                              {token.tokenName || "No name"}
+                            </p>
+                          </div>
+                        </Link>
+
+                        {traj && (
+                          <div className="flex items-center gap-4">
+                            {topOutcome && (
+                              <div className="text-right">
+                                <div className="text-sm font-medium">{topOutcome.outcome}</div>
+                                <div className="text-xs text-muted-foreground">
+                                  {(topOutcome.probability * 100).toFixed(0)}% prob
+                                </div>
+                              </div>
+                            )}
+                            <div className="text-right">
+                              <div className="text-sm font-medium">{confidence.toFixed(0)}%</div>
+                              <div className="text-xs text-muted-foreground">confidence</div>
+                            </div>
+                          </div>
+                        )}
+
+                        {!traj && (
+                          <div className="text-xs text-muted-foreground">
+                            Loading trajectory...
+                          </div>
+                        )}
+                      </div>
+
+                      {traj?.trajectoryOutcomes && traj.trajectoryOutcomes.length > 0 && (
+                        <div className="mt-3 pt-3 border-t">
+                          <div className="flex flex-wrap gap-2">
+                            {traj.trajectoryOutcomes.map((outcome, idx) => (
+                              <Badge key={idx} variant="secondary" className="text-xs">
+                                {outcome.outcome}: {(outcome.probability * 100).toFixed(0)}%
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="mt-3 pt-3 border-t flex items-center justify-between text-xs text-muted-foreground">
+                        {token.priceUsd && (
+                          <div>${token.priceUsd.toFixed(6)}</div>
+                        )}
+                        {token.priceChange24h !== null && (
+                          <div className={token.priceChange24h >= 0 ? "text-green-500" : "text-red-500"}>
+                            {token.priceChange24h >= 0 ? "+" : ""}{token.priceChange24h.toFixed(2)}%
+                          </div>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="wallets" className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div></div>
             <Button
-              data-testid="button-add-wallet"
-              onClick={handleAddWallet}
-              disabled={addWallet.isPending}
+              onClick={() => setShowAddWallet(!showAddWallet)}
+              data-testid="button-toggle-add-wallet"
             >
-              {addWallet.isPending ? (
-                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Plus className="h-4 w-4 mr-2" />
-              )}
-              Add Wallet
+              {showAddWallet ? <ChevronDown className="h-4 w-4 mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
+              {showAddWallet ? "Hide" : "Add Wallet"}
             </Button>
-          </CardContent>
-        </Card>
-      )}
+          </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card data-testid="card-total-signals">
-          <CardHeader className="pb-2">
-            <CardDescription>Signal Wallets</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-wallet-count">{wallets?.length || 0}</div>
-            <p className="text-xs text-muted-foreground" data-testid="text-wallet-stats">
-              {activeWallets.length} active, {copyEnabledWallets.length} copying
-            </p>
-          </CardContent>
-        </Card>
+          {showAddWallet && (
+            <Card data-testid="card-add-wallet">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Add Signal Wallet</CardTitle>
+                <CardDescription>Enter a Solana wallet address to monitor for trade signals</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="wallet-address">Wallet Address</Label>
+                    <Input
+                      id="wallet-address"
+                      data-testid="input-wallet-address"
+                      placeholder="Enter Solana wallet address"
+                      value={newWalletAddress}
+                      onChange={(e) => setNewWalletAddress(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="wallet-label">Label (optional)</Label>
+                    <Input
+                      id="wallet-label"
+                      data-testid="input-wallet-label"
+                      placeholder="e.g., Main Trader, Alpha Wallet"
+                      value={newWalletLabel}
+                      onChange={(e) => setNewWalletLabel(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <Button
+                  data-testid="button-add-wallet"
+                  onClick={handleAddWallet}
+                  disabled={addWallet.isPending}
+                >
+                  {addWallet.isPending ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4 mr-2" />
+                  )}
+                  Add Wallet
+                </Button>
+              </CardContent>
+            </Card>
+          )}
 
-        <Card data-testid="card-total-positions">
-          <CardHeader className="pb-2">
-            <CardDescription>Total Positions</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-positions-count">
-              {holdings?.filter(h => !h.reclaimed && h.currentAmount > 0).length || 0}
-            </div>
-          </CardContent>
-        </Card>
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card data-testid="card-total-signals">
+              <CardHeader className="pb-2">
+                <CardDescription>Signal Wallets</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold" data-testid="text-wallet-count">{wallets?.length || 0}</div>
+                <p className="text-xs text-muted-foreground" data-testid="text-wallet-stats">
+                  {activeWallets.length} active, {copyEnabledWallets.length} copying
+                </p>
+              </CardContent>
+            </Card>
 
-        <Card data-testid="card-signals-value">
-          <CardHeader className="pb-2">
-            <CardDescription>Total Value</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold" data-testid="text-total-value">{formatUsd(totalValue)}</div>
-          </CardContent>
-        </Card>
+            <Card data-testid="card-total-positions">
+              <CardHeader className="pb-2">
+                <CardDescription>Total Positions</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold" data-testid="text-positions-count">
+                  {holdings?.filter(h => !h.reclaimed && h.currentAmount > 0).length || 0}
+                </div>
+              </CardContent>
+            </Card>
 
-        <Card data-testid="card-signals-pnl">
-          <CardHeader className="pb-2">
-            <CardDescription>Total P&L</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className={`text-2xl font-bold ${totalPnl >= 0 ? "text-green-500" : "text-red-500"}`} data-testid="text-total-pnl">
-              {totalPnl >= 0 ? "+" : ""}{formatUsd(totalPnl)}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+            <Card data-testid="card-signals-value">
+              <CardHeader className="pb-2">
+                <CardDescription>Total Value</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold" data-testid="text-total-value">{formatUsd(totalValue)}</div>
+              </CardContent>
+            </Card>
 
-      <Card data-testid="card-wallets-list">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Wallet className="h-5 w-5" />
-            All Signal Wallets
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
+            <Card data-testid="card-signals-pnl">
+              <CardHeader className="pb-2">
+                <CardDescription>Total P&L</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className={`text-2xl font-bold ${totalPnl >= 0 ? "text-green-500" : "text-red-500"}`} data-testid="text-total-pnl">
+                  {totalPnl >= 0 ? "+" : ""}{formatUsd(totalPnl)}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card data-testid="card-wallets-list">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Wallet className="h-5 w-5" />
+                All Signal Wallets
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
           {walletsLoading ? (
             <div className="space-y-2">
               <Skeleton className="h-20" />
@@ -595,8 +779,10 @@ export default function SignalsPage() {
               })}
             </div>
           )}
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={!!selectedHolding} onOpenChange={(open) => !open && setSelectedHolding(null)}>
         <DialogContent data-testid="dialog-position-detail">
