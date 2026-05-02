@@ -98,6 +98,7 @@
     "zod-validation-error": "^3.5.4"
   },
   "devDependencies": {
+    "esbuild": "^0.27.3",
     "@replit/vite-plugin-cartographer": "^0.5.1",
     "@replit/vite-plugin-dev-banner": "^0.1.1",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.6",

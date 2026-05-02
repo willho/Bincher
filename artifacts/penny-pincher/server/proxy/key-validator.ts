@@ -154,7 +154,7 @@ export async function testShyftKey(key: string): Promise<{
         method: "getLatestBlockhash",
         params: [],
       }),
-      timeout: 5000,
+      signal: AbortSignal.timeout(5000),
     });
 
     const latency = Date.now() - start;
@@ -217,7 +217,7 @@ export async function testChainstackUrl(url: string): Promise<{
         method: "getBlockCommitment",
         params: [0],
       }),
-      timeout: 5000,
+      signal: AbortSignal.timeout(5000),
     });
 
     const latency = Date.now() - start;

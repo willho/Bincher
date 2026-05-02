@@ -2347,7 +2347,7 @@ export async function registerRoutes(
         .select()
         .from(tokenFingerprints)
         .where(eq(tokenFingerprints.tokenMint, tokenMint))
-        .orderBy(desc(tokenFingerprints.timestamp))
+        .orderBy(desc(tokenFingerprints.snapshotTimestamp))
         .limit(1);
 
       if (!latestSnapshot.length) {
@@ -2371,7 +2371,7 @@ export async function registerRoutes(
 
       res.json({
         tokenMint,
-        snapshotTimestamp: snapshot.timestamp,
+        snapshotTimestamp: snapshot.snapshotTimestamp,
         tokenAgeMinutes: snapshot.tokenAgeMinutes,
         trajectoryOutcomes: blendedOutcomes,
         matchedClusters: matches.map((m) => ({

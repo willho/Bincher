@@ -89,10 +89,10 @@ export async function getAllProxyConfigs(): Promise<ProxyConfigRecord[]> {
     status: r.status as "idle" | "healthy" | "degraded" | "unhealthy",
     shyftKeyHash: r.shyftKeyHash,
     chainstackUrlHash: r.chainstackUrlHash,
-    lastSeenAt: r.lastSeenAt,
-    healthCheckLatency: r.healthCheckLatency,
+    lastSeenAt: r.lastSeenAt ?? undefined,
+    healthCheckLatency: r.healthCheckLatency ?? undefined,
     createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
+    updatedAt: r.updatedAt ?? undefined,
   }));
 }
 
@@ -119,10 +119,10 @@ export async function getProxyConfigByName(
     status: r.status as "idle" | "healthy" | "degraded" | "unhealthy",
     shyftKeyHash: r.shyftKeyHash,
     chainstackUrlHash: r.chainstackUrlHash,
-    lastSeenAt: r.lastSeenAt,
-    healthCheckLatency: r.healthCheckLatency,
+    lastSeenAt: r.lastSeenAt ?? undefined,
+    healthCheckLatency: r.healthCheckLatency ?? undefined,
     createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
+    updatedAt: r.updatedAt ?? undefined,
   };
 }
 
@@ -144,9 +144,10 @@ export async function updateProxyStatus(
       healthCheckLatency: latency,
       updatedAt: now,
     })
-    .where(eq(proxyConfigs.proxyName, proxyName));
+    .where(eq(proxyConfigs.proxyName, proxyName))
+    .returning({ id: proxyConfigs.id });
 
-  return result.rowCount > 0;
+  return result.length > 0;
 }
 
 /**
@@ -155,9 +156,10 @@ export async function updateProxyStatus(
 export async function deleteProxyConfig(proxyName: string): Promise<boolean> {
   const result = await db
     .delete(proxyConfigs)
-    .where(eq(proxyConfigs.proxyName, proxyName));
+    .where(eq(proxyConfigs.proxyName, proxyName))
+    .returning({ id: proxyConfigs.id });
 
-  return result.rowCount > 0;
+  return result.length > 0;
 }
 
 /**
