@@ -1,6 +1,8 @@
 import express, { Request, Response } from "express";
 import axios, { AxiosError } from "axios";
 import dotenv from "dotenv";
+import crypto from "crypto";
+import { hashApiKey, validateKeyFormat, testShyftKey, testChainstackUrl } from "./key-validator";
 
 dotenv.config();
 
@@ -9,9 +11,10 @@ dotenv.config();
  *
  * Runs independently as Proxy-1 or Proxy-2
  * - Exposes health check endpoint
- * - Registers with Pincher2 on startup
+ * - Registers with Pincher2 on startup (with auth + key hashes)
  * - Routes API calls through configured credentials
  * - Manages 2/3 mesh subscriptions
+ * - Validates API keys on startup
  *
  * Deploy as:
  * - Docker container on separate machine
@@ -23,9 +26,11 @@ interface ProxyConfig {
   proxyPort: number;
   outboundIp: string;
   pincher2Url?: string;
+  proxyAuthPassword: string;
   shyftApiKey: string;
+  shyftKeyHash: string;
   chainstackRpcUrl: string;
-  heliusApiKey: string;
+  chainstackUrlHash: string;
 }
 
 interface HealthStatus {
@@ -48,15 +53,48 @@ interface SubscriptionRequest {
 // CONFIGURATION
 // =====================
 
-const config: ProxyConfig = {
-  proxyName: process.env.PROXY_NAME || "proxy-1",
-  proxyPort: parseInt(process.env.PROXY_PORT || "3001"),
-  outboundIp: process.env.OUTBOUND_IP || "127.0.0.1",
-  pincher2Url: process.env.PINCHER2_URL,
-  shyftApiKey: process.env.SHYFT_API_KEY || "",
-  chainstackRpcUrl: process.env.CHAINSTACK_RPC_URL || "",
-  heliusApiKey: process.env.HELIUS_API_KEY || "",
+const validateProxyConfig = (): ProxyConfig => {
+  const proxyName = process.env.PROXY_NAME || "proxy-1";
+  const proxyAuthPassword = process.env.PROXY_AUTH_PASSWORD;
+  const shyftApiKey = process.env.SHYFT_API_KEY || "";
+  const chainstackRpcUrl = process.env.CHAINSTACK_RPC_URL || "";
+
+  if (!proxyAuthPassword) {
+    throw new Error(
+      "❌ PROXY_AUTH_PASSWORD not set. This is required for authentication with Pincher2."
+    );
+  }
+
+  if (!shyftApiKey) {
+    throw new Error("❌ SHYFT_API_KEY not set. This is required for token metadata.");
+  }
+
+  if (!chainstackRpcUrl) {
+    throw new Error(
+      "❌ CHAINSTACK_RPC_URL not set. This is required for RPC calls."
+    );
+  }
+
+  return {
+    proxyName,
+    proxyPort: parseInt(process.env.PROXY_PORT || "3001"),
+    outboundIp: process.env.OUTBOUND_IP || "127.0.0.1",
+    pincher2Url: process.env.PINCHER2_URL,
+    proxyAuthPassword,
+    shyftApiKey,
+    shyftKeyHash: hashApiKey(shyftApiKey),
+    chainstackRpcUrl,
+    chainstackUrlHash: hashApiKey(chainstackRpcUrl),
+  };
 };
+
+let config: ProxyConfig;
+try {
+  config = validateProxyConfig();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 // =====================
 // STATE
@@ -99,6 +137,35 @@ app.get("/health", (req: Request, res: Response) => {
 // =====================
 
 /**
+ * Validate API keys before starting
+ */
+async function validateApiKeys(): Promise<boolean> {
+  console.log("[Proxy] Validating API keys...");
+
+  // Test Shyft key
+  const shyftTest = await testShyftKey(config.shyftApiKey);
+  if (!shyftTest.works) {
+    console.error(
+      `[Proxy] ❌ Shyft key validation failed: ${shyftTest.error}`
+    );
+    return false;
+  }
+  console.log(`[Proxy] ✓ Shyft key valid (${shyftTest.latency}ms)`);
+
+  // Test Chainstack URL
+  const chainstackTest = await testChainstackUrl(config.chainstackRpcUrl);
+  if (!chainstackTest.works) {
+    console.error(
+      `[Proxy] ❌ Chainstack endpoint validation failed: ${chainstackTest.error}`
+    );
+    return false;
+  }
+  console.log(`[Proxy] ✓ Chainstack endpoint valid (${chainstackTest.latency}ms)`);
+
+  return true;
+}
+
+/**
  * Register this proxy with Pincher2 (called on Pincher2 startup)
  */
 async function registerWithPincher2(): Promise<void> {
@@ -117,8 +184,15 @@ async function registerWithPincher2(): Promise<void> {
         outboundIP: config.outboundIp,
         port: config.proxyPort,
         healthUrl: `http://${config.outboundIp}:${config.proxyPort}/health`,
+        shyftKeyHash: config.shyftKeyHash,
+        chainstackUrlHash: config.chainstackUrlHash,
       },
-      { timeout: 5000 }
+      {
+        timeout: 5000,
+        headers: {
+          Authorization: `Bearer ${config.proxyAuthPassword}`,
+        },
+      }
     );
 
     console.log(
@@ -343,9 +417,19 @@ async function start() {
   console.log(`\n[Proxy] Starting ${config.proxyName}...`);
   console.log(`[Proxy] Port: ${config.proxyPort}`);
   console.log(`[Proxy] Outbound IP: ${config.outboundIp}`);
-  console.log(`[Proxy] Shyft configured: ${!!config.shyftApiKey}`);
-  console.log(`[Proxy] Chainstack configured: ${!!config.chainstackRpcUrl}`);
-  console.log(`[Proxy] Helius configured: ${!!config.heliusApiKey}`);
+
+  // Validate API keys before starting
+  const keysValid = await validateApiKeys();
+  if (!keysValid) {
+    console.error("[Proxy] ❌ API key validation failed. Exiting.");
+    process.exit(1);
+  }
+
+  console.log(`[Proxy] ✓ All API keys validated`);
+  console.log(`[Proxy] Shyft key hash: ${config.shyftKeyHash.substring(0, 8)}...`);
+  console.log(
+    `[Proxy] Chainstack URL hash: ${config.chainstackUrlHash.substring(0, 8)}...`
+  );
 
   app.listen(config.proxyPort, () => {
     console.log(`[Proxy] ✓ ${config.proxyName} listening on port ${config.proxyPort}`);

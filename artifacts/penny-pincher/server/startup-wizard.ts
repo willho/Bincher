@@ -4,9 +4,9 @@
  */
 
 import axios from "axios";
-import { proxyRegistry } from "./proxy-registry";
+import { proxyRegistry } from "./proxy/proxy-registry";
 import { apiHealthChecker, type HealthStatus } from "./api-health-check";
-import { verifyProxiesForStartup, printProxyStartupReport } from "./proxy-startup-verifier";
+import { verifyProxiesForStartup, printProxyStartupReport } from "./proxy/proxy-startup-verifier";
 
 const COLORS = {
   reset: '\x1b[0m',

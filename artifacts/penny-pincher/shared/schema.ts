@@ -4933,3 +4933,31 @@ export const fingerprintLifecycleMetrics = pgTable("fingerprint_lifecycle_metric
 export const insertFingerprintLifecycleMetricsSchema = createInsertSchema(fingerprintLifecycleMetrics).omit({ id: true, createdAt: true });
 export type FingerprintLifecycleMetrics = typeof fingerprintLifecycleMetrics.$inferSelect;
 export type InsertFingerprintLifecycleMetrics = z.infer<typeof insertFingerprintLifecycleMetricsSchema>;
+
+/**
+ * Proxy Configurations - Metadata for proxy servers in 3-proxy mesh
+ * Stores proxy identity, connectivity status, and API key hashes (not actual keys)
+ * Keys themselves stored only in .env files for security
+ */
+export const proxyConfigs = pgTable("proxy_configs", {
+  id: serial("id").primaryKey(),
+  proxyName: text("proxy_name").notNull().unique(),
+  outboundIp: text("outbound_ip").notNull(),
+  port: integer("port").notNull(),
+  status: text("status").default("idle"), // idle, healthy, degraded, unhealthy
+  shyftKeyHash: text("shyft_key_hash").notNull(), // SHA-256(SHYFT_API_KEY)
+  chainstackUrlHash: text("chainstack_url_hash").notNull(), // SHA-256(CHAINSTACK_RPC_URL)
+  lastSeenAt: integer("last_seen_at"),
+  healthCheckLatency: integer("health_check_latency"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  uniqueIndex("idx_proxy_name_unique").on(table.proxyName),
+  index("idx_proxy_status").on(table.status),
+  index("idx_shyft_key_hash").on(table.shyftKeyHash),
+  index("idx_chainstack_url_hash").on(table.chainstackUrlHash),
+]);
+
+export const insertProxyConfigSchema = createInsertSchema(proxyConfigs).omit({ id: true, createdAt: true });
+export type ProxyConfig = typeof proxyConfigs.$inferSelect;
+export type InsertProxyConfig = z.infer<typeof insertProxyConfigSchema>;
