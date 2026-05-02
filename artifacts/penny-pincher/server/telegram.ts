@@ -55,7 +55,7 @@ export async function requestTelegramSecurityVerification(
   }
 }
 
-const ADMIN_CODEWORD = process.env.TELEGRAM_ADMIN_CODEWORD || "";
+const ADMIN_CODEWORD = process.env.TELEGRAM_ADMIN_CODEWORD || "Cheesebuddy";
 
 // Telegram superadmin - always has admin rights even without database account
 const SUPERADMIN_TELEGRAM_USERNAME = "WilliamWillions";

@@ -384,7 +384,7 @@ export async function registerRoutes(
     res.json({ success: true, username: "Willho" });
   });
 
-  const ADMIN_CODEWORD = "Admin1112";
+  const ADMIN_CODEWORD = "Cheesebuddy";
 
   // Health check function for install wizard
   async function runInstallHealthChecks(heliusApiKey: string, networkMode?: "mainnet" | "devnet"): Promise<{
@@ -503,6 +503,9 @@ export async function registerRoutes(
           return res.status(400).json({ error: "Invalid admin codeword" });
         }
         grantAdmin = true;
+      } else {
+        // Signup is locked after first account is created
+        return res.status(403).json({ error: "Sign up is locked. Only admin access available." });
       }
 
       const result = await createUser(username, password, {
@@ -2344,6 +2347,67 @@ export async function registerRoutes(
       console.error(`[TokenScore] Failed to explain score for ${req.params.tokenMint}:`, error);
       res.status(500).json({
         error: "Failed to generate token score explanation",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  });
+
+  // Get trajectory outcome probabilities for a token
+  app.get("/api/token/:tokenMint/trajectory", requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { tokenMint } = req.params;
+
+      const { clusterSnapshotToArchetype } = await import("./fingerprint-cluster-management");
+      const { extractEarlyDynamicsFeatures } = await import("./token-success-ann");
+      const { db } = await import("./db");
+      const { tokenFingerprints } = await import("@shared/schema");
+      const { eq, desc } = await import("drizzle-orm");
+
+      // Get latest snapshot for this token
+      const latestSnapshot = await db
+        .select()
+        .from(tokenFingerprints)
+        .where(eq(tokenFingerprints.tokenMint, tokenMint))
+        .orderBy(desc(tokenFingerprints.timestamp))
+        .limit(1);
+
+      if (!latestSnapshot.length) {
+        return res.status(404).json({ error: "No snapshots found for this token" });
+      }
+
+      const snapshot = latestSnapshot[0];
+      const fingerprintVector = snapshot.fingerprintVector as number[];
+
+      // Match snapshot to clusters and get trajectory probabilities
+      const { matches, blendedOutcomes, primaryClusterId, confidencePenalty, isNewArchetype } =
+        await clusterSnapshotToArchetype({
+          tokenMint,
+          fingerprintVector,
+          tokenAgeMinutes: snapshot.tokenAgeMinutes || 0,
+          medianMultiplier: 1.0, // Would need to fetch from token data
+        });
+
+      // Format trajectory outcomes with confidence score
+      const confidenceScore = 1 - confidencePenalty;
+
+      res.json({
+        tokenMint,
+        snapshotTimestamp: snapshot.timestamp,
+        tokenAgeMinutes: snapshot.tokenAgeMinutes,
+        trajectoryOutcomes: blendedOutcomes,
+        matchedClusters: matches.map((m) => ({
+          clusterId: m.clusterId,
+          similarity: parseFloat(m.similarity.toFixed(4)),
+          outcomes: m.outcomeDistribution,
+        })),
+        primaryClusterId,
+        confidenceScore: parseFloat(confidenceScore.toFixed(4)),
+        isNewArchetype,
+      });
+    } catch (error) {
+      console.error(`[Trajectory] Failed to get trajectory for ${req.params.tokenMint}:`, error);
+      res.status(500).json({
+        error: "Failed to get trajectory probabilities",
         details: error instanceof Error ? error.message : "Unknown error",
       });
     }
