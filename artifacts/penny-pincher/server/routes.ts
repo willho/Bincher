@@ -379,6 +379,7 @@ export async function registerRoutes(
       httpOnly: true,
       secure: false,
       sameSite: "lax",
+      path: "/",
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
     res.json({ success: true, username: "Willho" });
@@ -554,6 +555,7 @@ export async function registerRoutes(
         httpOnly: true,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
+        path: "/",
         maxAge,
       });
 
