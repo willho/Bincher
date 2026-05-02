@@ -473,17 +473,6 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Password must be at least 8 characters" });
       }
 
-      // Helius API key is now optional - will fall back to admin pool if not provided
-      const useAdminPool = !heliusApiKey;
-      if (useAdminPool) {
-        // Check if admin pool has a Helius key available
-        const adminKey = await getNextAdminApiKey("helius");
-        const { getHeliusApiKey } = await import("./network-mode");
-        if (!adminKey && !getHeliusApiKey()) {
-          return res.status(400).json({ error: "Helius API key is required (no admin pool available)" });
-        }
-      }
-
       // Validate Solana wallet address if provided
       if (cashoutWallet && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(cashoutWallet)) {
         return res.status(400).json({ error: "Invalid Solana wallet address" });
@@ -517,17 +506,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: result.error });
       }
 
-      // Store the Helius API key for the new user (if provided, otherwise uses admin pool)
-      if (result.userId && heliusApiKey) {
-        try {
-          await addUserApiKey(result.userId, "helius", heliusApiKey, "Helius API Key");
-        } catch (keyError) {
-          console.error("Failed to store API key:", keyError);
-          return res.status(500).json({ error: "Account created but failed to store API key. Please add it in settings." });
-        }
-      }
-
-      res.json({ success: true, isAdmin: grantAdmin, showWizard: grantAdmin, usingAdminPool: useAdminPool });
+      res.json({ success: true, isAdmin: grantAdmin, showWizard: grantAdmin });
     } catch (error) {
       console.error("Registration error:", error);
       res.status(500).json({ error: "Registration failed" });
