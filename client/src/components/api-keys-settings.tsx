@@ -256,7 +256,6 @@ export function ApiKeysSettings() {
                     <SelectValue placeholder="Select service" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="dexscreener">DexScreener (Price Data)</SelectItem>
                     <SelectItem value="resend">Resend (Email Notifications)</SelectItem>
                   </SelectContent>
                 </Select>
@@ -314,7 +313,7 @@ export function ApiKeysSettings() {
 
           <div className="text-xs text-muted-foreground bg-muted/30 rounded p-3 space-y-1">
             <p><strong>Get free API keys:</strong></p>
-            <p>DexScreener: Generally rate-limited for anonymous use</p>
+            <p>Resend: <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">resend.com</a> (free tier available)</p>
           </div>
         </CardContent>
       </Card>
