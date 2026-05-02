@@ -91,6 +91,9 @@ app.use((req, res, next) => {
     return; // Exit here, don't initialize full app
   }
 
+  // Always register setup endpoints so /setup is accessible for proxy configuration
+  registerSetupEndpoints(app);
+
   let dbAvailable = false;
   try {
     await storage.initialize();
