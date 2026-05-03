@@ -9265,6 +9265,10 @@ export async function registerRoutes(
   const walletLeaderboardRoutes = await import("./routes/wallet-leaderboard-routes");
   app.use(walletLeaderboardRoutes.default);
 
+  // Register Phase D retrolearner routes
+  const retrolearnerRoutes = await import("./routes/retrolearner-routes");
+  app.use(retrolearnerRoutes.default);
+
   return httpServer;
 }
 

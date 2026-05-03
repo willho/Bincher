@@ -5050,3 +5050,53 @@ export const walletLeaderboard = pgTable("wallet_leaderboard", {
 export const insertWalletLeaderboardSchema = createInsertSchema(walletLeaderboard).omit({ id: true, createdAt: true, updatedAt: true });
 export type WalletLeaderboard = typeof walletLeaderboard.$inferSelect;
 export type InsertWalletLeaderboard = z.infer<typeof insertWalletLeaderboardSchema>;
+
+// Cluster Learnings - Per-cluster parameter optimization via retrolearner
+export const clusterLearnings = pgTable("cluster_learnings", {
+  id: serial("id").primaryKey(),
+  clusterType: text("cluster_type").notNull().unique(), // "spike_and_bleed", "slow_moon", etc.
+
+  // TSL learning
+  learnedTslPercent: real("learned_tsl_percent").notNull().default(15),
+  tslSampleCount: integer("tsl_sample_count").default(0),
+  tslConfidence: real("tsl_confidence").default(0), // 0-1: statistical confidence
+
+  // Trajectory exit threshold learning
+  learnedTrajectoryThreshold: real("learned_trajectory_threshold").notNull().default(0.5), // 0-1: sum of negative outcomes
+  trajectoryThresholdSampleCount: integer("trajectory_threshold_sample_count").default(0),
+  trajectoryConfidence: real("trajectory_confidence").default(0),
+
+  // Ape budget multiplier learning
+  learnedApeBudgetMultiplier: real("learned_ape_budget_multiplier").notNull().default(1.0),
+  apeBudgetSampleCount: integer("ape_budget_sample_count").default(0),
+  apeBudgetConfidence: real("ape_budget_confidence").default(0),
+
+  // Performance metrics per cluster
+  recentWinRate: real("recent_win_rate").default(0.5), // Last 50 trades
+  recentProfitFactor: real("recent_profit_factor").default(1.0), // Last 50 trades
+  recentAvgPnlPercent: real("recent_avg_pnl_percent").default(0), // Last 50 trades
+
+  // Parameter shift caps and limits
+  lastTslShiftAt: integer("last_tsl_shift_at"),
+  tslShiftCount: integer("tsl_shift_count").default(0), // Shifts in current cycle
+
+  lastThresholdShiftAt: integer("last_threshold_shift_at"),
+  thresholdShiftCount: integer("threshold_shift_count").default(0),
+
+  lastApeBudgetShiftAt: integer("last_ape_budget_shift_at"),
+  apeBudgetShiftCount: integer("ape_budget_shift_count").default(0),
+
+  // Cycle tracking (for weekly resets, cap enforcement)
+  cycleStartAt: integer("cycle_start_at"),
+  cycleResets: integer("cycle_resets").default(0),
+
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_cl_cluster_type").on(table.clusterType),
+  index("idx_cl_updated_at").on(table.updatedAt),
+]);
+
+export const insertClusterLearningSchema = createInsertSchema(clusterLearnings).omit({ id: true, createdAt: true, updatedAt: true });
+export type ClusterLearning = typeof clusterLearnings.$inferSelect;
+export type InsertClusterLearning = z.infer<typeof insertClusterLearningSchema>;

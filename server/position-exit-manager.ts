@@ -69,6 +69,32 @@ export async function exitPosition(
   // Update ape budget based on outcome
   await updateApeBudgetAfterPosition(userId, realizedPnlPercent);
 
+  // Phase D: Record outcome for retrolearner
+  try {
+    const { recordPositionOutcome } = await import("./retrolearner-phase-d");
+    const holdMinutes = (closedAtTime - pos.openedAt) / 60;
+    const trajectoryAtExit = pos.currentTrajectoryScore || 0;
+
+    // Extract cluster type from entry clusters (first cluster if multiple)
+    let clusterType = "unknown";
+    if (pos.entryClusters && Array.isArray(pos.entryClusters)) {
+      const clusters = pos.entryClusters as Array<{ cluster: string }>;
+      if (clusters.length > 0) {
+        clusterType = clusters[0].cluster;
+      }
+    }
+
+    await recordPositionOutcome(
+      clusterType,
+      exitReason,
+      realizedPnlPercent,
+      holdMinutes,
+      trajectoryAtExit
+    );
+  } catch (err) {
+    console.error("[RetrolearnerHook] Failed to record outcome:", err);
+  }
+
   return {
     success: true,
     positionId,

@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { positionBudgets, activePositions } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { getLearnedParameters } from "./retrolearner-phase-d";
 
 interface AllocationResult {
   allocationSol: number;
@@ -14,7 +15,8 @@ export async function calculateAllocation(
   clusterMatchConfidence: number,
   trajectoryScore: number,
   baseAllocationPerPosition: number,
-  apeBudget: number
+  apeBudget: number,
+  clusterType?: string
 ): Promise<AllocationResult> {
   // Check if this is an exceptional token (high confidence + high trajectory)
   const isExceptional = clusterMatchConfidence > 0.85 && trajectoryScore > 0.7;
@@ -25,7 +27,13 @@ export async function calculateAllocation(
   // Apply ape boost for exceptional tokens
   let apeBudgetApplied = 0;
   if (isExceptional) {
-    const apeBoost = baseAllocationPerPosition * 1.0; // 2x multiplier = base + 1x boost
+    // Get learned ape budget multiplier from retrolearner if cluster type available
+    let boostMultiplier = 1.0; // Default: 2x total (base + 1x boost)
+    if (clusterType) {
+      const learned = await getLearnedParameters(clusterType);
+      boostMultiplier = Math.min(learned.apeBudgetMultiplier, 1.0); // Cap at 1.0 for boost (2x total)
+    }
+    const apeBoost = baseAllocationPerPosition * boostMultiplier;
     const availableApeBudget = Math.min(apeBoost, apeBudget);
     allocationSol += availableApeBudget;
     apeBudgetApplied = availableApeBudget;

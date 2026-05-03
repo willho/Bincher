@@ -2,6 +2,7 @@ import { db } from "./db";
 import { activePositions, tokenSnapshots } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { calculateAllocation } from "./position-allocator";
+import { getLearnedParameters, getDefaultTsl, getDefaultTrajectoryThreshold } from "./retrolearner-phase-d";
 
 interface SnapshotForDispatch {
   id: number;
@@ -106,14 +107,16 @@ export async function evaluateOpenNewPosition(
     };
   }
 
-  // Calculate allocation
+  // Calculate allocation (with learned ape budget multiplier from primary cluster)
+  const primaryClusterType = clusterMatches.length > 0 ? clusterMatches[0].cluster : undefined;
   const allocation = await calculateAllocation(
     userId,
     currentBalance,
     aggregateConfidence,
     trajectoryScore,
     baseAllocationPerPosition,
-    apeBudget
+    apeBudget,
+    primaryClusterType
   );
 
   if (allocation.allocationSol < 0.01) {
@@ -126,6 +129,14 @@ export async function evaluateOpenNewPosition(
   // Create position record
   const now = Math.floor(Date.now() / 1000);
 
+  // Get learned TSL from retrolearner, or use default based on primary cluster
+  let learnedTsl = 15;
+  if (clusterMatches.length > 0) {
+    const primaryCluster = clusterMatches[0].cluster;
+    const learned = await getLearnedParameters(primaryCluster);
+    learnedTsl = learned.tslPercent;
+  }
+
   try {
     await db.insert(activePositions).values({
       userId,
@@ -136,7 +147,7 @@ export async function evaluateOpenNewPosition(
       entryClusters: clusterMatches,
       currentConfidence: aggregateConfidence,
       currentTrajectoryScore: trajectoryScore,
-      tslCurrentPercent: 15, // Default TSL, can be adjusted per cluster
+      tslCurrentPercent: learnedTsl, // Use learned TSL from retrolearner
       highestPrice: entryPrice,
       openedAt: now,
       createdAt: now,
@@ -196,11 +207,21 @@ export async function evaluateOpenPosition(
       .where(eq(activePositions.id, positionId));
   }
 
-  // Exit trigger: >50% probability of negative outcomes
-  if (negativeOutcomeProbability > 0.5) {
+  // Get learned trajectory threshold from retrolearner for this position's cluster
+  let trajectoryExitThreshold = 0.5; // Default threshold
+  if (pos.entryClusters && Array.isArray(pos.entryClusters)) {
+    const clusters = pos.entryClusters as Array<{ cluster: string }>;
+    if (clusters.length > 0) {
+      const learned = await getLearnedParameters(clusters[0].cluster);
+      trajectoryExitThreshold = learned.trajectoryThreshold;
+    }
+  }
+
+  // Exit trigger: negative outcome probability exceeds learned threshold
+  if (negativeOutcomeProbability > trajectoryExitThreshold) {
     return {
       shouldExit: true,
-      reason: `Trajectory collapse: ${(negativeOutcomeProbability * 100).toFixed(0)}% negative outcome probability`,
+      reason: `Trajectory collapse: ${(negativeOutcomeProbability * 100).toFixed(0)}% negative outcome probability (threshold: ${(trajectoryExitThreshold * 100).toFixed(0)}%)`,
     };
   }
 
