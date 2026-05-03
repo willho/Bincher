@@ -643,7 +643,7 @@ export async function createSnapshot(data: SnapshotData): Promise<number> {
         id: snapshotId,
         tokenMint: data.tokenMint,
         tokenSymbol: data.tokenSymbol,
-        priceUsd: data.priceUsd,
+        priceUsd: data.priceUsd || 0,
         capturedAt: now,
       }).catch(err => {
         console.error("[SnapshotDispatcher] Error processing snapshot event:", err);

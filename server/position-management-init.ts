@@ -3,6 +3,7 @@ import { db } from "./db";
 import { users, activePositions } from "@shared/schema";
 import { checkTSLExit, checkTimeStop, checkTakeProfit } from "./snapshot-event-dispatcher";
 import { exitPosition } from "./position-exit-manager";
+import { eq } from "drizzle-orm";
 
 let isInitialized = false;
 
@@ -153,6 +154,3 @@ export async function monitorPositionForExit(
     return;
   }
 }
-
-// Helper for import
-import { eq } from "drizzle-orm";
