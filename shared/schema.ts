@@ -2647,6 +2647,181 @@ export const paperPositions = pgTable("paper_positions", {
   updatedAt: integer("updated_at"),
 });
 
+export const insertPaperPositionSchema = createInsertSchema(paperPositions).omit({ id: true });
+export type PaperPosition = typeof paperPositions.$inferSelect;
+export type InsertPaperPosition = z.infer<typeof insertPaperPositionSchema>;
+
+// ============ Position Management System ============
+
+// Position budgets - tracks expected positions per day and base allocations
+export const positionBudgets = pgTable("position_budgets", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+
+  // Daily forecast
+  expectedPositionsPerDay: real("expected_positions_per_day").notNull().default(5),
+  baseAllocationPerPosition: real("base_allocation_per_position").notNull().default(0.1),
+
+  // Ape budget (dynamic)
+  apeBudget: real("ape_budget").notNull().default(0),
+  apeBudgetMultiplier: real("ape_budget_multiplier").default(0.3), // 30% of PnL growth
+  apeBudgetResetAt: integer("ape_budget_reset_at"),
+
+  // Forecast breakdown by hour
+  forecastBreakdown: jsonb("forecast_breakdown").$type<Array<{
+    hour: number,
+    dayOfWeek: string,
+    expectedPositions: number,
+    confidenceRate: number,
+  }>>(),
+
+  // Next busy periods
+  nextBusyPeriods: jsonb("next_busy_periods").$type<Array<{
+    startHour: number,
+    endHour: number,
+    dayOfWeek: string,
+    expectedCount: number,
+  }>>(),
+
+  // Metadata
+  lastCalculatedAt: integer("last_calculated_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertPositionBudgetsSchema = createInsertSchema(positionBudgets).omit({ id: true });
+export type PositionBudget = typeof positionBudgets.$inferSelect;
+export type InsertPositionBudget = z.infer<typeof insertPositionBudgetsSchema>;
+
+// Active positions - tracks open positions with trajectory data
+export const activePositions = pgTable("active_positions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+
+  // Token info
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol"),
+
+  // Position basics
+  entrySol: real("entry_sol").notNull(),
+  entryPrice: real("entry_price").notNull(),
+  entryMultiplier: real("entry_multiplier"), // market multiplier at entry time
+  entryTokenAmount: real("entry_token_amount"),
+
+  // Entry metadata
+  entryClusters: jsonb("entry_clusters").$type<Array<{
+    cluster: string,
+    confidence: number,
+    trajectoryScore: number,
+  }>>().notNull(),
+  entryTrajectorySummary: jsonb("entry_trajectory_summary").$type<{
+    pump_100x: number,
+    pump_10x: number,
+    pump_5x: number,
+    pump_2x_sustained: number,
+    crash_fast: number,
+  }>(),
+
+  // Current state
+  currentConfidence: real("current_confidence").notNull(),
+  currentTrajectoryScore: real("current_trajectory_score").notNull(),
+  tslCurrentPercent: real("tsl_current_percent").notNull(),
+  highestPrice: real("highest_price").notNull(),
+  highestPriceReachedAt: integer("highest_price_reached_at"),
+
+  // Moonbag tracking
+  moonbagAmount: real("moonbag_amount").default(0),
+  moonbagFromTrajectoryExit: boolean("moonbag_from_trajectory_exit").default(false),
+
+  // Timing
+  openedAt: integer("opened_at").notNull(),
+  lastSnapshotAt: integer("last_snapshot_at"),
+  closedAt: integer("closed_at"),
+  holdDurationSeconds: integer("hold_duration_seconds"),
+
+  // Exit info
+  exitReason: text("exit_reason"), // tsl_hit, trajectory_collapse, time_stop, profit_take, user_manual
+  exitPrice: real("exit_price"),
+  exitTxSignature: text("exit_tx_signature"),
+
+  // P&L tracking
+  realizedPnl: real("realized_pnl"),
+  realizedPnlPercent: real("realized_pnl_percent"),
+
+  // For retrolearner
+  status: text("status").notNull().default("open"), // open, closed
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertActivePositionsSchema = createInsertSchema(activePositions).omit({ id: true });
+export type ActivePosition = typeof activePositions.$inferSelect;
+export type InsertActivePosition = z.infer<typeof insertActivePositionsSchema>;
+
+// Token launch metrics - rolling 8-day window per hour per day-of-week
+export const tokenLaunchMetrics = pgTable("token_launch_metrics", {
+  id: serial("id").primaryKey(),
+
+  // Time bucketing
+  dayOfWeek: text("day_of_week").notNull(), // monday, tuesday, etc.
+  hour: integer("hour").notNull(), // 0-23 UTC
+
+  // Discovery counts
+  launchCount: integer("launch_count").notNull().default(0),
+  matchedCount: integer("matched_count").notNull().default(0), // tokens that matched clusters
+  rugCount: integer("rug_count").notNull().default(0), // tokens that rugged (excluded)
+
+  // Outcome tracking
+  reached2x: integer("reached_2x").notNull().default(0),
+  reached5x: integer("reached_5x").notNull().default(0),
+  reached10x: integer("reached_10x").notNull().default(0),
+  reached100x: integer("reached_100x").notNull().default(0),
+
+  // Freshness
+  timestamp: integer("timestamp").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_day_hour").on(table.dayOfWeek, table.hour),
+  index("idx_timestamp").on(table.timestamp),
+]);
+
+export const insertTokenLaunchMetricsSchema = createInsertSchema(tokenLaunchMetrics).omit({ id: true });
+export type TokenLaunchMetric = typeof tokenLaunchMetrics.$inferSelect;
+export type InsertTokenLaunchMetric = z.infer<typeof insertTokenLaunchMetricsSchema>;
+
+// Day of week aggregates - long-term historical averages
+export const dayOfWeekAggregates = pgTable("day_of_week_aggregates", {
+  id: serial("id").primaryKey(),
+
+  // Which day(s) this aggregates
+  dayOfWeek: text("day_of_week").notNull(), // "monday_average", "tuesday_average", etc.
+  hour: integer("hour").notNull(), // 0-23 UTC
+
+  // Aggregated stats
+  avgLaunchCount: real("avg_launch_count").notNull().default(0),
+  avgMatchedCount: real("avg_matched_count").notNull().default(0),
+  avgReached2x: real("avg_reached_2x").notNull().default(0),
+  avgReached5x: real("avg_reached_5x").notNull().default(0),
+  avgReached10x: real("avg_reached_10x").notNull().default(0),
+
+  // Sample metadata
+  sampleDays: integer("sample_days").notNull().default(0), // how many days contributed
+  conversionTo2x: real("conversion_to_2x").default(0), // avg % that reached 2x
+  conversionTo5x: real("conversion_to_5x").default(0),
+
+  // Timestamps
+  lastAggregatedAt: integer("last_aggregated_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_day_hour_agg").on(table.dayOfWeek, table.hour),
+]);
+
+export const insertDayOfWeekAggregatesSchema = createInsertSchema(dayOfWeekAggregates).omit({ id: true });
+export type DayOfWeekAggregate = typeof dayOfWeekAggregates.$inferSelect;
+export type InsertDayOfWeekAggregate = z.infer<typeof insertDayOfWeekAggregatesSchema>;
+
 export const insertPaperPositionsSchema = createInsertSchema(paperPositions).omit({ id: true });
 export type PaperPosition = typeof paperPositions.$inferSelect;
 export type InsertPaperPosition = z.infer<typeof insertPaperPositionsSchema>;
