@@ -9261,6 +9261,10 @@ export async function registerRoutes(
   const tokenLeaderboardRoutes = await import("./routes/token-leaderboard-routes");
   app.use(tokenLeaderboardRoutes.default);
 
+  // Register Phase C wallet leaderboard routes
+  const walletLeaderboardRoutes = await import("./routes/wallet-leaderboard-routes");
+  app.use(walletLeaderboardRoutes.default);
+
   return httpServer;
 }
 

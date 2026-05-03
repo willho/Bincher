@@ -5014,3 +5014,39 @@ export const tokenLeaderboard = pgTable("token_leaderboard", {
 export const insertTokenLeaderboardSchema = createInsertSchema(tokenLeaderboard).omit({ id: true, createdAt: true, updatedAt: true });
 export type TokenLeaderboard = typeof tokenLeaderboard.$inferSelect;
 export type InsertTokenLeaderboard = z.infer<typeof insertTokenLeaderboardSchema>;
+
+// Wallet Leaderboard - Unified scoring from 3 systems
+export const walletLeaderboard = pgTable("wallet_leaderboard", {
+  id: serial("id").primaryKey(),
+  walletAddress: text("wallet_address").notNull().unique(),
+  walletLabel: text("wallet_label"),
+  unifiedScore: real("unified_score").notNull().default(0), // Unbounded unified score
+  reliabilityScore: real("reliability_score").notNull().default(0.5), // 0-1 from familiar whales system
+  discoveryQuality: real("discovery_quality").notNull().default(0.5), // 0-1 from wallet discovery
+  riskFactor: real("risk_factor").notNull().default(0.5), // 0-1 penalty for negative PnL, low win rate
+
+  // Key metrics for scoring
+  totalTrades: integer("total_trades").default(0),
+  winRate: real("win_rate").default(0), // 0-1
+  averageMultiplier: real("average_multiplier").default(1.0),
+  totalPnlPercent: real("total_pnl_percent").default(0),
+  recentPerformance: real("recent_performance").default(0), // Last 20 trades win rate
+  minTradeHistory: integer("min_trade_history").default(0), // Minimum trades to be ranked
+
+  // Flags
+  hasNegativePnl: boolean("has_negative_pnl").default(false),
+  isLowWinRate: boolean("is_low_win_rate").default(false), // <30%
+  isInsufficientHistory: boolean("is_insufficient_history").default(true), // <10 trades
+
+  lastActivityAt: integer("last_activity_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_wl_unified_score").on(table.unifiedScore),
+  index("idx_wl_updated_at").on(table.updatedAt),
+  index("idx_wl_win_rate").on(table.winRate),
+]);
+
+export const insertWalletLeaderboardSchema = createInsertSchema(walletLeaderboard).omit({ id: true, createdAt: true, updatedAt: true });
+export type WalletLeaderboard = typeof walletLeaderboard.$inferSelect;
+export type InsertWalletLeaderboard = z.infer<typeof insertWalletLeaderboardSchema>;
