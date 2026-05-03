@@ -4982,3 +4982,35 @@ export const dayOfWeekAggregates = pgTable("day_of_week_aggregates", {
 export const insertDayOfWeekAggregateSchema = createInsertSchema(dayOfWeekAggregates).omit({ id: true, createdAt: true, updatedAt: true });
 export type DayOfWeekAggregate = typeof dayOfWeekAggregates.$inferSelect;
 export type InsertDayOfWeekAggregate = z.infer<typeof insertDayOfWeekAggregateSchema>;
+
+// Token Leaderboard - Consolidated trajectory-based ranking
+export const tokenLeaderboard = pgTable("token_leaderboard", {
+  id: serial("id").primaryKey(),
+  tokenMint: text("token_mint").notNull().unique(),
+  tokenSymbol: text("token_symbol").notNull(),
+  trajectoryScore: real("trajectory_score").notNull().default(0), // Unbounded moonshot potential score
+  confidence: real("confidence").notNull().default(0), // 0-1 statistical confidence
+  outcomeProb100x: real("outcome_prob_100x").default(0),
+  outcomeProb10x: real("outcome_prob_10x").default(0),
+  outcomeProb5x: real("outcome_prob_5x").default(0),
+  outcomeProb2x: real("outcome_prob_2x").default(0),
+  outcomeProb2xQuick: real("outcome_prob_2x_quick").default(0),
+  outcomeProb2xSustained: real("outcome_prob_2x_sustained").default(0),
+  outcomeProbCrashFast: real("outcome_prob_crash_fast").default(0),
+  outcomeProbSlowBleed: real("outcome_prob_slow_bleed").default(0),
+  outcomeProbDeathbed: real("outcome_prob_deathbed").default(0),
+  lastPrice: real("last_price").notNull().default(0),
+  lastSnapshotAt: integer("last_snapshot_at"),
+  snapshotCount: integer("snapshot_count").default(0), // Number of snapshots analyzed
+  freshness: real("freshness").notNull().default(1.0), // 1.0 = fresh (<24h), decays to 0 (>72h)
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_tl_trajectory_score").on(table.trajectoryScore),
+  index("idx_tl_updated_at").on(table.updatedAt),
+  index("idx_tl_symbol").on(table.tokenSymbol),
+]);
+
+export const insertTokenLeaderboardSchema = createInsertSchema(tokenLeaderboard).omit({ id: true, createdAt: true, updatedAt: true });
+export type TokenLeaderboard = typeof tokenLeaderboard.$inferSelect;
+export type InsertTokenLeaderboard = z.infer<typeof insertTokenLeaderboardSchema>;

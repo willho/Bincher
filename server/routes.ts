@@ -9257,6 +9257,10 @@ export async function registerRoutes(
   const positionRoutes = await import("./routes/position-routes");
   app.use(positionRoutes.default);
 
+  // Register Phase B token leaderboard routes
+  const tokenLeaderboardRoutes = await import("./routes/token-leaderboard-routes");
+  app.use(tokenLeaderboardRoutes.default);
+
   return httpServer;
 }
 

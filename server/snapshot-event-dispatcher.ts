@@ -18,10 +18,24 @@ export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<
   // 2. Calculate confidence and trajectory score
   // 3. Decide to open position or exit existing position
   // 4. Record entry/exit metadata for retrolearner
+  // 5. Update token leaderboard with trajectory scores
 
   // Stub implementation - placeholder for snapshot event handling
   try {
     // TODO: implement snapshot evaluation logic
+    // Phase B Hook: Update token leaderboard once cluster matching is available
+    // const outcomes = await matchAgainstClusters(snapshot);
+    // if (outcomes) {
+    //   const { updateTokenLeaderboard } = await import("./token-trajectory-scoring");
+    //   await updateTokenLeaderboard(
+    //     snapshot.tokenMint,
+    //     snapshot.tokenSymbol,
+    //     outcomes,
+    //     snapshotCount,
+    //     snapshot.priceUsd,
+    //     ageSeconds
+    //   );
+    // }
   } catch (err) {
     console.error("[SnapshotDispatcher] Error in snapshot event handler:", err);
   }
