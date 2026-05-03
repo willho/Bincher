@@ -135,55 +135,96 @@ export default function PortfolioPage() {
         </TabsList>
 
         <TabsContent value="holdings" className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardDescription>Total Value</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{formatUsd(totalValue)}</div>
-              </CardContent>
-            </Card>
+          {analyticsLoading ? (
+            <div className="grid gap-4 md:grid-cols-4">
+              <Skeleton className="h-24" />
+              <Skeleton className="h-24" />
+              <Skeleton className="h-24" />
+              <Skeleton className="h-24" />
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-4">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Total P&L</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold ${(positionAnalytics?.totalPnl || 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                    {(positionAnalytics?.totalPnl || 0) >= 0 ? "+" : ""}{formatUsd(positionAnalytics?.totalPnl || 0)}
+                  </div>
+                </CardContent>
+              </Card>
 
-            <Card>
-              <CardHeader className="pb-2">
-                <CardDescription>Cost Basis</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">{formatUsd(totalCost)}</div>
-              </CardContent>
-            </Card>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Win Rate</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">
+                    {positionAnalytics?.totalPositions ? ((positionAnalytics.winningPositions / positionAnalytics.totalPositions) * 100).toFixed(0) : 0}%
+                  </div>
+                  <p className="text-xs text-muted-foreground">{positionAnalytics?.winningPositions || 0}/{positionAnalytics?.totalPositions || 0} won</p>
+                </CardContent>
+              </Card>
 
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Profit Factor</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{(positionAnalytics?.profitFactor || 0).toFixed(2)}x</div>
+                  <p className="text-xs text-muted-foreground">Wins / Losses ratio</p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardDescription>Avg Hold Time</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{positionAnalytics?.averageHoldMinutes ? (positionAnalytics.averageHoldMinutes / 60).toFixed(1) : 0}h</div>
+                  <p className="text-xs text-muted-foreground">Minutes to resolution</p>
+                </CardContent>
+              </Card>
+            </div>
+          )}
+
+          {budgetLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-24" />
+              <Skeleton className="h-24" />
+            </div>
+          ) : (
             <Card>
-              <CardHeader className="pb-2">
-                <CardDescription>Total P&L</CardDescription>
+              <CardHeader>
+                <CardTitle className="text-lg">Position Budget Forecast</CardTitle>
+                <CardDescription>Daily allocation strategy</CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className={`text-2xl font-bold ${totalPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                  {totalPnl >= 0 ? "+" : ""}{formatUsd(totalPnl)}
+              <CardContent className="space-y-4">
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Expected Positions/Day</p>
+                    <p className="text-2xl font-bold">{positionBudget?.expectedPositionsPerDay.toFixed(1) || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Base Allocation/Position</p>
+                    <p className="text-2xl font-bold">{formatSol(positionBudget?.baseAllocationPerPosition || 0)} SOL</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Ape Budget Available</p>
+                    <p className="text-2xl font-bold">{formatSol(positionBudget?.apeBudget || 0)} SOL</p>
+                  </div>
                 </div>
               </CardContent>
             </Card>
+          )}
 
-            <Card>
-              <CardHeader className="pb-2">
-                <CardDescription>Win Rate</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {activeHoldings.length > 0 ? ((winCount / activeHoldings.length) * 100).toFixed(0) : 0}%
-                </div>
-                <p className="text-xs text-muted-foreground">{winCount}/{activeHoldings.length} positions</p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {holdingsLoading ? (
+          {positionsLoading ? (
             <div className="space-y-2">
               <Skeleton className="h-20" />
               <Skeleton className="h-20" />
             </div>
-          ) : activeHoldings.length === 0 ? (
+          ) : openPositions.length === 0 && moonbags.length === 0 ? (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-12 text-muted-foreground">
                 <Briefcase className="h-10 w-10 mb-2 opacity-50" />
@@ -191,33 +232,76 @@ export default function PortfolioPage() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-3">
-              {activeHoldings.map((holding) => {
-                const currentVal = holding.lastPrice ? holding.currentAmount * holding.lastPrice : 0;
-                const pnl = currentVal - holding.costBasis;
-                const pnlPercent = (pnl / holding.costBasis) * 100;
+            <div className="space-y-4">
+              {openPositions.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="font-semibold text-sm">Open Positions ({openPositions.length})</h3>
+                  {openPositions.map((position) => {
+                    const currentValue = position.entryPrice * position.highestPrice;
+                    const pnl = currentValue - position.entrySol;
+                    const pnlPercent = (pnl / position.entrySol) * 100;
+                    const holdMinutes = (Date.now() - position.openedAt) / 60000;
 
-                return (
-                  <Card key={holding.id}>
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <div className="font-semibold">{holding.tokenSymbol || "Unknown"}</div>
-                          <div className="text-sm text-muted-foreground">
-                            {formatSol(holding.currentAmount)} @ {holding.lastPrice?.toFixed(6) || "?"} SOL
+                    return (
+                      <Card key={position.id}>
+                        <CardContent className="p-4">
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1">
+                                <div className="font-semibold">{position.tokenSymbol || "Unknown"}</div>
+                                <div className="text-sm text-muted-foreground">
+                                  Entry: {formatSol(position.entrySol)} SOL @ {position.entryPrice.toFixed(6)} SOL
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className="font-semibold">{formatUsd(currentValue)}</div>
+                                <div className={`text-sm ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                                  {pnl >= 0 ? "+" : ""}{formatUsd(pnl)} ({pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%)
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <div>
+                                Trajectory Score: <Badge variant="outline" className="ml-1">{position.currentTrajectoryScore.toFixed(2)}</Badge>
+                              </div>
+                              <div>
+                                Confidence: <Badge variant="outline" className="ml-1">{(position.currentConfidence * 100).toFixed(0)}%</Badge>
+                              </div>
+                              <div>
+                                Held: {holdMinutes < 60 ? `${Math.round(holdMinutes)}m` : `${(holdMinutes / 60).toFixed(1)}h`}
+                              </div>
+                            </div>
                           </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-semibold">{formatUsd(currentVal)}</div>
-                          <div className={`text-sm ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
-                            {pnl >= 0 ? "+" : ""}{formatUsd(pnl)} ({pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%)
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+
+              {moonbags.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="font-semibold text-sm flex items-center gap-2">
+                    <Moon className="h-4 w-4" />
+                    Moonbags ({moonbags.length})
+                  </h3>
+                  {moonbags.map((position) => (
+                    <Card key={`moonbag-${position.id}`} className="opacity-75">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex-1">
+                            <div className="font-semibold text-sm">{position.tokenSymbol || "Unknown"}</div>
+                            <div className="text-xs text-muted-foreground">
+                              Bag: {formatSol(position.moonbagAmount || 0)} SOL (retained from exit)
+                            </div>
                           </div>
+                          <Badge variant="secondary" className="ml-2">🌙 Moonbag</Badge>
                         </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </TabsContent>
@@ -245,10 +329,11 @@ export default function PortfolioPage() {
 
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>Active Positions</CardDescription>
+                    <CardDescription>System Positions Open</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold">{activeHoldings.length}</div>
+                    <div className="text-2xl font-bold">{openPositions.length}</div>
+                    <p className="text-xs text-muted-foreground">{moonbags.length} moonbags</p>
                   </CardContent>
                 </Card>
               </div>
