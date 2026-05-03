@@ -633,7 +633,27 @@ export async function createSnapshot(data: SnapshotData): Promise<number> {
     socialSearchResult: data.socialSearchResult,
   }).returning();
 
-  return result[0].id;
+  const snapshotId = result[0].id;
+
+  // Trigger Phase A position management snapshot event (non-blocking)
+  try {
+    const { onSnapshotCreated } = await import("./snapshot-event-dispatcher");
+    setImmediate(() => {
+      onSnapshotCreated({
+        id: snapshotId,
+        tokenMint: data.tokenMint,
+        tokenSymbol: data.tokenSymbol,
+        priceUsd: data.priceUsd,
+        capturedAt: now,
+      }).catch(err => {
+        console.error("[SnapshotDispatcher] Error processing snapshot event:", err);
+      });
+    });
+  } catch (err) {
+    console.error("[SnapshotDispatcher] Failed to import dispatcher:", err);
+  }
+
+  return snapshotId;
 }
 
 export async function getSnapshot(snapshotId: number): Promise<TokenSnapshot | null> {

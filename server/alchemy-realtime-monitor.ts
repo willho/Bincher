@@ -14,8 +14,8 @@
 
 import { WebSocket } from "ws";
 import { db } from "./db";
-import { eq } from "drizzle-orm";
-import { paperPositions } from "@shared/schema";
+import { eq, and, isNull } from "drizzle-orm";
+import { paperPositions, activePositions } from "@shared/schema";
 
 interface RealTimeMonitorConfig {
   alchemyKey: string;
@@ -124,26 +124,42 @@ class AlchemyRealtimeMonitor {
     this.blockCount++;
 
     try {
-      // Get all open positions
+      // Get all open positions (legacy paper trading)
       const openPositions = await db.query.paperPositions.findMany({
         where: eq(paperPositions.status, "open"),
       });
 
-      if (openPositions.length === 0) {
+      // Get all open Phase A positions
+      const phaseAPositions = await db
+        .select()
+        .from(activePositions)
+        .where(isNull(activePositions.closedAt));
+
+      // Combine all positions to check
+      const allTokens = new Set<string>();
+      openPositions.forEach(p => allTokens.add(p.tokenMint));
+      phaseAPositions.forEach(p => allTokens.add(p.tokenMint));
+
+      if (allTokens.size === 0) {
         return; // No positions to check
       }
 
-      // Deduplicate: Only check each token once per block
-      const uniqueMints = new Set(openPositions.map((p) => p.tokenMint));
-
       // Get batch prices (batched API call)
-      const prices = await this.getBatchPrices(Array.from(uniqueMints));
+      const prices = await this.getBatchPrices(Array.from(allTokens));
 
-      // Check each position
+      // Check legacy paper positions
       for (const position of openPositions) {
         const price = prices.get(position.tokenMint);
         if (price) {
           await this.checkPositionExit(position, price);
+        }
+      }
+
+      // Check Phase A positions
+      for (const position of phaseAPositions) {
+        const price = prices.get(position.tokenMint);
+        if (price) {
+          await this.checkPhaseAPositionExit(position, price);
         }
       }
     } catch (error) {
@@ -324,6 +340,59 @@ class AlchemyRealtimeMonitor {
       console.log(`[AlchemyMonitor] Position closed: ${reason} (${realizedPnlPercent.toFixed(2)}%)`);
     } catch (error) {
       console.error("[AlchemyMonitor] Error executing exit:", error);
+    }
+  }
+
+  /**
+   * Check Phase A position for exit conditions
+   */
+  private async checkPhaseAPositionExit(position: any, currentPrice: number): Promise<void> {
+    try {
+      const entryPrice = position.entryPrice;
+      const multiplier = currentPrice / entryPrice;
+      const tslPercent = (position.tslCurrentPercent || 15) / 100;
+
+      // Check TSL hit
+      const tslLevel = (position.highestPrice || entryPrice) * (1 - tslPercent);
+      if (currentPrice <= tslLevel) {
+        console.log(
+          `[AlchemyMonitor] Phase A TSL HIT: ${position.tokenSymbol} at ${multiplier.toFixed(2)}x (TSL: ${((position.tslCurrentPercent || 15))}%)`
+        );
+        await this.executePhaseAExit(position, currentPrice, "tsl_hit");
+        return;
+      }
+
+      // Update highest price for TSL calculation
+      if (currentPrice > (position.highestPrice || 0)) {
+        const now = Math.floor(Date.now() / 1000);
+        await db
+          .update(activePositions)
+          .set({ highestPrice: currentPrice, lastSnapshotAt: now })
+          .where(eq(activePositions.id, position.id));
+      }
+    } catch (error) {
+      console.error(`[AlchemyMonitor] Error checking Phase A position exit:`, error);
+    }
+  }
+
+  /**
+   * Execute Phase A position exit
+   */
+  private async executePhaseAExit(position: any, exitPrice: number, reason: string): Promise<void> {
+    try {
+      const { exitPosition } = await import("./position-exit-manager");
+      const now = Math.floor(Date.now() / 1000);
+      const userId = 1; // TODO: Get from session
+
+      const result = await exitPosition(position.id, reason as any, exitPrice, userId);
+
+      if (result.success) {
+        console.log(
+          `[AlchemyMonitor] Phase A Position closed: ${reason} (${result.realizedPnlPercent.toFixed(2)}%)`
+        );
+      }
+    } catch (error) {
+      console.error("[AlchemyMonitor] Error executing Phase A exit:", error);
     }
   }
 

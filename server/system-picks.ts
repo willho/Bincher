@@ -384,6 +384,15 @@ async function openSystemPickPosition(pick: SystemPick): Promise<boolean> {
     // Track position ID for price updates
     tokenToPositionId.set(pick.tokenMint, position.positionId);
 
+    // Phase A: Record token launch event for budget forecasting
+    try {
+      const { recordTokenLaunchEvent } = await import("./position-budget-forecaster");
+      const userId = 1; // TODO: Get from session
+      await recordTokenLaunchEvent(userId, pick.tokenMint);
+    } catch (err) {
+      console.error("[SystemPicks] Failed to record Phase A launch event:", err);
+    }
+
     console.log(
       `[SystemPicks] Opened fund position: ${pick.tokenSymbol} ` +
       `(entry=${entryPrice.toFixed(4)}, size=${position.entrySize.toFixed(3)} SOL, ` +
