@@ -182,6 +182,87 @@ Current Phase A budget allocation:
 
 ---
 
+## Initial Reclaiming Strategy for Risk-Free Gains
+
+**Status:** Identified post-Phase A, deferred  
+**Effort:** Low (a few hours)  
+**Expected ROI:** Psychological win + risk reduction, ~5-10% additional capital freed  
+**Triggers:** Position reaches 2x entry price
+
+### Problem
+
+Current strategy:
+- Open positions at 0.1 SOL, let them run until TSL or take-profit
+- If position doubles, entire stack is "at risk" again if it crashes
+- Capital tied up in unrealized gains, can't be redeployed
+- Psychologically draining to watch +100% become +20% due to volatility
+
+### Solution
+
+**Initial reclaiming:** Sell partial position when price 2x entry
+1. Position opens at 0.1 SOL entry price
+2. Price rises to 2x → sell 0.2 SOL worth of tokens (original entry + profit)
+3. Remaining tokens ride with trailing stop loss
+4. Result: Original capital freed, locked in break-even, profit floats
+
+**Implementation approach:**
+- Track `entrySol` (original investment amount)
+- On price milestone hit (2.0x, 3.0x, etc.), calculate % to sell
+- Execute market sell for `entrySol + buffer` SOL worth
+- Leave remainder with normal TSL management
+- Record exit as "partial_reclaim" reason
+
+### Example Flow
+
+```
+Entry: 0.1 SOL at $0.0001/token = 1000 tokens
+Price rises: $0.0002/token
+Position value: 0.2 SOL
+
+Reclaim trigger (2x):
+- Sell 0.2 SOL worth of tokens at current price
+- Get back original 0.1 SOL capital + 0.1 SOL profit
+- Keep remaining tokens riding to moonshot or TSL
+
+Final outcome options:
+- Token crashes 50%: Lost nothing (initial reclaimed), recovered 0.05 SOL on remainder
+- Token moons 10x: Reclaimed 0.1 SOL, remainder now worth 1.8 SOL (10x of what was left)
+```
+
+### Cascading Reclaims
+
+Optional: Multiple reclaim levels
+- At 2x: Reclaim 100% of initial
+- At 3x: Reclaim 50% of profits
+- At 5x: Reclaim 75% of profits
+- Remainder free-roll at 10x+
+
+### Integration Notes
+
+- Add `partialReclaim()` function to `position-exit-manager.ts`
+- Track reclaim events separately from full exits (new `exitReason: "partial_reclaim"`)
+- Update UI to show "reclaimed capital" vs. "floating profit" sections
+- Calculate capital freed per position for allocation optimization
+- Add metric: "capital recovery rate" (% of invested capital returned before final exit)
+
+### Trade-offs
+
+| Aspect | Benefit | Cost |
+|--------|---------|------|
+| Risk | Locks in gains, frees capital | Leaves potential on table if crashes before reclaim |
+| Psychology | Feels like "win" early | Creates exit points (might sell too early) |
+| Capital | Frees ~5-10% more to reinvest | Requires market sells (slippage, fees) |
+| Complexity | Clear exit logic | More position states to track |
+
+### When to Revisit
+
+- After Phase A proves position reliability (50+ trades)
+- If fund plateau hits and capital reallocation needed
+- If volatility spikes (higher chance of reaching 2x faster)
+- User feedback: "want to reclaim without closing position"
+
+---
+
 ## Other Backlog Items
 
 (To be added as they're identified)
