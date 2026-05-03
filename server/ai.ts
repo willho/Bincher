@@ -597,8 +597,8 @@ export interface SnapshotData {
 
 export async function createSnapshot(data: SnapshotData): Promise<number> {
   const now = Math.floor(Date.now() / 1000);
-  const tokenAgeMinutes = data.pairCreatedAt 
-    ? Math.floor((now - data.pairCreatedAt) / 60) 
+  const tokenAgeMinutes = data.pairCreatedAt
+    ? Math.floor((now - data.pairCreatedAt) / 60)
     : undefined;
 
   const result = await db.insert(tokenSnapshots).values({
