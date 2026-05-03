@@ -15,6 +15,10 @@ import { clusterSnapshotToArchetype, getSnapshotSchedule, shouldTakeSnapshotForE
 import { generateWhaleSignal, calculateExitSignal, validateWhaleSignal, getWhaleWeightMetrics } from "./whale-watcher-system";
 import { systemPicksFund, type FundSession } from "./system-picks-fund";
 import { getHolderClusterAssociations } from "./wallet-discovery";
+import { calculateAllocation, updateApeBudgetAfterPosition } from "./position-allocator";
+import { recordTokenLaunchEvent, recordTokenOutcome, updatePositionBudgetForecast } from "./position-budget-forecaster";
+import { onSnapshotCreated } from "./snapshot-event-dispatcher";
+import { positionExitManager } from "./position-exit-manager";
 import axios from "axios";
 
 // =====================
@@ -62,8 +66,9 @@ interface SystemPick {
   matchedClusterIds: string[];    // Cluster(s) matched
   isBlended: boolean;             // Multi-cluster match
   confidencePenalty: number;      // Reduction if blended
-  estimatedEntry: number;         // SOL to allocate
+  estimatedEntry: number;         // Cluster confidence (for allocation)
   jupiterValidated: boolean;
+  trajectoryScore?: number;       // Risk-adjusted trajectory score
 }
 
 // Global state
@@ -282,6 +287,10 @@ async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick 
       adjustedOutcomeSuccess = outcomesSuccess / SYSTEM_PICKS_CONFIG.convictionPenaltyMultiplier;
     }
 
+    // Calculate trajectory score for position allocation
+    const trajectoryData = clusterResult.blendedOutcomes || {};
+    const trajectoryScore = calculateTrajectoryScoreFromOutcomes(trajectoryData);
+
     const pick: SystemPick = {
       tokenMint,
       tokenSymbol: tokenData?.tokenSymbol || tokenMint.slice(0, 8),
@@ -294,8 +303,9 @@ async function calculateSystemPickSignal(tokenMint: string): Promise<SystemPick 
       matchedClusterIds: clusterResult.matches.map((m) => m.clusterId),
       isBlended: clusterResult.matches.length > 1,
       confidencePenalty: clusterResult.confidencePenalty,
-      estimatedEntry: SYSTEM_PICKS_CONFIG.defaultTakeProfitMultiplier, // TODO: use fund allocation
+      estimatedEntry: adjustedConfidence, // Now uses actual cluster confidence for allocation
       jupiterValidated: false,
+      trajectoryScore, // Store for allocation decision
     };
 
     return pick;
@@ -347,7 +357,7 @@ async function validateWithJupiter(mint: string, entryAmountSol: number = 1.0): 
 
 /**
  * Open a position through the simulated fund
- * NEW: Uses fund allocation system instead of paper trading
+ * Integrates with new position management system (Phase A)
  */
 async function openSystemPickPosition(pick: SystemPick): Promise<boolean> {
   if (!currentFundSession) {
@@ -356,14 +366,25 @@ async function openSystemPickPosition(pick: SystemPick): Promise<boolean> {
   }
 
   try {
-    // Get current token price
+    // Get current token price and data
     const tokenData = await getTokenData(pick.tokenMint);
     const entryPrice = tokenData.priceUsd || 1;
+    const userId = 1; // For now, assume user 1 (admin)
 
-    // Calculate tokens expected today (for dynamic allocation)
-    const tokensExpectedToday = SYSTEM_PICKS_CONFIG.tokensExpectedPerDay;
+    // Calculate allocation using new position allocator
+    const trajectoryScore = pick.trajectoryScore || 0;
+    const allocation = await calculateAllocation(
+      userId,
+      currentFundSession.currentBalance,
+      pick.clusterConfidence,
+      trajectoryScore
+    );
 
-    // Open position through fund
+    // Record token launch event for budget forecasting
+    const now = Math.floor(Date.now() / 1000);
+    await recordTokenLaunchEvent(pick.tokenMint, now);
+
+    // Open position through fund (keeps existing behavior)
     const position = systemPicksFund.openPosition(
       pick.tokenMint,
       pick.tokenSymbol,
@@ -371,12 +392,12 @@ async function openSystemPickPosition(pick: SystemPick): Promise<boolean> {
       pick.whaleConsensus,
       pick.exitScore,
       entryPrice,
-      tokensExpectedToday
+      SYSTEM_PICKS_CONFIG.tokensExpectedPerDay
     );
 
     if (!position) {
       console.log(
-        `[SystemPicks] Fund rejected position for ${pick.tokenSymbol} (insufficient balance or reserve)`
+        `[SystemPicks] Fund rejected position for ${pick.tokenSymbol} (insufficient balance)`
       );
       return false;
     }
@@ -385,10 +406,10 @@ async function openSystemPickPosition(pick: SystemPick): Promise<boolean> {
     tokenToPositionId.set(pick.tokenMint, position.positionId);
 
     console.log(
-      `[SystemPicks] Opened fund position: ${pick.tokenSymbol} ` +
-      `(entry=${entryPrice.toFixed(4)}, size=${position.entrySize.toFixed(3)} SOL, ` +
-      `cluster=${pick.clusterConfidence.toFixed(2)}, whale=${pick.whaleConsensus.toFixed(2)}, ` +
-      `exit_score=${pick.exitScore.toFixed(2)})`
+      `[SystemPicks] Opened position: ${pick.tokenSymbol} ` +
+      `(entry=${entryPrice.toFixed(4)}, size=${allocation.totalAllocation.toFixed(4)} SOL, ` +
+      `cluster=${pick.clusterConfidence.toFixed(2)}, trajectory=${trajectoryScore.toFixed(2)}, ` +
+      `exceptional=${allocation.isExceptional ? "yes" : "no"})`
     );
 
     return true;
@@ -538,6 +559,27 @@ async function scanForPicks(): Promise<void> {
   } catch (error) {
     console.error("[SystemPicks] Scan error:", error);
   }
+}
+
+// =====================
+// HELPERS
+// =====================
+
+/**
+ * Calculate trajectory score from outcome distribution
+ */
+function calculateTrajectoryScoreFromOutcomes(outcomes: Record<string, number>): number {
+  if (!outcomes || typeof outcomes !== "object") return 0;
+
+  const score =
+    (outcomes.pump_100x || 0) * 1.0 +
+    (outcomes.pump_10x || 0) * 0.5 +
+    (outcomes.pump_5x || 0) * 0.3 +
+    (outcomes.pump_2x_sustained || 0) * 0.2 +
+    (outcomes.pump_2x_quick || 0) * 0.1 -
+    ((outcomes.crash_fast || 0) + (outcomes.crash_90 || 0)) * 0.5;
+
+  return Math.max(0, score);
 }
 
 // =====================

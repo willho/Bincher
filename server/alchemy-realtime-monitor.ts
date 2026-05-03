@@ -15,7 +15,8 @@
 import { WebSocket } from "ws";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
-import { paperPositions } from "@shared/schema";
+import { paperPositions, activePositions } from "@shared/schema";
+import { positionExitManager } from "./position-exit-manager";
 
 interface RealTimeMonitorConfig {
   alchemyKey: string;
@@ -124,26 +125,40 @@ class AlchemyRealtimeMonitor {
     this.blockCount++;
 
     try {
-      // Get all open positions
+      // Get all open positions (both legacy and Phase A)
       const openPositions = await db.query.paperPositions.findMany({
         where: eq(paperPositions.status, "open"),
       });
 
-      if (openPositions.length === 0) {
+      const phaseAPositions = await db.query.activePositions.findMany({
+        where: eq(activePositions.status, "open"),
+      });
+
+      // Combine all mints for batch pricing
+      const allMints = new Set<string>();
+      openPositions.forEach((p) => allMints.add(p.tokenMint));
+      phaseAPositions.forEach((p) => allMints.add(p.tokenMint));
+
+      if (allMints.size === 0) {
         return; // No positions to check
       }
 
-      // Deduplicate: Only check each token once per block
-      const uniqueMints = new Set(openPositions.map((p) => p.tokenMint));
-
       // Get batch prices (batched API call)
-      const prices = await this.getBatchPrices(Array.from(uniqueMints));
+      const prices = await this.getBatchPrices(Array.from(allMints));
 
-      // Check each position
+      // Check legacy positions
       for (const position of openPositions) {
         const price = prices.get(position.tokenMint);
         if (price) {
           await this.checkPositionExit(position, price);
+        }
+      }
+
+      // Check Phase A positions
+      for (const position of phaseAPositions) {
+        const price = prices.get(position.tokenMint);
+        if (price) {
+          await this.checkPhaseAPositionExit(position, price);
         }
       }
     } catch (error) {
@@ -298,6 +313,68 @@ class AlchemyRealtimeMonitor {
     } catch (error) {
       console.error(`[AlchemyMonitor] Error checking position exit:`, error);
     }
+  }
+
+  /**
+   * Check if Phase A position should exit (TSL, time stop, take profit)
+   */
+  private async checkPhaseAPositionExit(position: any, currentPrice: number): Promise<void> {
+    try {
+      const userId = position.userId;
+      const positionId = position.id;
+
+      // Check TSL (trailing stop loss)
+      const tslHit = await positionExitManager.checkTSLExit(positionId, currentPrice);
+      if (tslHit) {
+        await positionExitManager.exitPosition(positionId, "tsl_hit", currentPrice, userId);
+        console.log(`[AlchemyMonitor] Phase A TSL HIT: ${position.tokenSymbol} at ${currentPrice.toFixed(6)}`);
+        return;
+      }
+
+      // Check take profit (5x default)
+      const tpHit = await positionExitManager.checkTakeProfit(positionId, currentPrice, 5.0);
+      if (tpHit) {
+        await positionExitManager.exitPosition(positionId, "profit_take", currentPrice, userId);
+        console.log(`[AlchemyMonitor] Phase A TP HIT: ${position.tokenSymbol} at ${currentPrice.toFixed(6)}`);
+        return;
+      }
+
+      // Check time stop (cluster-specific hold time)
+      const maxHoldMinutes = this.getMaxHoldMinutesForCluster(position.entryClusters?.[0]?.cluster);
+      const timeStopHit = await positionExitManager.checkTimeStop(positionId, maxHoldMinutes);
+      if (timeStopHit) {
+        await positionExitManager.exitPosition(positionId, "time_stop", currentPrice, userId);
+        console.log(`[AlchemyMonitor] Phase A TIME STOP: ${position.tokenSymbol} after ${maxHoldMinutes} minutes`);
+        return;
+      }
+
+      // Update highest price if current is higher
+      if (currentPrice > (position.highestPrice || 0)) {
+        const now = Math.floor(Date.now() / 1000);
+        await db
+          .update(activePositions)
+          .set({ highestPrice: currentPrice, highestPriceReachedAt: now })
+          .where(eq(activePositions.id, positionId));
+      }
+    } catch (error) {
+      console.error(`[AlchemyMonitor] Error checking Phase A position exit:`, error);
+    }
+  }
+
+  /**
+   * Get max hold time for cluster type
+   */
+  private getMaxHoldMinutesForCluster(cluster?: string): number {
+    const maxHoldMap: Record<string, number> = {
+      spike_and_bleed: 120, // 2 hours
+      slow_moon: 480, // 8 hours
+      late_bloomer: 1440, // 24 hours
+      pump_dump: 60, // 1 hour
+      shaky_climb: 240, // 4 hours
+      organic_growth: 720, // 12 hours
+    };
+
+    return maxHoldMap[cluster || "unknown"] || 240;
   }
 
   /**

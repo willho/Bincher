@@ -2,6 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
+import positionRoutes from "./routes/position-routes";
 import { storage } from "./storage";
 import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrency, isBaseCurrencySymbol, fetchWalletTokenHoldings, cleanupStaleWebhooks, fetchWalletSwapHistory, SOL_MINT } from "./helius";
 import { sendSwapNotification, sendPasswordResetEmail } from "./email";
@@ -9141,6 +9142,9 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to fetch active tokens" });
     }
   });
+
+  // Position management routes (Phase A)
+  app.use(positionRoutes);
 
   app.get("/api/tokens/leaderboard", requireAuth, async (req, res) => {
     try {
