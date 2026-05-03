@@ -4878,3 +4878,107 @@ export const fingerprintLifecycleMetrics = pgTable("fingerprint_lifecycle_metric
 export const insertFingerprintLifecycleMetricsSchema = createInsertSchema(fingerprintLifecycleMetrics).omit({ id: true, createdAt: true });
 export type FingerprintLifecycleMetrics = typeof fingerprintLifecycleMetrics.$inferSelect;
 export type InsertFingerprintLifecycleMetrics = z.infer<typeof insertFingerprintLifecycleMetricsSchema>;
+
+// Phase A: Position Management Layer
+
+// Position budgets - forecasting expected discovery velocity
+export const positionBudgets = pgTable("position_budgets", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  expectedPositionsPerDay: real("expected_positions_per_day").notNull().default(5),
+  baseAllocationPerPosition: real("base_allocation_per_position").notNull().default(0.1), // SOL
+  apeBudget: real("ape_budget").notNull().default(0), // SOL available for exceptional tokens
+  apeBudgetResetAt: integer("ape_budget_reset_at"), // Unix timestamp of last weekly reset
+  apeBudgetMultiplier: real("ape_budget_multiplier").default(1.0), // Growth multiplier (1.0 = no boost)
+  forecastBreakdown: jsonb("forecast_breakdown").$type<Array<{ hour: number; dayOfWeek: string; expectedPositions: number }>>().default([]),
+  nextBusyPeriods: jsonb("next_busy_periods").$type<Array<{ startHour: number; dayOfWeek: string; endHour: number; expectedPositions: number }>>().default([]),
+  lastCalculatedAt: integer("last_calculated_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_pb_user_id").on(table.userId),
+]);
+
+export const insertPositionBudgetSchema = createInsertSchema(positionBudgets).omit({ id: true, createdAt: true, updatedAt: true });
+export type PositionBudget = typeof positionBudgets.$inferSelect;
+export type InsertPositionBudget = z.infer<typeof insertPositionBudgetSchema>;
+
+// Active positions - open and recently closed positions for Phase A system
+export const activePositions = pgTable("active_positions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  tokenMint: text("token_mint").notNull(),
+  tokenSymbol: text("token_symbol").notNull(),
+  entrySol: real("entry_sol").notNull(), // Amount in SOL invested
+  entryPrice: real("entry_price").notNull(), // Price at entry (SOL per token)
+  entryClusters: jsonb("entry_clusters").$type<Array<{ cluster: string; confidence: number; trajectoryScore: number }>>().default([]),
+  currentConfidence: real("current_confidence").notNull().default(0.7),
+  currentTrajectoryScore: real("current_trajectory_score").notNull().default(0.5),
+  tslCurrentPercent: real("tsl_current_percent").notNull().default(15), // Trailing stop loss %
+  highestPrice: real("highest_price").notNull(), // Highest price reached for TSL calculation
+  moonbagAmount: real("moonbag_amount").default(0), // SOL retained from trajectory collapse
+  openedAt: integer("opened_at").notNull(),
+  lastSnapshotAt: integer("last_snapshot_at"),
+  exitReason: text("exit_reason"), // tsl_hit, trajectory_collapse, time_stop, profit_take, user_manual
+  realizedPnl: real("realized_pnl"), // Profit/loss in SOL (only for closed positions)
+  realizedPnlPercent: real("realized_pnl_percent"), // P&L as %
+  closedAt: integer("closed_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_ap_user_id").on(table.userId),
+  index("idx_ap_opened_at").on(table.openedAt),
+  index("idx_ap_closed_at").on(table.closedAt),
+]);
+
+export const insertActivePositionSchema = createInsertSchema(activePositions).omit({ id: true, createdAt: true, updatedAt: true });
+export type ActivePosition = typeof activePositions.$inferSelect;
+export type InsertActivePosition = z.infer<typeof insertActivePositionSchema>;
+
+// Token launch metrics - 8-day rolling window for budget forecasting
+export const tokenLaunchMetrics = pgTable("token_launch_metrics", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  hour: integer("hour").notNull(), // 0-23 hour of day
+  dayOfWeek: text("day_of_week").notNull(), // "Monday", "Tuesday", etc.
+  capturedDate: integer("captured_date").notNull(), // Unix timestamp of day (for 8-day rolling window)
+  launchCount: integer("launch_count").default(0), // Total tokens discovered
+  matchedCount: integer("matched_count").default(0), // Tokens matching clusters
+  reached2xCount: integer("reached_2x_count").default(0),
+  reached5xCount: integer("reached_5x_count").default(0),
+  reached10xCount: integer("reached_10x_count").default(0),
+  rugCount: integer("rug_count").default(0),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_tlm_user_date").on(table.userId, table.capturedDate),
+  index("idx_tlm_user_hour_dow").on(table.userId, table.hour, table.dayOfWeek),
+]);
+
+export const insertTokenLaunchMetricsSchema = createInsertSchema(tokenLaunchMetrics).omit({ id: true, createdAt: true, updatedAt: true });
+export type TokenLaunchMetrics = typeof tokenLaunchMetrics.$inferSelect;
+export type InsertTokenLaunchMetrics = z.infer<typeof insertTokenLaunchMetricsSchema>;
+
+// Day-of-week aggregates - long-term historical averages
+export const dayOfWeekAggregates = pgTable("day_of_week_aggregates", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  hour: integer("hour").notNull(), // 0-23 hour of day
+  dayOfWeek: text("day_of_week").notNull(), // "Monday", "Tuesday", etc.
+  avgLaunchCount: real("avg_launch_count").default(0),
+  avgMatchedCount: real("avg_matched_count").default(0),
+  avg2xReachRate: real("avg_2x_reach_rate").default(0), // % of matched that reached 2x
+  avg5xReachRate: real("avg_5x_reach_rate").default(0),
+  avg10xReachRate: real("avg_10x_reach_rate").default(0),
+  avgRugRate: real("avg_rug_rate").default(0),
+  sampleDays: integer("sample_days").default(0), // How many days of data aggregated
+  lastUpdatedAt: integer("last_updated_at"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+}, (table) => [
+  index("idx_dowa_user_hour_dow").on(table.userId, table.hour, table.dayOfWeek),
+]);
+
+export const insertDayOfWeekAggregateSchema = createInsertSchema(dayOfWeekAggregates).omit({ id: true, createdAt: true, updatedAt: true });
+export type DayOfWeekAggregate = typeof dayOfWeekAggregates.$inferSelect;
+export type InsertDayOfWeekAggregate = z.infer<typeof insertDayOfWeekAggregateSchema>;

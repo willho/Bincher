@@ -9253,6 +9253,10 @@ export async function registerRoutes(
   // Register fingerprinting & clustering diagnostic endpoints
   registerFingerprinterDiagnosticEndpoints(app);
 
+  // Register Phase A position management routes
+  const positionRoutes = await import("./routes/position-routes");
+  app.use(positionRoutes.default);
+
   return httpServer;
 }
 

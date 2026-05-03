@@ -199,12 +199,17 @@ app.use((req, res, next) => {
 
     const { startTokenLifecycleLearning } = await import("./token-lifecycle-learning");
     startTokenLifecycleLearning();
+
+    // Initialize Phase A: Position Management Layer
+    const { initializePositionManagement } = await import("./position-management-init");
+    await initializePositionManagement();
+    console.log("✓ Phase A position management initialized");
   } catch (error) {
     console.error("Database connection failed:", error instanceof Error ? error.message : error);
     console.log("Application starting in limited mode - database features unavailable");
     console.log("To fix: Enable your Neon database endpoint at https://console.neon.tech");
   }
-  
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
