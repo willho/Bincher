@@ -13,32 +13,148 @@ interface SnapshotForDispatch {
 }
 
 export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<void> {
-  // For now, this is a stub that gets called when snapshots are created
-  // In full implementation, this would:
-  // 1. Match snapshot against token clusters
-  // 2. Calculate confidence and trajectory score
-  // 3. Decide to open position or exit existing position
-  // 4. Record entry/exit metadata for retrolearner
-  // 5. Update token leaderboard with trajectory scores
-
-  // Stub implementation - placeholder for snapshot event handling
   try {
-    // TODO: implement snapshot evaluation logic
-    // Phase B Hook: Update token leaderboard once cluster matching is available
-    // const outcomes = await matchAgainstClusters(snapshot);
-    // if (outcomes) {
-    //   const { updateTokenLeaderboard } = await import("./token-trajectory-scoring");
-    //   await updateTokenLeaderboard(
-    //     snapshot.tokenMint,
-    //     snapshot.tokenSymbol,
-    //     outcomes,
-    //     snapshotCount,
-    //     snapshot.priceUsd,
-    //     ageSeconds
-    //   );
-    // }
+    // Get full snapshot record with fingerprint data
+    const snapshotRecord = await db
+      .select()
+      .from(tokenSnapshots)
+      .where(eq(tokenSnapshots.id, snapshot.id))
+      .limit(1);
+
+    if (!snapshotRecord.length) {
+      console.warn(`[SnapshotDispatcher] Snapshot ${snapshot.id} not found in DB`);
+      return;
+    }
+
+    const fullSnapshot = snapshotRecord[0];
+    const fingerprint = fullSnapshot.fingerprintVector as number[];
+    if (!fingerprint || fingerprint.length === 0) {
+      console.warn(`[SnapshotDispatcher] No fingerprint vector for ${snapshot.tokenMint}`);
+      return;
+    }
+
+    // Match snapshot to clusters
+    const { clusterSnapshotToArchetype } = await import("./fingerprint-cluster-management");
+    const clusterResult = await clusterSnapshotToArchetype({
+      tokenMint: snapshot.tokenMint,
+      fingerprintVector: fingerprint,
+      tokenAgeMinutes: fullSnapshot.tokenAgeMinutes || 0,
+      medianMultiplier: fullSnapshot.medianMultiplier || 1.0,
+    });
+
+    // Get cluster type from primary match for retrolearner tracking
+    let clusterType = "unknown";
+    if (clusterResult.matches.length > 0) {
+      clusterType = clusterResult.matches[0].clusterId;
+    }
+
+    // Get trajectory score and negative outcome probability
+    const trajectoryScore = calculateTrajectoryScore(clusterResult.blendedOutcomes);
+    const negativeOutcomeProbability = sumNegativeOutcomes(clusterResult.blendedOutcomes);
+    const aggregateConfidence = clusterResult.matches.length > 0
+      ? (clusterResult.matches[0].similarity || 0.5) * (1 - clusterResult.confidencePenalty)
+      : 0.3;
+
+    console.log(
+      `[SnapshotDispatcher] ${snapshot.tokenSymbol}: clusters=${clusterResult.matches.length}, ` +
+      `confidence=${aggregateConfidence.toFixed(2)}, trajectory=${trajectoryScore.toFixed(2)}, negative=${negativeOutcomeProbability.toFixed(2)}`
+    );
+
+    // Determine if user is trading (stub - would come from config or strategy)
+    const userId = 1; // TODO: get from context/config
+    const currentBalance = 1.0; // TODO: get from position budget forecaster
+
+    // Check if position already exists for this token
+    const existingPosition = await db
+      .select()
+      .from(activePositions)
+      .where(eq(activePositions.tokenMint, snapshot.tokenMint))
+      .limit(1);
+
+    if (existingPosition.length > 0) {
+      // SELL DECISION: Check if we should exit the existing position
+      const position = existingPosition[0];
+      const exitDecision = await evaluateOpenPosition(
+        userId,
+        position.id,
+        snapshot.tokenMint,
+        negativeOutcomeProbability,
+        snapshot.priceUsd,
+        trajectoryScore,
+        aggregateConfidence
+      );
+
+      if (exitDecision.shouldExit) {
+        // EXECUTE EXIT
+        const { exitPosition } = await import("./position-exit-manager");
+        let exitReason: "tsl_hit" | "trajectory_collapse" | "time_stop" | "profit_take" | "user_manual" = "trajectory_collapse";
+
+        if (exitDecision.reason.includes("TSL")) exitReason = "tsl_hit";
+        else if (exitDecision.reason.includes("Trajectory")) exitReason = "trajectory_collapse";
+        else if (exitDecision.reason.includes("Time")) exitReason = "time_stop";
+
+        const exitResult = await exitPosition(userId, position.id, snapshot.priceUsd, exitReason);
+        console.log(`[SnapshotDispatcher] EXIT: ${snapshot.tokenSymbol} - ${exitResult.message}`);
+      }
+    } else {
+      // OPEN DECISION: Check if we should open a new position
+      const budget = await db
+        .select()
+        .from(positionBudgets)
+        .where(eq(positionBudgets.userId, userId))
+        .limit(1);
+
+      const baseAllocationPerPosition = budget.length > 0
+        ? budget[0].baseAllocationPerPosition || 0.1
+        : 0.1;
+      const apeBudget = budget.length > 0
+        ? budget[0].apeBudget || 0
+        : 0;
+
+      const openDecision = await evaluateOpenNewPosition(
+        userId,
+        snapshot.tokenMint,
+        snapshot.tokenSymbol,
+        snapshot.priceUsd,
+        snapshot.priceUsd,
+        clusterResult.matches.map(m => ({ cluster: m.clusterId, confidence: m.similarity, trajectoryScore })),
+        aggregateConfidence,
+        trajectoryScore,
+        currentBalance,
+        baseAllocationPerPosition,
+        apeBudget,
+        clusterType
+      );
+
+      if (openDecision.opened) {
+        console.log(`[SnapshotDispatcher] OPEN: ${snapshot.tokenSymbol} - ${openDecision.reason}`);
+        console.log(`  Allocation: ${openDecision.allocationSol?.toFixed(6)} SOL`);
+      } else {
+        console.log(`[SnapshotDispatcher] SKIP: ${snapshot.tokenSymbol} - ${openDecision.reason}`);
+      }
+    }
+
+    // Update token leaderboard with trajectory score
+    try {
+      const { updateTokenLeaderboard } = await import("./token-trajectory-scoring");
+      const snapshotCount = (fullSnapshot.snapshotCount || 1) as number;
+      const ageSeconds = Math.floor(Date.now() / 1000) - (fullSnapshot.capturedAt || 0);
+      const ageMinutes = Math.max(1, ageSeconds / 60);
+      const freshness = Math.max(0, Math.min(1.0, 1.0 - (ageMinutes / (72 * 60)))); // Decays over 72h
+
+      await updateTokenLeaderboard(
+        snapshot.tokenMint,
+        snapshot.tokenSymbol,
+        clusterResult.blendedOutcomes,
+        snapshotCount,
+        snapshot.priceUsd,
+        freshness
+      );
+    } catch (err) {
+      console.warn("[SnapshotDispatcher] Failed to update token leaderboard:", err instanceof Error ? err.message : err);
+    }
   } catch (err) {
-    console.error("[SnapshotDispatcher] Error in snapshot event handler:", err);
+    console.error("[SnapshotDispatcher] Error in snapshot event handler:", err instanceof Error ? err.message : err);
   }
 }
 
