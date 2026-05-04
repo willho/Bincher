@@ -4958,6 +4958,6 @@ export const proxyConfigs = pgTable("proxy_configs", {
   index("idx_chainstack_url_hash").on(table.chainstackUrlHash),
 ]);
 
-export const insertProxyConfigSchema = createInsertSchema(proxyConfigs).omit({ id: true, createdAt: true });
+export const insertProxyConfigSchema = createInsertSchema(proxyConfigs).omit({ id: true, createdAt: true, updatedAt: true });
 export type ProxyConfig = typeof proxyConfigs.$inferSelect;
 export type InsertProxyConfig = z.infer<typeof insertProxyConfigSchema>;
