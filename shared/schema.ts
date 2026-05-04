@@ -43,7 +43,12 @@ export const users = pgTable("users", {
   smtpConfig: jsonb("smtp_config"), // { host, port, user, pass } for SMTP provider
   // Onboarding state
   onboardingCompleted: boolean("onboarding_completed").default(false),
-  
+
+  // Warm-up period for auto-trading (7-day data collection before enabling)
+  warmupStartedAt: integer("warmup_started_at"), // Timestamp when warm-up started
+  warmupEnabledAt: integer("warmup_enabled_at"), // Timestamp when 7-day period completes
+  autoTradingEnabled: boolean("auto_trading_enabled").default(false), // Can only be true after warmupEnabledAt
+
   // Security settings
   withdrawalPinHash: text("withdrawal_pin_hash"), // Hashed 4-6 digit PIN
   pinMode: text("pin_mode").default("withdrawals_only"), // "withdrawals_only" | "all_trades" | "threshold"

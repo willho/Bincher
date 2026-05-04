@@ -35,6 +35,7 @@ export async function initializePositionManagement(): Promise<void> {
 async function initializeSystemAccountBudget(): Promise<void> {
   const systemUserId = 1; // System picks fund account
   const { getHotWalletBalance } = await import("./wallet");
+  const { startWarmupPeriod, getWarmupStatus } = await import("./warmup-gate");
 
   try {
     // Get actual wallet balance for system account
@@ -46,6 +47,20 @@ async function initializeSystemAccountBudget(): Promise<void> {
     // Calculate and store budget forecast
     await updatePositionBudgetForecast(systemUserId, currentBalance, initialBalance);
     console.log(`[PositionManagement] Budget forecast initialized for user ${systemUserId}`);
+
+    // Initialize warm-up period if not already started
+    const warmupStatus = await getWarmupStatus(systemUserId);
+    if (!warmupStatus.isWarmingUp && !warmupStatus.isComplete) {
+      await startWarmupPeriod(systemUserId);
+    } else if (warmupStatus.isWarmingUp) {
+      console.log(
+        `[PositionManagement] Warm-up already in progress: ${warmupStatus.daysRemaining} days remaining (${warmupStatus.percentComplete}% complete)`
+      );
+    } else if (warmupStatus.isComplete) {
+      console.log(
+        `[PositionManagement] Warm-up period complete! Auto-trading can be enabled via /api/warmup/enable endpoint`
+      );
+    }
   } catch (err) {
     console.warn("[PositionManagement] Could not get wallet balance, will use defaults:", err instanceof Error ? err.message : err);
     // Fallback: initialize with safe defaults

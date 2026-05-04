@@ -3,6 +3,7 @@ import { activePositions, tokenSnapshots, positionBudgets } from "@shared/schema
 import { eq, desc, isNull, and } from "drizzle-orm";
 import { calculateAllocation } from "./position-allocator";
 import { getLearnedParameters, getDefaultTsl, getDefaultTrajectoryThreshold } from "./retrolearner-phase-d";
+import { isAutoTradingEnabled } from "./warmup-gate";
 
 interface SnapshotForDispatch {
   id: number;
@@ -97,46 +98,55 @@ export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<
       }
     } else {
       // OPEN DECISION: Check if we should open a new position
-      const budget = await db
-        .select()
-        .from(positionBudgets)
-        .where(eq(positionBudgets.userId, userId))
-        .limit(1);
 
-      const baseAllocationPerPosition = budget.length > 0
-        ? budget[0].baseAllocationPerPosition || 0.1
-        : 0.1;
-      const apeBudget = budget.length > 0
-        ? budget[0].apeBudget || 0
-        : 0;
-
-      // Estimate current balance from budget forecast data
-      // baseAllocationPerPosition = currentBalance / (expectedPositionsPerDay * 1.2)
-      // So: currentBalance ≈ baseAllocationPerPosition * expectedPositionsPerDay * 1.2
-      const expectedPosPerDay = budget.length > 0
-        ? budget[0].expectedPositionsPerDay || 10
-        : 10;
-      const currentBalance = baseAllocationPerPosition * expectedPosPerDay * 1.2;
-
-      const openDecision = await evaluateOpenNewPosition(
-        userId,
-        snapshot.tokenMint,
-        snapshot.tokenSymbol,
-        snapshot.priceUsd,
-        snapshot.priceUsd,
-        clusterResult.matches.map(m => ({ cluster: m.clusterId, confidence: m.similarity, trajectoryScore })),
-        aggregateConfidence,
-        trajectoryScore,
-        currentBalance,
-        baseAllocationPerPosition,
-        apeBudget
-      );
-
-      if (openDecision.opened) {
-        console.log(`[SnapshotDispatcher] OPEN: ${snapshot.tokenSymbol} - ${openDecision.reason}`);
-        console.log(`  Allocation: ${openDecision.allocationSol?.toFixed(6)} SOL`);
+      // Check warm-up gate first
+      const autoTradingEnabled = await isAutoTradingEnabled(userId);
+      if (!autoTradingEnabled) {
+        console.log(
+          `[SnapshotDispatcher] SKIP: ${snapshot.tokenSymbol} - Auto-trading disabled (warm-up period in progress)`
+        );
       } else {
-        console.log(`[SnapshotDispatcher] SKIP: ${snapshot.tokenSymbol} - ${openDecision.reason}`);
+        const budget = await db
+          .select()
+          .from(positionBudgets)
+          .where(eq(positionBudgets.userId, userId))
+          .limit(1);
+
+        const baseAllocationPerPosition = budget.length > 0
+          ? budget[0].baseAllocationPerPosition || 0.1
+          : 0.1;
+        const apeBudget = budget.length > 0
+          ? budget[0].apeBudget || 0
+          : 0;
+
+        // Estimate current balance from budget forecast data
+        // baseAllocationPerPosition = currentBalance / (expectedPositionsPerDay * 1.2)
+        // So: currentBalance ≈ baseAllocationPerPosition * expectedPositionsPerDay * 1.2
+        const expectedPosPerDay = budget.length > 0
+          ? budget[0].expectedPositionsPerDay || 10
+          : 10;
+        const currentBalance = baseAllocationPerPosition * expectedPosPerDay * 1.2;
+
+        const openDecision = await evaluateOpenNewPosition(
+          userId,
+          snapshot.tokenMint,
+          snapshot.tokenSymbol,
+          snapshot.priceUsd,
+          snapshot.priceUsd,
+          clusterResult.matches.map(m => ({ cluster: m.clusterId, confidence: m.similarity, trajectoryScore })),
+          aggregateConfidence,
+          trajectoryScore,
+          currentBalance,
+          baseAllocationPerPosition,
+          apeBudget
+        );
+
+        if (openDecision.opened) {
+          console.log(`[SnapshotDispatcher] OPEN: ${snapshot.tokenSymbol} - ${openDecision.reason}`);
+          console.log(`  Allocation: ${openDecision.allocationSol?.toFixed(6)} SOL`);
+        } else {
+          console.log(`[SnapshotDispatcher] SKIP: ${snapshot.tokenSymbol} - ${openDecision.reason}`);
+        }
       }
     }
 
