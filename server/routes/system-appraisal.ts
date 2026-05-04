@@ -21,11 +21,11 @@ const router = Router();
  */
 router.get("/api/system-appraisal", async (req, res) => {
   try {
-    // Check auth token (allow with query param or from env)
-    const token = req.query.token as string;
-    const validToken = process.env.APPRAISAL_TOKEN || "debug";
-    if (token !== validToken) {
-      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    // Auth: passkey required for access
+    const passkey = req.query.passkey as string;
+    const validPasskey = process.env.APPRAISAL_PASSKEY || "debug";
+    if (passkey !== validPasskey) {
+      return res.status(401).json({ error: "Unauthorized - provide ?passkey=..." });
     }
 
     const systemUserId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
@@ -154,10 +154,10 @@ router.get("/api/system-appraisal", async (req, res) => {
  */
 router.get("/api/system-appraisal/cluster-learning", async (req, res) => {
   try {
-    const token = req.query.token as string;
-    const validToken = process.env.APPRAISAL_TOKEN || "debug";
-    if (token !== validToken) {
-      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    const passkey = req.query.passkey as string;
+    const validPasskey = process.env.APPRAISAL_PASSKEY || "debug";
+    if (passkey !== validPasskey) {
+      return res.status(401).json({ error: "Unauthorized - provide ?passkey=..." });
     }
 
     const systemUserId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
@@ -209,10 +209,10 @@ router.get("/api/system-appraisal/cluster-learning", async (req, res) => {
  */
 router.get("/api/system-appraisal/discovery-patterns", async (req, res) => {
   try {
-    const token = req.query.token as string;
-    const validToken = process.env.APPRAISAL_TOKEN || "debug";
-    if (token !== validToken) {
-      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    const passkey = req.query.passkey as string;
+    const validPasskey = process.env.APPRAISAL_PASSKEY || "debug";
+    if (passkey !== validPasskey) {
+      return res.status(401).json({ error: "Unauthorized - provide ?passkey=..." });
     }
 
     const systemUserId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
@@ -275,10 +275,10 @@ router.get("/api/system-appraisal/discovery-patterns", async (req, res) => {
  */
 router.get("/api/system-appraisal/fingerprint-quality", async (req, res) => {
   try {
-    const token = req.query.token as string;
-    const validToken = process.env.APPRAISAL_TOKEN || "debug";
-    if (token !== validToken) {
-      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    const passkey = req.query.passkey as string;
+    const validPasskey = process.env.APPRAISAL_PASSKEY || "debug";
+    if (passkey !== validPasskey) {
+      return res.status(401).json({ error: "Unauthorized - provide ?passkey=..." });
     }
 
     const snapshots = await db.select().from(tokenFingerprintSnapshots);
