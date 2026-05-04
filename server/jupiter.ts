@@ -580,6 +580,47 @@ export async function cleanupOldSolPrices(maxAgeDays: number = 14): Promise<numb
   }
 }
 
+/**
+ * Get SOL price at any historical timestamp with multi-source fallback:
+ * 1. Check 14-day local database (most reliable)
+ * 2. Fallback to Binance API (hourly kline data, no limits)
+ * 3. Binance caches 1000 most recent lookups in memory
+ */
+export async function getSolPriceAtTime(timestampSeconds: number): Promise<number | null> {
+  // Check if timestamp is within 14-day window
+  const now = Math.floor(Date.now() / 1000);
+  const fourteenDaysAgo = now - (14 * 86400);
+
+  if (timestampSeconds >= fourteenDaysAgo) {
+    // Try local database first (most reliable)
+    try {
+      const { db } = await import("./db");
+      const { solPriceHistory } = await import("@shared/schema");
+      const { gte, lte, desc } = await import("drizzle-orm");
+
+      // Find closest recorded price within ±1 hour
+      const result = await db.select()
+        .from(solPriceHistory)
+        .where(
+          gte(solPriceHistory.recordedAt, timestampSeconds - 3600)
+          && lte(solPriceHistory.recordedAt, timestampSeconds + 3600)
+        )
+        .orderBy(desc(solPriceHistory.recordedAt))
+        .limit(1);
+
+      if (result.length > 0) {
+        return result[0].priceUsd;
+      }
+    } catch (err) {
+      console.warn("[SolPrice] Local lookup failed:", err);
+      // Fall through to Binance
+    }
+  }
+
+  // Fallback: Binance API (works for any historical date)
+  return getHistoricalSolPrice(timestampSeconds);
+}
+
 export interface BatchPriceResult {
   tokenMint: string;
   price: number | null;
