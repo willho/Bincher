@@ -38,6 +38,27 @@ function setSolPriceCache(price: number | null): void {
   solPriceCache.cachedAt = Date.now();
   if (price) {
     console.log(`[SolPrice] Updated cache: $${price.toFixed(2)}`);
+    // Record to database asynchronously (non-blocking)
+    recordSolPriceToHistory(price).catch(err => {
+      console.warn("[SolPrice] Failed to record price to history:", err);
+    });
+  }
+}
+
+async function recordSolPriceToHistory(price: number): Promise<void> {
+  try {
+    const { db } = await import("./db");
+    const { solPriceHistory } = await import("@shared/schema");
+    const now = Math.floor(Date.now() / 1000);
+
+    await db.insert(solPriceHistory).values({
+      priceUsd: price,
+      recordedAt: now,
+      source: "dexscreener",
+      createdAt: now,
+    });
+  } catch (err) {
+    console.warn("[SolPrice] Database insert failed:", err);
   }
 }
 
@@ -538,6 +559,25 @@ export async function getSolPrice(): Promise<number | null> {
     setSolPriceCache(solPrice);
   }
   return solPrice;
+}
+
+export async function cleanupOldSolPrices(maxAgeDays: number = 14): Promise<number> {
+  try {
+    const { db } = await import("./db");
+    const { solPriceHistory } = await import("@shared/schema");
+    const { lt } = await import("drizzle-orm");
+
+    const cutoffTime = Math.floor(Date.now() / 1000) - (maxAgeDays * 86400);
+
+    const result = await db.delete(solPriceHistory)
+      .where(lt(solPriceHistory.recordedAt, cutoffTime));
+
+    console.log(`[SolPrice] Cleaned up SOL price history older than ${maxAgeDays} days`);
+    return 0; // Drizzle doesn't return affected rows for delete in all engines
+  } catch (err) {
+    console.error("[SolPrice] Failed to cleanup old prices:", err);
+    return 0;
+  }
 }
 
 export interface BatchPriceResult {

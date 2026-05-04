@@ -730,6 +730,17 @@ export const tokenSnapshots = pgTable("token_snapshots", {
   outcomeUpdatedAt: integer("outcome_updated_at"),
 });
 
+// SOL price history - keep last 14 days for market context analysis
+export const solPriceHistory = pgTable("sol_price_history", {
+  id: serial("id").primaryKey(),
+  priceUsd: real("price_usd").notNull(),
+  recordedAt: integer("recorded_at").notNull(), // Unix timestamp
+  source: text("source").default("dexscreener"), // Where price came from
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_sol_price_recorded_at").on(table.recordedAt),
+]);
+
 // Price aggregates - OHLC+ data with tiered retention for pattern analysis
 // Tiers: 15min, hourly, daily, weekly - older data gets rolled up
 export const priceAggregates = pgTable("price_aggregates", {
