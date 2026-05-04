@@ -4,6 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import cookieParser from "cookie-parser";
 import positionRoutes from "./routes/position-routes";
 import { storage } from "./storage";
+import { parseSwapFromWebhook, createWebhook, deleteWebhook, getWebhooks, fetchTokenMetadata, getWebhookUrl, updateWebhookUrl, getSwapWalletAddress, isBaseCurrency, isBaseCurrencySymbol, fetchWalletTokenHoldings, cleanupStaleWebhooks, fetchWalletSwapHistory, SOL_MINT } from "./helius";
 import { sendSwapNotification, sendPasswordResetEmail } from "./email";
 import type { HeliusWebhookPayload } from "@shared/schema";
 import {
@@ -707,6 +708,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No wallets to monitor. Add a wallet first." });
       }
 
+      const { addSignalWallet, syncWebhookAddresses, getUnifiedWebhookId } = await import("./unified-webhook");
       for (const addr of walletAddresses) {
         addSignalWallet(addr);
       }
@@ -729,6 +731,7 @@ export async function registerRoutes(
   // Stop monitoring
   app.post("/api/monitoring/stop", async (req, res) => {
     try {
+      const { removeSignalWallet, getTrackedAddressesByType, syncWebhookAddresses } = await import("./unified-webhook");
       const signalWallets = getTrackedAddressesByType("signal_wallet");
       for (const addr of signalWallets) {
         removeSignalWallet(addr);
@@ -770,6 +773,7 @@ export async function registerRoutes(
         }
 
         // Extract wallet address that made the swap (check all payload fields against registry)
+        const { routeWebhookEvent } = await import("./unified-webhook");
         const isTracked = (addr: string) => routeWebhookEvent(addr) !== null;
         const swapWalletAddress = getSwapWalletAddress(payload, isTracked);
         if (!swapWalletAddress) {
@@ -4968,6 +4972,7 @@ export async function registerRoutes(
     };
 
     try {
+      const { addSignalWallet, syncWebhookAddresses, getUnifiedWebhookId, getRegistryStats } = await import("./unified-webhook");
       const wallets = await storage.getAllWalletsAdmin();
       const walletAddresses = wallets.filter((w: { enabled: boolean; walletAddress: string }) => w.enabled).map((w: { walletAddress: string }) => w.walletAddress);
       
@@ -9420,6 +9425,7 @@ function startMonitoringRetryLoop() {
   console.log("[Monitoring] Starting background retry (every 5min) until unified webhook is created");
   monitoringRetryTimer = setInterval(async () => {
     try {
+      const { getUnifiedWebhookId, syncWebhookAddresses } = await import("./unified-webhook");
       if (getUnifiedWebhookId()) {
         console.log("[Monitoring] Unified webhook now active, stopping background retry");
         if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
@@ -9452,6 +9458,7 @@ async function restoreMonitoring() {
     const walletAddresses = allWallets.filter(w => w.enabled).map(w => w.walletAddress);
     const uniqueAddresses = [...new Set(walletAddresses)];
 
+    const { initializeUnifiedWebhook, getUnifiedWebhookId, getRegistryStats } = await import("./unified-webhook");
     const existingUnifiedId = getUnifiedWebhookId() || status.webhookId;
     await initializeUnifiedWebhook(uniqueAddresses, existingUnifiedId || undefined);
     

@@ -8,7 +8,6 @@ import { trackApiCall, shouldAllowApiCall, getBudgetStatus } from "./api-budget"
 import { recordAISuccess, recordAIFailure, isAIAvailable, getFallbackMessage } from "./ai-health";
 import { logAiUsage } from "./system-logger";
 import { getHoldersCached } from "./price-aggregator";
-import { fetchTokenMetadata } from "./helius";
 import { buyToken, sellToken, getTokenPrice } from "./jupiter";
 import { getHotWalletBalance, getTradeConfig, updateTradeConfig, getHoldings, getPendingBuys, getOrCreateHotWallet } from "./wallet";
 import { checkTradeAllowed, getSecuritySettings } from "./security";
@@ -6090,7 +6089,6 @@ export async function getAIInsights(): Promise<{
 }
 
 // Wallet scoring for community suggestions
-import { analyzeWalletTradingHistory, type HistoricalSwap } from "./helius";
 
 export interface WalletScoreResult {
   score: number;
