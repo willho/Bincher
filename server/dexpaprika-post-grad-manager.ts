@@ -13,9 +13,12 @@ import { eq } from "drizzle-orm";
  * 3. Immediately subscribes to DexPaprika SSE for trades
  * 4. Circuit breaker handles reconnects with exponential backoff
  *
+ * Capacity: 4,000 simultaneous subscriptions per server
+ * With 3 servers × 2/3 overlap = 6,000 unique tokens covered
  * Rate limit: 200 req/min (max 10k/day)
- * With 3 servers × 1.5x data = ~6.5k subscriptions/day (under limit)
  */
+
+const MAX_DEXPAPRIKA_SUBSCRIPTIONS = 4000; // Capacity per server (covers 2/3 of 6k token target)
 
 export interface GraduatedToken {
   tokenMint: string;
@@ -44,6 +47,17 @@ export class DexPaprikaPostGradManager extends EventEmitter {
     poolAddress: string
   ): Promise<void> {
     try {
+      // Check capacity first - deathbed lowest-quality token if at limit
+      if (this.subscriptionMap.size >= MAX_DEXPAPRIKA_SUBSCRIPTIONS) {
+        const deathbedToken = this.findLowestQualitySubscription();
+        if (deathbedToken) {
+          await this.unsubscribe(deathbedToken);
+          console.log(
+            `[DexPaprikaPostGradManager] Deathbedded ${deathbedToken} to make room for ${tokenMint}`
+          );
+        }
+      }
+
       // Check rate limit
       if (!this.rateLimiter.canMakeRequest()) {
         console.warn(
@@ -281,6 +295,31 @@ export class DexPaprikaPostGradManager extends EventEmitter {
       this.circuitBreakers.set(tokenMint, new CircuitBreaker());
     }
     return this.circuitBreakers.get(tokenMint)!;
+  }
+
+  /**
+   * Find lowest-quality subscription for deathbedding (oldest/least active)
+   */
+  private findLowestQualitySubscription(): string | null {
+    if (this.subscriptionMap.size === 0) return null;
+
+    let lowestToken: string | null = null;
+    let lowestScore = Infinity;
+
+    for (const [tokenMint, subData] of this.subscriptionMap.entries()) {
+      const ageSeconds = Math.floor(Date.now() / 1000) - subData.subscribedAt;
+      const failureCount = this.circuitBreakers.get(tokenMint)?.getConsecutiveFailures?.() || 0;
+
+      // Score: older tokens + higher failure rate = better candidates for deathbedding
+      const score = ageSeconds + failureCount * 1000;
+
+      if (score < lowestScore) {
+        lowestScore = score;
+        lowestToken = tokenMint;
+      }
+    }
+
+    return lowestToken;
   }
 
   /**

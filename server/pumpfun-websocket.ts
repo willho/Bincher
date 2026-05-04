@@ -71,7 +71,7 @@ const SUBSCRIPTION_BATCH_SIZE = 100; // Add 100 tokens per batch
 const SUBSCRIPTION_BATCH_INTERVAL_MS = 1000 / SAFE_SUBSCRIPTIONS_PER_SECOND * SUBSCRIPTION_BATCH_SIZE; // ~667ms
 
 // Monitoring constants
-const MAX_SUBSCRIBED_TOKENS = 150; // Reasonable limit for single connection
+const MAX_SUBSCRIBED_TOKENS = 5000; // Increased from 150 to match PumpPortal practical capacity (6k total across 3 servers)
 const DEAD_TOKEN_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const LOW_VOLUME_THRESHOLD = 100; // Last 30 min volume < $100
 const PRICE_DECAY_THRESHOLD = 0.00000001; // Token effectively dead
