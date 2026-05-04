@@ -5100,3 +5100,22 @@ export const clusterLearnings = pgTable("cluster_learnings", {
 export const insertClusterLearningSchema = createInsertSchema(clusterLearnings).omit({ id: true, createdAt: true, updatedAt: true });
 export type ClusterLearning = typeof clusterLearnings.$inferSelect;
 export type InsertClusterLearning = z.infer<typeof insertClusterLearningSchema>;
+
+// Proxy Configuration - Metadata for proxy servers in 3-proxy mesh
+export const proxyConfigs = pgTable("proxy_configs", {
+  id: serial("id").primaryKey(),
+  proxyName: text("proxy_name").notNull().unique(), // "proxy-1", "proxy-2", etc.
+  outboundIp: text("outbound_ip").notNull(), // Public IP for rate limit multiplying
+  port: integer("port").notNull(), // Listen port
+  status: text("status").default("idle"), // "idle" | "healthy" | "degraded" | "unhealthy"
+  shyftKeyHash: text("shyft_key_hash").notNull(), // SHA-256(key) for conflict detection
+  chainstackUrlHash: text("chainstack_url_hash").notNull(), // SHA-256(url) for conflict detection
+  lastSeenAt: integer("last_seen_at"), // Last registration ping
+  healthCheckLatency: integer("health_check_latency"), // ms
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at"),
+});
+
+export const insertProxyConfigSchema = createInsertSchema(proxyConfigs).omit({ id: true, createdAt: true, updatedAt: true });
+export type ProxyConfig = typeof proxyConfigs.$inferSelect;
+export type InsertProxyConfig = z.infer<typeof insertProxyConfigSchema>;
