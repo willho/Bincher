@@ -1,0 +1,99 @@
+What about watch bonk hardesst then wif
+
+Tiered priority. She manages a ranked list:
+
+Priority Queue
+User: "Watch BONK hardest, then WIF"
+Pincher: "Alright. BONK gets the stare, WIF gets 
+the side-eye, everything else gets whatever's left. 
+Your other three are on autopilot unless they 
+start screaming.
+Just so we're clear:
+1. BONK - full attention
+2. WIF - checking often  
+3. Rest - lazy glances
+That the order you want?"
+How It Works
+Rank	Check frequency	AI analysis
+#1 Priority	Every tick	Every batch
+#2 Priority	Every other tick	Most batches
+#3 Priority	Normal	When hot
+Unranked	Normal	When hot
+Ignored	Slow	Never
+User Adjusts Ranking
+User: "Actually WIF first now"
+Pincher: "Musical chairs. WIF takes the throne, 
+BONK slides to second. Done."
+User: "What's my priority order?"
+Pincher: "Right now? 
+1. WIF - your current obsession
+2. BONK - still watching
+3. The rest - fending for themselves
+Want to shuffle?"
+She manages a simple ranked list, explains trade-offs, shuffles on command.
+
+Whats about something like i can check bonk every 40 sec for the next hour.
+
+Time-limited priority. Smart for active plays:
+
+Temporary Priority
+User: "Check BONK every 40 sec for the next hour"
+Pincher: "Intense hour incoming. I'll be on BONK 
+like a barnacle. After that, back to normal.
+Your other tokens get neglected while I'm doing 
+this. If something pops off elsewhere, might miss 
+the first move. You okay with that for an hour?"
+How It Works
+priority_overrides
+├── user_id
+├── token
+├── check_interval (seconds)
+├── expires_at (timestamp)
+├── reason ("user requested")
+When expired → falls back to normal heat-based checks.
+
+Examples
+User: "Watch WIF tight for 30 minutes"
+Pincher: "30 minute stakeout. Got it. I'll let you 
+know when I'm back to lazy mode."
+*30 min later*
+Pincher: "WIF watch is over. Back to normal. 
+Nothing happened, by the way. Riveting stuff."
+User: "Pump coming, watch everything fast for 20 min"
+Pincher: "All hands on deck for 20 minutes. 
+This'll burn some API budget but I'll catch 
+anything that twitches. Let's see what you know."
+Temporary focus, auto-expires, she reports when it ends.
+
+Whats actual timeframes are reasonable if a user is given a budget of $1 a day in replit ai usage
+
+Let me check the Replit AI pricing to give you accurate numbers.
+
+Replit passes through provider pricing. For GPT-4o-mini:
+
+Cost Breakdown
+Activity	Tokens (~)	Cost
+Single Pincher response	~500-1000	~$0.001
+Batch analysis (5 tokens)	~2000	~$0.003
+Magic alert evaluation	~1500	~$0.002
+$1/day Budget
+~500-700 AI interactions per day
+Realistic Allocations
+Activity	Budget	Gets you
+User chat	$0.30	~200 messages
+Batch analysis (every 15 min)	$0.30	~96 checks
+Magic alerts	$0.20	~100 evaluations
+Alert generation	$0.10	~50 new alerts
+Buffer	$0.10	Headroom
+What This Means for Checks
+Normal mode:
+
+30 sec price checks (no AI) = unlimited
+AI batch analysis every 15 min = fine
+Priority boost mode:
+
+AI analysis every 5 min on priority token = burns ~$0.05/hour
+"Watch tight for 1 hour" = ~$0.05
+5 users at $1/day each = $5/day total
+
+Plenty for active trading with magic alerts. Just don't run AI on every tick.

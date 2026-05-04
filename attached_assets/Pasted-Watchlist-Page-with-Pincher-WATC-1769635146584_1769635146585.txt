@@ -1,0 +1,60 @@
+Watchlist Page with Pincher
+┌─────────────────────────────────────────────────────────────┐
+│ WATCHLIST                                          [+ Add]  │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ whale.sol                           Copy: [ON ▼]        │ │
+│ │ Win rate: 72% | Avg hold: 4hr | Style: Quick flipper   │ │
+│ │ Last trade: BONK +340%                    [Settings ⚙️] │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│                                                             │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ degen.sol                           Copy: [OFF]         │ │
+│ │ Win rate: 41% | Avg hold: 12min | Style: Degen ape     │ │
+│ │ Last trade: RUG -100%                     [Settings ⚙️] │ │
+│ └─────────────────────────────────────────────────────────┘ │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│ 🦀 Miss Pincher                                             │
+│                                                             │
+│ "whale.sol has been on fire lately - 5 wins in a row.      │
+│  Want me to bump your buy size for their trades?"          │
+│                                                             │
+│ [Chat input...]                                             │
+└─────────────────────────────────────────────────────────────┘
+What Pincher Helps With
+Who to copy:
+
+User asks	Pincher responds
+"Who's hot right now?"	Ranks watchlist by recent performance
+"Who should I trust with bigger buys?"	Highlights consistent winners
+"Anyone I should stop copying?"	Flags losing streaks, rug victims
+When to copy:
+
+User asks	Pincher responds
+"Should I copy this wallet's memecoins?"	Analyzes their memecoin track record
+"Only copy their big bets?"	Suggests min buy threshold filter
+"Skip their late entries?"	Suggests "first 5 min only" rule
+How to copy:
+
+User asks	Pincher responds
+"Match their energy"	Sets archetype based on wallet's trading style
+"Play it safer than them"	Applies tighter stops, smaller position
+"Go harder"	Increases buy size, loosens targets
+Per-Wallet Settings Panel
+┌────────────────────────┬────────────────────────┐
+│ whale.sol Settings     │ 🦀 Pincher             │
+├────────────────────────┤                        │
+│ Copy: [ON]             │ "This one's a quick    │
+│ Buy amount: [0.5 SOL]  │  flipper - usually out │
+│ Strategy: [Quick Flip] │  within an hour. Want  │
+│                        │  me to match that?"    │
+│ Filters:               │                        │
+│ ☑ Only if MC < $100k   │ [Yes, match them]      │
+│ ☐ First 5 min only     │ [No, I'll hold longer] │
+│ ☐ Skip memecoins       │                        │
+└────────────────────────┴────────────────────────┘
+Pincher analyzes the wallet's history and suggests matching settings.
+
+Could pincher generate new filters?

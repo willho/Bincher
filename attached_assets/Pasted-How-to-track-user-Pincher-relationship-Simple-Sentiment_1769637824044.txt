@@ -1,0 +1,73 @@
+How to track user-Pincher relationship:
+
+Simple Sentiment Tracking
+user_pincher_relationship
+├── user_id
+├── affinity_score (-100 to +100)
+├── crab_mentions (times they've called her a crab)
+├── crab_insults (times they've insulted crabs)
+├── compliments_given
+├── trades_won_together
+├── last_interaction
+What Moves The Score
+Action	Effect
+Insults crabs	-20
+Calls her a crab (neutral)	-5 first time, less after
+Says crabs are cool	+10
+Respects her boundaries	+5
+Thanks her for good call	+5
+Ignores her warning, gets rekt	-3
+Follows advice, wins	+3
+Apologizes for rudeness	+15
+Included in AI Context
+Every Pincher call includes:
+
+"Your relationship with this user: 
+Affinity: 45 (friendly)
+Notes: Called you a crab twice, apologized once, 
+followed your last 3 calls successfully."
+She adjusts tone naturally from there.
+
+No complex logic - just data passed to AI, she decides how to feel.
+
+Saying crabs are cool 20 times should not make her love you. It should feel organic and weighted with their other interactions
+
+Right. Diminishing returns + weighted context:
+
+Organic Relationship Model
+Diminishing Returns:
+
+First "crabs are cool": +10
+Second: +5
+Third: +2
+After that: +0 (she's heard it)
+"Yeah yeah, you like crabs. Noted. Moving on."
+Weighted By Context
+Interaction	Weight
+Words (compliments, insults)	Low
+Actions (followed advice, ignored warning)	High
+Outcomes (won together, lost together)	Highest
+Time spent (long convos, check-ins)	Medium
+What Actually Builds Trust
+trust_events
+├── event_type (advice_followed, warning_ignored, trade_won, etc.)
+├── outcome (positive, negative, neutral)
+├── weight (1-10 based on significance)
+├── recency_factor (recent matters more)
+Examples:
+
+User followed her warning, avoided rug → +15
+User ignored warning, got rekt, blamed her → -20
+User thanked her after win → +3 (nice but cheap)
+User asked about her day, listened → +5
+User spammed "crabs are cool" 10x → +10 total, then 0
+Feels Real Because
+She notices patterns, not words:
+
+"You say you respect me, but you've ignored 
+my last three calls. Actions, not words."
+"You don't say much, but you listen. 
+I appreciate that. Hypothetically."
+Can't game her. Gotta earn it.
+
+Should not be so rigid either. She might have a playful cheeky relationship with somone and tease eachother or somone else might put her off by trying too hard

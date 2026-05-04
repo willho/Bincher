@@ -1,0 +1,43 @@
+Copytrade parameters can be a bit more robust. Something like sell 10% at 10x then they push an add button to add the next instruction sell 20% if price moves 20% in 5 mins. Then they press add button to add next instrution sell 4x initial buy at 9x since last sell. How to make this simple and user friendly
+
+This is a rule builder pattern. Here's how to make it approachable:
+
+Strategy Builder UI
+Visual "recipe" style - each rule is a card:
+
+┌─────────────────────────────────────────────────┐
+│  📋 Sell Strategy                               │
+├─────────────────────────────────────────────────┤
+│                                                 │
+│  ┌─────────────────────────────────────────┐   │
+│  │ 1. Sell [10%] when price hits [10x]     │ ✕ │
+│  └─────────────────────────────────────────┘   │
+│                                                 │
+│  ┌─────────────────────────────────────────┐   │
+│  │ 2. Sell [20%] if [20%] move in [5 min]  │ ✕ │
+│  └─────────────────────────────────────────┘   │
+│                                                 │
+│  ┌─────────────────────────────────────────┐   │
+│  │ 3. Sell [4x initial] at [9x] since last │ ✕ │
+│  └─────────────────────────────────────────┘   │
+│                                                 │
+│           [+ Add Rule]                          │
+│                                                 │
+└─────────────────────────────────────────────────┘
+Rule Types (Dropdown)
+When clicking "Add Rule", user picks from simple templates:
+
+Rule Type	User Fills In
+Price Target	Sell []% at []x gain
+Quick Pump	Sell []% if []% move in [__] mins
+Scaled Exit	Sell []x initial at []x since last sell
+Stop Loss	Sell []% if drops []%
+Trailing Stop	Sell all if drops [__]% from peak
+Key UX Principles
+Plain language - "Sell 10% when price hits 10x" not "trigger_percent: 10, multiplier: 10"
+Drag to reorder - Rules execute top to bottom
+Preview - Show a simple chart visualization of when sells would trigger
+Presets - "Conservative", "Aggressive", "Moon bag" templates they can start from
+Want me to detail the data structure behind this?
+
+What about sell 10% every 10x
