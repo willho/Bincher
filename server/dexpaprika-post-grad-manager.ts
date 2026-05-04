@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { db } from "./db";
 import { serverSubscriptions } from "../shared/schema";
 import { eq } from "drizzle-orm";
+import { recordRotation, recordSubscriptionSnapshot } from "./subscription-telemetry";
 
 /**
  * DexPaprika Post-Grad Manager
@@ -51,7 +52,15 @@ export class DexPaprikaPostGradManager extends EventEmitter {
       if (this.subscriptionMap.size >= MAX_DEXPAPRIKA_SUBSCRIPTIONS) {
         const deathbedToken = this.findLowestQualitySubscription();
         if (deathbedToken) {
+          // Get quality score for telemetry
+          const subData = this.subscriptionMap.get(deathbedToken);
+          const ageSeconds = Math.floor(Date.now() / 1000) - (subData?.subscribedAt || 0);
+          const failureCount = this.circuitBreakers.get(deathbedToken)?.getConsecutiveFailures?.() || 0;
+          const qualityScore = ageSeconds + failureCount * 1000;
+
           await this.unsubscribe(deathbedToken);
+          recordRotation("dex_paprika", "capacity_limit", deathbedToken, deathbedToken, qualityScore);
+
           console.log(
             `[DexPaprikaPostGradManager] Deathbedded ${deathbedToken} to make room for ${tokenMint}`
           );
@@ -91,6 +100,9 @@ export class DexPaprikaPostGradManager extends EventEmitter {
           subscribedAt: Math.floor(Date.now() / 1000),
           status: "active",
         });
+
+        // Record subscription snapshot for telemetry
+        recordSubscriptionSnapshot("dex_paprika", this.subscriptionMap.size);
 
         console.log(
           `[DexPaprikaPostGradManager] Subscribed to post-grad trades: ${tokenMint} @ ${poolAddress}`

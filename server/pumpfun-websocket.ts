@@ -17,6 +17,7 @@ import { db } from "./db";
 import { eq, desc, lt } from "drizzle-orm";
 import { tokenDataPool } from "@shared/schema";
 import { isValidSolanaAddress, normalizeSolanaAddress } from "@shared/solana-validation";
+import { recordRotation, recordSubscriptionSnapshot } from "./subscription-telemetry";
 
 interface WebSocketProvider {
   name: string;
@@ -553,9 +554,16 @@ class PumpFunWebSocket extends EventEmitter {
 
     if (toRemove.length > 0) {
       for (const mint of toRemove) {
+        const token = tokens.find(t => t.tokenMint === mint);
+        const symbol = token?.symbol || mint.slice(-4);
+        const reason = token?.priceUsd! < PRICE_DECAY_THRESHOLD ? "price_decay" : isTooOld ? "expired" : "low_volume";
+
+        recordRotation("pump_fun", "purge", mint, symbol, 0); // Quality score = 0 for dead tokens
         this.removeTokenSubscription(mint);
       }
 
+      // Record updated subscription count
+      recordSubscriptionSnapshot("pump_fun", this.subscriptions.size);
       console.log(`[WebSocket] Rotated ${toRemove.length} dead tokens`);
     }
   }
