@@ -569,6 +569,7 @@ export interface SnapshotData {
   tokenSymbol: string;
   tokenName?: string;
   priceUsd?: number;
+  solPriceUsd?: number;
   marketCap?: number;
   fdv?: number;
   liquidity?: number;
@@ -600,12 +601,20 @@ export async function createSnapshot(data: SnapshotData): Promise<number> {
     ? Math.floor((now - data.pairCreatedAt) / 60)
     : undefined;
 
+  // Get SOL price if not provided (will use cache)
+  let solPriceUsd = data.solPriceUsd;
+  if (!solPriceUsd) {
+    const { getSolPrice } = await import("./jupiter");
+    solPriceUsd = await getSolPrice() || undefined;
+  }
+
   const result = await db.insert(tokenSnapshots).values({
     tokenMint: data.tokenMint,
     tokenSymbol: data.tokenSymbol,
     tokenName: data.tokenName,
     capturedAt: now,
     priceUsd: data.priceUsd,
+    solPriceUsd,
     marketCap: data.marketCap,
     fdv: data.fdv,
     liquidity: data.liquidity,

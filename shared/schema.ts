@@ -681,12 +681,13 @@ export const tokenSnapshots = pgTable("token_snapshots", {
   
   // Market data
   priceUsd: real("price_usd"),
+  solPriceUsd: real("sol_price_usd"), // SOL/USD at snapshot time for historical context
   marketCap: real("market_cap"),
   fdv: real("fdv"),
   liquidity: real("liquidity"),
   volume24h: real("volume_24h"),
   priceChange24h: real("price_change_24h"),
-  
+
   // Token age and launch info
   pairCreatedAt: integer("pair_created_at"),
   tokenAgeMinutes: integer("token_age_minutes"),
