@@ -350,6 +350,12 @@ export const startupWizard = new StartupWizard();
  * Run startup wizard and return success/failure
  */
 export async function runStartupWizard(): Promise<boolean> {
+  // Skip proxy validation on Replit (single-server deployment)
+  if (process.env.REPLIT_DEPLOYMENT) {
+    console.log(`${COLORS.cyan}✓ Running on Replit, skipping proxy validation${COLORS.reset}`);
+    return true;
+  }
+
   try {
     return await startupWizard.run({
       proxyWaitTimeoutMs: 60000,

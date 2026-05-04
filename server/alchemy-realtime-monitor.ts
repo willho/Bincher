@@ -14,9 +14,8 @@
 
 import { WebSocket } from "ws";
 import { db } from "./db";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { paperPositions, activePositions } from "@shared/schema";
-import { positionExitManager } from "./position-exit-manager";
 
 interface RealTimeMonitorConfig {
   alchemyKey: string;
@@ -125,28 +124,30 @@ class AlchemyRealtimeMonitor {
     this.blockCount++;
 
     try {
-      // Get all open positions (both legacy and Phase A)
+      // Get all open positions (legacy paper trading)
       const openPositions = await db.query.paperPositions.findMany({
         where: eq(paperPositions.status, "open"),
       });
 
-      const phaseAPositions = await db.query.activePositions.findMany({
-        where: eq(activePositions.status, "open"),
-      });
+      // Get all open Phase A positions
+      const phaseAPositions = await db
+        .select()
+        .from(activePositions)
+        .where(isNull(activePositions.closedAt));
 
-      // Combine all mints for batch pricing
-      const allMints = new Set<string>();
-      openPositions.forEach((p) => allMints.add(p.tokenMint));
-      phaseAPositions.forEach((p) => allMints.add(p.tokenMint));
+      // Combine all positions to check
+      const allTokens = new Set<string>();
+      openPositions.forEach(p => allTokens.add(p.tokenMint));
+      phaseAPositions.forEach(p => allTokens.add(p.tokenMint));
 
-      if (allMints.size === 0) {
+      if (allTokens.size === 0) {
         return; // No positions to check
       }
 
       // Get batch prices (batched API call)
-      const prices = await this.getBatchPrices(Array.from(allMints));
+      const prices = await this.getBatchPrices(Array.from(allTokens));
 
-      // Check legacy positions
+      // Check legacy paper positions
       for (const position of openPositions) {
         const price = prices.get(position.tokenMint);
         if (price) {
@@ -316,68 +317,6 @@ class AlchemyRealtimeMonitor {
   }
 
   /**
-   * Check if Phase A position should exit (TSL, time stop, take profit)
-   */
-  private async checkPhaseAPositionExit(position: any, currentPrice: number): Promise<void> {
-    try {
-      const userId = position.userId;
-      const positionId = position.id;
-
-      // Check TSL (trailing stop loss)
-      const tslHit = await positionExitManager.checkTSLExit(positionId, currentPrice);
-      if (tslHit) {
-        await positionExitManager.exitPosition(positionId, "tsl_hit", currentPrice, userId);
-        console.log(`[AlchemyMonitor] Phase A TSL HIT: ${position.tokenSymbol} at ${currentPrice.toFixed(6)}`);
-        return;
-      }
-
-      // Check take profit (5x default)
-      const tpHit = await positionExitManager.checkTakeProfit(positionId, currentPrice, 5.0);
-      if (tpHit) {
-        await positionExitManager.exitPosition(positionId, "profit_take", currentPrice, userId);
-        console.log(`[AlchemyMonitor] Phase A TP HIT: ${position.tokenSymbol} at ${currentPrice.toFixed(6)}`);
-        return;
-      }
-
-      // Check time stop (cluster-specific hold time)
-      const maxHoldMinutes = this.getMaxHoldMinutesForCluster(position.entryClusters?.[0]?.cluster);
-      const timeStopHit = await positionExitManager.checkTimeStop(positionId, maxHoldMinutes);
-      if (timeStopHit) {
-        await positionExitManager.exitPosition(positionId, "time_stop", currentPrice, userId);
-        console.log(`[AlchemyMonitor] Phase A TIME STOP: ${position.tokenSymbol} after ${maxHoldMinutes} minutes`);
-        return;
-      }
-
-      // Update highest price if current is higher
-      if (currentPrice > (position.highestPrice || 0)) {
-        const now = Math.floor(Date.now() / 1000);
-        await db
-          .update(activePositions)
-          .set({ highestPrice: currentPrice, highestPriceReachedAt: now })
-          .where(eq(activePositions.id, positionId));
-      }
-    } catch (error) {
-      console.error(`[AlchemyMonitor] Error checking Phase A position exit:`, error);
-    }
-  }
-
-  /**
-   * Get max hold time for cluster type
-   */
-  private getMaxHoldMinutesForCluster(cluster?: string): number {
-    const maxHoldMap: Record<string, number> = {
-      spike_and_bleed: 120, // 2 hours
-      slow_moon: 480, // 8 hours
-      late_bloomer: 1440, // 24 hours
-      pump_dump: 60, // 1 hour
-      shaky_climb: 240, // 4 hours
-      organic_growth: 720, // 12 hours
-    };
-
-    return maxHoldMap[cluster || "unknown"] || 240;
-  }
-
-  /**
    * Execute position exit
    */
   private async executeExit(position: any, exitPrice: number, reason: string): Promise<void> {
@@ -401,6 +340,59 @@ class AlchemyRealtimeMonitor {
       console.log(`[AlchemyMonitor] Position closed: ${reason} (${realizedPnlPercent.toFixed(2)}%)`);
     } catch (error) {
       console.error("[AlchemyMonitor] Error executing exit:", error);
+    }
+  }
+
+  /**
+   * Check Phase A position for exit conditions
+   */
+  private async checkPhaseAPositionExit(position: any, currentPrice: number): Promise<void> {
+    try {
+      const entryPrice = position.entryPrice;
+      const multiplier = currentPrice / entryPrice;
+      const tslPercent = (position.tslCurrentPercent || 15) / 100;
+
+      // Check TSL hit
+      const tslLevel = (position.highestPrice || entryPrice) * (1 - tslPercent);
+      if (currentPrice <= tslLevel) {
+        console.log(
+          `[AlchemyMonitor] Phase A TSL HIT: ${position.tokenSymbol} at ${multiplier.toFixed(2)}x (TSL: ${((position.tslCurrentPercent || 15))}%)`
+        );
+        await this.executePhaseAExit(position, currentPrice, "tsl_hit");
+        return;
+      }
+
+      // Update highest price for TSL calculation
+      if (currentPrice > (position.highestPrice || 0)) {
+        const now = Math.floor(Date.now() / 1000);
+        await db
+          .update(activePositions)
+          .set({ highestPrice: currentPrice, lastSnapshotAt: now })
+          .where(eq(activePositions.id, position.id));
+      }
+    } catch (error) {
+      console.error(`[AlchemyMonitor] Error checking Phase A position exit:`, error);
+    }
+  }
+
+  /**
+   * Execute Phase A position exit
+   */
+  private async executePhaseAExit(position: any, exitPrice: number, reason: string): Promise<void> {
+    try {
+      const { exitPosition } = await import("./position-exit-manager");
+      const now = Math.floor(Date.now() / 1000);
+      const userId = 1; // TODO: Get from session
+
+      const result = await exitPosition(position.id, reason as any, exitPrice, userId);
+
+      if (result.success) {
+        console.log(
+          `[AlchemyMonitor] Phase A Position closed: ${reason} (${result.realizedPnlPercent.toFixed(2)}%)`
+        );
+      }
+    } catch (error) {
+      console.error("[AlchemyMonitor] Error executing Phase A exit:", error);
     }
   }
 

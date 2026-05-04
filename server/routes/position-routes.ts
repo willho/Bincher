@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { db } from "../db";
 import { eq, desc } from "drizzle-orm";
-import { activePositions, positionBudgets } from "@shared/schema";
-import { positionExitManager } from "../position-exit-manager";
+import { activePositions } from "@shared/schema";
+import { exitPosition, analyzeOutcomes } from "../position-exit-manager";
 import { getPositionBudget } from "../position-budget-forecaster";
 
 const router = Router();
@@ -20,10 +20,13 @@ router.get("/positions", async (req, res) => {
       .where(eq(activePositions.userId, userId))
       .orderBy(desc(activePositions.openedAt));
 
+    // Return only open positions (no closedAt)
+    const openPositions = positions.filter(p => !p.closedAt);
+
     res.json({
       success: true,
-      data: positions,
-      count: positions.length,
+      data: openPositions,
+      count: openPositions.length,
     });
   } catch (error) {
     console.error("[PositionAPI] Error fetching positions:", error);
@@ -140,7 +143,7 @@ router.get("/position-analytics", async (req, res) => {
   try {
     const userId = req.user?.id || 1;
 
-    const outcomes = await positionExitManager.analyzeOutcomes(userId);
+    const outcomes = await analyzeOutcomes(userId);
 
     res.json({
       success: true,
@@ -193,12 +196,7 @@ router.post("/positions/:id/close", async (req, res) => {
     }
 
     // Close position
-    const result = await positionExitManager.exitPosition(
-      positionId,
-      "user_manual",
-      exitPrice,
-      userId
-    );
+    const result = await exitPosition(positionId, "user_manual", exitPrice, userId);
 
     res.json({
       success: result.success,

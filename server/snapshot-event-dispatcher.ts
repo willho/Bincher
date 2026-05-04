@@ -1,363 +1,326 @@
 import { db } from "./db";
-import { eq, and, desc } from "drizzle-orm";
-import {
-  activePositions,
-  tokenFingerprintSnapshots,
-  tokenDataPool,
-} from "@shared/schema";
+import { activePositions, tokenSnapshots } from "@shared/schema";
+import { eq, desc } from "drizzle-orm";
 import { calculateAllocation } from "./position-allocator";
-import { positionExitManager } from "./position-exit-manager";
+import { getLearnedParameters, getDefaultTsl, getDefaultTrajectoryThreshold } from "./retrolearner-phase-d";
 
-interface PositionDecision {
-  action: "open" | "hold" | "adjust" | "sell";
-  reason: string;
-  allocation?: number;
-  trajectoryScore?: number;
-  confidence?: number;
+interface SnapshotForDispatch {
+  id: number;
+  tokenMint: string;
+  tokenSymbol: string;
+  priceUsd: number;
+  capturedAt: number;
 }
 
-/**
- * Handle snapshot event - evaluate if position should open/adjust/sell
- */
-export async function onSnapshotCreated(
-  tokenMint: string,
-  userId: number
-): Promise<PositionDecision | null> {
+export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<void> {
+  // For now, this is a stub that gets called when snapshots are created
+  // In full implementation, this would:
+  // 1. Match snapshot against token clusters
+  // 2. Calculate confidence and trajectory score
+  // 3. Decide to open position or exit existing position
+  // 4. Record entry/exit metadata for retrolearner
+  // 5. Update token leaderboard with trajectory scores
+
+  // Stub implementation - placeholder for snapshot event handling
   try {
-    // Get latest snapshot
-    const snapshots = await db
-      .select()
-      .from(tokenFingerprintSnapshots)
-      .where(eq(tokenFingerprintSnapshots.tokenMint, tokenMint))
-      .orderBy(desc(tokenFingerprintSnapshots.timestamp))
-      .limit(1);
-
-    if (!snapshots || snapshots.length === 0) {
-      return null;
-    }
-
-    const snapshot = snapshots[0];
-    const trajectoryData = (snapshot.trajectoryAnchored || {}) as any;
-
-    // Check if we already have a position open for this token
-    const existingPosition = await db
-      .select()
-      .from(activePositions)
-      .where(and(eq(activePositions.userId, userId), eq(activePositions.tokenMint, tokenMint)))
-      .limit(1);
-
-    if (existingPosition && existingPosition.length > 0) {
-      // Position already open - evaluate if we should adjust or exit
-      return await evaluateOpenPosition(existingPosition[0], snapshot, userId);
-    } else {
-      // No position yet - evaluate if we should open one
-      return await evaluateOpenNewPosition(tokenMint, snapshot, userId);
-    }
-  } catch (error) {
-    console.error(`[SnapshotDispatcher] Error processing snapshot for ${tokenMint}:`, error);
-    return null;
+    // TODO: implement snapshot evaluation logic
+    // Phase B Hook: Update token leaderboard once cluster matching is available
+    // const outcomes = await matchAgainstClusters(snapshot);
+    // if (outcomes) {
+    //   const { updateTokenLeaderboard } = await import("./token-trajectory-scoring");
+    //   await updateTokenLeaderboard(
+    //     snapshot.tokenMint,
+    //     snapshot.tokenSymbol,
+    //     outcomes,
+    //     snapshotCount,
+    //     snapshot.priceUsd,
+    //     ageSeconds
+    //   );
+    // }
+  } catch (err) {
+    console.error("[SnapshotDispatcher] Error in snapshot event handler:", err);
   }
 }
 
-/**
- * Evaluate whether to open a new position
- */
-async function evaluateOpenNewPosition(
-  tokenMint: string,
-  snapshot: any,
-  userId: number
-): Promise<PositionDecision | null> {
-  try {
-    const trajectoryData = (snapshot.trajectoryAnchored || {}) as any;
-
-    // Extract key metrics from snapshot
-    const clusterMatch = snapshot.clusterMatch || 0;
-    const trajectoryScore = calculateTrajectoryScore(trajectoryData) as number;
-    const confidence = snapshot.confidence || 0;
-
-    // Decision thresholds
-    const MIN_CONFIDENCE = 0.70;
-    const MIN_TRAJECTORY = 0.6;
-    const MIN_CLUSTER_MATCH = 0.70;
-
-    // Check if we meet minimum thresholds
-    if (clusterMatch < MIN_CLUSTER_MATCH) {
-      return {
-        action: "hold",
-        reason: `Cluster match too low: ${(clusterMatch * 100).toFixed(0)}% < ${(MIN_CLUSTER_MATCH * 100).toFixed(0)}%`,
-        confidence: clusterMatch,
-        trajectoryScore,
-      };
-    }
-
-    if (confidence < MIN_CONFIDENCE) {
-      return {
-        action: "hold",
-        reason: `Confidence too low: ${(confidence * 100).toFixed(0)}% < ${(MIN_CONFIDENCE * 100).toFixed(0)}%`,
-        confidence,
-        trajectoryScore,
-      };
-    }
-
-    if (trajectoryScore < MIN_TRAJECTORY) {
-      return {
-        action: "hold",
-        reason: `Trajectory score too low: ${trajectoryScore.toFixed(2)} < ${MIN_TRAJECTORY.toFixed(2)}`,
-        confidence,
-        trajectoryScore,
-      };
-    }
-
-    // Get user's current balance (from paper trading fund)
-    const userFund = await getUserFund(userId);
-    if (!userFund || userFund.balance <= 0) {
-      return {
-        action: "hold",
-        reason: "Insufficient fund balance",
-      };
-    }
-
-    // Calculate allocation
-    const allocation = await calculateAllocation(
-      userId,
-      userFund.balance,
-      clusterMatch,
-      trajectoryScore
-    );
-
-    // Get token data for entry price
-    const tokenData = await db
-      .select()
-      .from(tokenDataPool)
-      .where(eq(tokenDataPool.tokenMint, tokenMint))
-      .limit(1);
-
-    if (!tokenData || !tokenData[0]) {
-      return {
-        action: "hold",
-        reason: "No token data available",
-      };
-    }
-
-    const entryPrice = tokenData[0].priceUsd || 0;
-    const tokenSymbol = tokenData[0].tokenSymbol || tokenMint.slice(0, 8);
-
-    // Open position
-    const positionId = await createPosition(
-      userId,
-      tokenMint,
-      tokenSymbol,
-      allocation.totalAllocation,
-      entryPrice,
-      clusterMatch,
-      trajectoryScore,
-      trajectoryData,
-      snapshot
-    );
-
-    return {
-      action: "open",
-      reason: `Opening position: ${allocation.reason}`,
-      allocation: allocation.totalAllocation,
-      confidence: clusterMatch,
-      trajectoryScore,
-    };
-  } catch (error) {
-    console.error(
-      `[SnapshotDispatcher] Error evaluating new position for ${tokenMint}:`,
-      error
-    );
-    return null;
+export function calculateTrajectoryScore(
+  outcomeDistribution: {
+    pump_100x?: number;
+    pump_50x?: number;
+    pump_10x?: number;
+    pump_5x?: number;
+    pump_2x?: number;
+    pump_2x_quick?: number;
+    crash_fast?: number;
+    slow_bleed?: number;
+    deathbed?: number;
   }
+): number {
+  // Unbounded trajectory score favoring moonshot potential
+  const score =
+    (outcomeDistribution.pump_100x || 0) * 1.0 +
+    (outcomeDistribution.pump_50x || 0) * 0.8 +
+    (outcomeDistribution.pump_10x || 0) * 0.6 +
+    (outcomeDistribution.pump_5x || 0) * 0.4 +
+    (outcomeDistribution.pump_2x || 0) * 0.2 +
+    (outcomeDistribution.pump_2x_quick || 0) * 0.1 -
+    (outcomeDistribution.crash_fast || 0) * 0.5 -
+    (outcomeDistribution.slow_bleed || 0) * 0.3 -
+    (outcomeDistribution.deathbed || 0) * 0.2;
+
+  return Math.max(0, score);
 }
 
-/**
- * Evaluate open position - check if we should adjust TSL or exit
- */
-async function evaluateOpenPosition(
-  position: any,
-  snapshot: any,
-  userId: number
-): Promise<PositionDecision> {
-  try {
-    const trajectoryData = (snapshot.trajectoryAnchored || {}) as any;
-    const newTrajectoryScore = calculateTrajectoryScore(trajectoryData);
-
-    // Check if trajectory has collapsed (>50% negative outcomes)
-    const negativeOutcomes = sumNegativeOutcomes(trajectoryData);
-
-    if (negativeOutcomes > 0.5) {
-      // Exit with moonbag
-      const result = await positionExitManager.exitPosition(
-        position.id,
-        "trajectory_collapse",
-        snapshot.lastPrice || 0,
-        userId
-      );
-
-      return {
-        action: "sell",
-        reason: `Trajectory collapse: ${(negativeOutcomes * 100).toFixed(0)}% probability of downtrend`,
-      };
-    }
-
-    // Update position with new trajectory data (no TSL adjustment, just state update)
-    const now = Math.floor(Date.now() / 1000);
-    await db
-      .update(activePositions)
-      .set({
-        currentTrajectoryScore: newTrajectoryScore,
-        currentConfidence: snapshot.confidence || position.currentConfidence,
-        lastSnapshotAt: now,
-        updatedAt: now,
-      })
-      .where(eq(activePositions.id, position.id));
-
-    // Determine action based on trajectory change
-    const trajectoryDelta = newTrajectoryScore - position.currentTrajectoryScore;
-
-    if (trajectoryDelta > 0.1) {
-      return {
-        action: "adjust",
-        reason: `Trajectory improved: +${trajectoryDelta.toFixed(2)}, holding`,
-        trajectoryScore: newTrajectoryScore,
-      };
-    } else if (trajectoryDelta < -0.15) {
-      return {
-        action: "adjust",
-        reason: `Trajectory degraded: ${trajectoryDelta.toFixed(2)}, monitoring closely`,
-        trajectoryScore: newTrajectoryScore,
-      };
-    } else {
-      return {
-        action: "hold",
-        reason: `Holding position, trajectory stable`,
-        trajectoryScore: newTrajectoryScore,
-      };
-    }
-  } catch (error) {
-    console.error(`[SnapshotDispatcher] Error evaluating open position:`, error);
-    return {
-      action: "hold",
-      reason: "Error evaluating position",
-    };
+export function sumNegativeOutcomes(
+  outcomeDistribution: {
+    pump_100x?: number;
+    pump_50x?: number;
+    pump_10x?: number;
+    pump_5x?: number;
+    pump_2x?: number;
+    pump_2x_quick?: number;
+    crash_fast?: number;
+    slow_bleed?: number;
+    deathbed?: number;
   }
+): number {
+  return (outcomeDistribution.crash_fast || 0) + (outcomeDistribution.slow_bleed || 0) + (outcomeDistribution.deathbed || 0);
 }
 
-/**
- * Create a new active position
- */
-async function createPosition(
+export async function evaluateOpenNewPosition(
   userId: number,
   tokenMint: string,
   tokenSymbol: string,
   entrySol: number,
   entryPrice: number,
-  clusterMatch: number,
+  clusterMatches: Array<{ cluster: string; confidence: number; trajectoryScore: number }>,
+  aggregateConfidence: number,
   trajectoryScore: number,
-  trajectoryData: any,
-  snapshot: any
-): Promise<number> {
+  currentBalance: number,
+  baseAllocationPerPosition: number,
+  apeBudget: number
+): Promise<{ opened: boolean; allocationSol?: number; reason: string }> {
+  // Check if confidence and trajectory meet thresholds
+  if (aggregateConfidence < 0.7 || trajectoryScore < 0.6) {
+    return {
+      opened: false,
+      reason: `Confidence ${aggregateConfidence.toFixed(2)} or trajectory ${trajectoryScore.toFixed(2)} below threshold`,
+    };
+  }
+
+  // Calculate allocation (with learned ape budget multiplier from primary cluster)
+  const primaryClusterType = clusterMatches.length > 0 ? clusterMatches[0].cluster : undefined;
+  const allocation = await calculateAllocation(
+    userId,
+    currentBalance,
+    aggregateConfidence,
+    trajectoryScore,
+    baseAllocationPerPosition,
+    apeBudget,
+    primaryClusterType
+  );
+
+  if (allocation.allocationSol < 0.01) {
+    return {
+      opened: false,
+      reason: "Allocation too small after budget constraints",
+    };
+  }
+
+  // Create position record
   const now = Math.floor(Date.now() / 1000);
 
-  const result = await db
-    .insert(activePositions)
-    .values({
+  // Get learned TSL from retrolearner, or use default based on primary cluster
+  let learnedTsl = 15;
+  if (clusterMatches.length > 0) {
+    const primaryCluster = clusterMatches[0].cluster;
+    const learned = await getLearnedParameters(primaryCluster);
+    learnedTsl = learned.tslPercent;
+  }
+
+  try {
+    await db.insert(activePositions).values({
       userId,
       tokenMint,
       tokenSymbol,
-      entrySol,
+      entrySol: allocation.allocationSol,
       entryPrice,
-      entryMultiplier: 1.0,
-      entryTokenAmount: entrySol / entryPrice,
-      entryClusters: [
-        {
-          cluster: snapshot.primaryCluster || "unknown",
-          confidence: clusterMatch,
-          trajectoryScore,
-        },
-      ],
-      entryTrajectorySummary: trajectoryData,
-      currentConfidence: clusterMatch,
+      entryClusters: clusterMatches,
+      currentConfidence: aggregateConfidence,
       currentTrajectoryScore: trajectoryScore,
-      tslCurrentPercent: getClusterBaseTSL(snapshot.primaryCluster || "unknown"),
+      tslCurrentPercent: learnedTsl, // Use learned TSL from retrolearner
       highestPrice: entryPrice,
-      highestPriceReachedAt: now,
       openedAt: now,
-      lastSnapshotAt: now,
-      status: "open",
       createdAt: now,
-      updatedAt: now,
-    })
-    .returning({ id: activePositions.id });
+    });
 
-  console.log(
-    `[SnapshotDispatcher] Opened position ${result[0].id} for ${tokenMint} (${entrySol.toFixed(4)} SOL)`
-  );
-
-  return result[0].id;
+    return {
+      opened: true,
+      allocationSol: allocation.allocationSol,
+      reason: "Position opened based on cluster match and trajectory",
+    };
+  } catch (err) {
+    console.error("[SnapshotDispatcher] Failed to create position:", err);
+    return {
+      opened: false,
+      reason: "Database error creating position",
+    };
+  }
 }
 
-/**
- * Get cluster-specific base TSL percentage
- */
-function getClusterBaseTSL(cluster: string): number {
-  const tslMap: Record<string, number> = {
-    spike_and_bleed: 15,
-    slow_moon: 20,
-    late_bloomer: 25,
-    pump_dump: 10,
-    shaky_climb: 18,
-    organic_growth: 22,
-  };
+export async function evaluateOpenPosition(
+  userId: number,
+  positionId: number,
+  tokenMint: string,
+  negativeOutcomeProbability: number,
+  currentPrice: number,
+  newTrajectoryScore: number,
+  newConfidence: number
+): Promise<{ shouldExit: boolean; reason: string }> {
+  // Get current position
+  const position = await db
+    .select()
+    .from(activePositions)
+    .where(eq(activePositions.id, positionId))
+    .limit(1);
 
-  return tslMap[cluster] || 15;
-}
+  if (position.length === 0) {
+    return {
+      shouldExit: false,
+      reason: "Position not found",
+    };
+  }
 
-/**
- * Calculate trajectory score from outcome distribution
- */
-function calculateTrajectoryScore(trajectoryData: Record<string, number>): number {
-  if (!trajectoryData || typeof trajectoryData !== "object") return 0;
+  const pos = position[0];
 
-  const score =
-    (trajectoryData.pump_100x || 0) * 1.0 +
-    (trajectoryData.pump_10x || 0) * 0.5 +
-    (trajectoryData.pump_5x || 0) * 0.3 +
-    (trajectoryData.pump_2x_sustained || 0) * 0.2 +
-    (trajectoryData.pump_2x_quick || 0) * 0.1 -
-    ((trajectoryData.crash_fast || 0) + (trajectoryData.crash_90 || 0)) * 0.5;
+  // Update highest price for TSL calculation
+  if (currentPrice > (pos.highestPrice || 0)) {
+    const now = Math.floor(Date.now() / 1000);
+    await db
+      .update(activePositions)
+      .set({
+        highestPrice: currentPrice,
+        currentTrajectoryScore: newTrajectoryScore,
+        currentConfidence: newConfidence,
+        lastSnapshotAt: now,
+        updatedAt: now,
+      })
+      .where(eq(activePositions.id, positionId));
+  }
 
-  return Math.max(0, score);
-}
+  // Get learned trajectory threshold from retrolearner for this position's cluster
+  let trajectoryExitThreshold = 0.5; // Default threshold
+  if (pos.entryClusters && Array.isArray(pos.entryClusters)) {
+    const clusters = pos.entryClusters as Array<{ cluster: string }>;
+    if (clusters.length > 0) {
+      const learned = await getLearnedParameters(clusters[0].cluster);
+      trajectoryExitThreshold = learned.trajectoryThreshold;
+    }
+  }
 
-/**
- * Sum negative outcome probabilities
- */
-function sumNegativeOutcomes(trajectoryData: Record<string, number>): number {
-  if (!trajectoryData || typeof trajectoryData !== "object") return 0;
+  // Exit trigger: negative outcome probability exceeds learned threshold
+  if (negativeOutcomeProbability > trajectoryExitThreshold) {
+    return {
+      shouldExit: true,
+      reason: `Trajectory collapse: ${(negativeOutcomeProbability * 100).toFixed(0)}% negative outcome probability (threshold: ${(trajectoryExitThreshold * 100).toFixed(0)}%)`,
+    };
+  }
 
-  return (
-    (trajectoryData.crash_fast || 0) +
-    (trajectoryData.crash_90 || 0) +
-    (trajectoryData.crash_95 || 0) +
-    (trajectoryData.crash_99 || 0) +
-    (trajectoryData.rug_pull || 0) +
-    (trajectoryData.slow_bleed || 0) +
-    (trajectoryData.deathbed_signal || 0)
-  );
-}
-
-/**
- * Get user's fund balance
- */
-async function getUserFund(userId: number): Promise<any> {
-  // This should come from paper trading fund session
-  // For now, return dummy data - would integrate with system-picks-fund.ts
   return {
-    balance: 1.0, // placeholder
-    sessionId: "default",
+    shouldExit: false,
+    reason: "Position trajectory acceptable, holding",
   };
 }
 
-export { PositionDecision };
+export async function checkTSLExit(positionId: number, currentPrice: number): Promise<{ shouldExit: boolean; reason: string }> {
+  const position = await db
+    .select()
+    .from(activePositions)
+    .where(eq(activePositions.id, positionId))
+    .limit(1);
+
+  if (position.length === 0) {
+    return {
+      shouldExit: false,
+      reason: "Position not found",
+    };
+  }
+
+  const pos = position[0];
+  const tslPercent = pos.tslCurrentPercent || 15;
+  const tslLevel = (pos.highestPrice || 0) * (1 - tslPercent / 100);
+
+  if (currentPrice < tslLevel) {
+    return {
+      shouldExit: true,
+      reason: `TSL hit: price ${currentPrice.toFixed(6)} below TSL level ${tslLevel.toFixed(6)} (${tslPercent}%)`,
+    };
+  }
+
+  return {
+    shouldExit: false,
+    reason: "Price above TSL level",
+  };
+}
+
+export async function checkTimeStop(positionId: number, maxHoldMinutes: number): Promise<{ shouldExit: boolean; reason: string }> {
+  const position = await db
+    .select()
+    .from(activePositions)
+    .where(eq(activePositions.id, positionId))
+    .limit(1);
+
+  if (position.length === 0) {
+    return {
+      shouldExit: false,
+      reason: "Position not found",
+    };
+  }
+
+  const pos = position[0];
+  const now = Math.floor(Date.now() / 1000);
+  const holdSeconds = now - pos.openedAt;
+  const holdMinutes = holdSeconds / 60;
+
+  if (holdMinutes > maxHoldMinutes) {
+    return {
+      shouldExit: true,
+      reason: `Time stop: held for ${holdMinutes.toFixed(0)} minutes, exceeds max ${maxHoldMinutes}`,
+    };
+  }
+
+  return {
+    shouldExit: false,
+    reason: `Time check ok: ${holdMinutes.toFixed(0)} / ${maxHoldMinutes} minutes`,
+  };
+}
+
+export async function checkTakeProfit(positionId: number, currentPrice: number, targetMultiplier: number = 5.0): Promise<{ shouldExit: boolean; reason: string }> {
+  const position = await db
+    .select()
+    .from(activePositions)
+    .where(eq(activePositions.id, positionId))
+    .limit(1);
+
+  if (position.length === 0) {
+    return {
+      shouldExit: false,
+      reason: "Position not found",
+    };
+  }
+
+  const pos = position[0];
+  const entryPricePerToken = pos.entryPrice || 0;
+  const currentMultiplier = currentPrice / entryPricePerToken;
+
+  if (currentMultiplier >= targetMultiplier) {
+    return {
+      shouldExit: true,
+      reason: `Take profit: ${currentMultiplier.toFixed(2)}x current (target ${targetMultiplier}x)`,
+    };
+  }
+
+  return {
+    shouldExit: false,
+    reason: `Profit check ok: ${currentMultiplier.toFixed(2)}x current`,
+  };
+}

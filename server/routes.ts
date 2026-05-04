@@ -9194,6 +9194,22 @@ export async function registerRoutes(
   // Register fingerprinting & clustering diagnostic endpoints
   registerFingerprinterDiagnosticEndpoints(app);
 
+  // Register Phase A position management routes
+  const positionRoutes = await import("./routes/position-routes");
+  app.use(positionRoutes.default);
+
+  // Register Phase B token leaderboard routes
+  const tokenLeaderboardRoutes = await import("./routes/token-leaderboard-routes");
+  app.use(tokenLeaderboardRoutes.default);
+
+  // Register Phase C wallet leaderboard routes
+  const walletLeaderboardRoutes = await import("./routes/wallet-leaderboard-routes");
+  app.use(walletLeaderboardRoutes.default);
+
+  // Register Phase D retrolearner routes
+  const retrolearnerRoutes = await import("./routes/retrolearner-routes");
+  app.use(retrolearnerRoutes.default);
+
   return httpServer;
 }
 

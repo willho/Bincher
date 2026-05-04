@@ -1,162 +1,156 @@
 import { updatePositionBudgetForecast, aggregateOldData } from "./position-budget-forecaster";
-import { positionExitManager } from "./position-exit-manager";
+import { db } from "./db";
+import { users, activePositions } from "@shared/schema";
+import { checkTSLExit, checkTimeStop, checkTakeProfit } from "./snapshot-event-dispatcher";
+import { exitPosition } from "./position-exit-manager";
+import { eq } from "drizzle-orm";
 
-/**
- * Initialize position management system on app startup
- */
+let isInitialized = false;
+
 export async function initializePositionManagement(): Promise<void> {
-  try {
-    console.log("[PositionManagement] Initializing position management system...");
+  if (isInitialized) return;
 
-    // Schedule daily budget forecast update (at midnight UTC)
-    scheduleDailyBudgetUpdate();
+  console.log("[PositionManagement] Initializing Phase A position management system...");
 
-    // Schedule daily old data aggregation (at 1am UTC)
-    scheduleDailyAggregation();
+  // Schedule daily budget update at midnight UTC
+  scheduleDailyBudgetUpdate();
 
-    // Log startup
-    console.log("[PositionManagement] Position management system initialized");
-  } catch (error) {
-    console.error("[PositionManagement] Error initializing position management:", error);
-    throw error;
-  }
+  // Schedule daily data aggregation at 1am UTC
+  scheduleDailyAggregation();
+
+  // Start monitoring open positions for exits
+  monitorOpenPositions();
+
+  isInitialized = true;
+  console.log("[PositionManagement] Initialization complete");
 }
 
-/**
- * Schedule daily budget forecast update
- * Runs at midnight UTC
- */
 function scheduleDailyBudgetUpdate(): void {
   const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setUTCHours(0, 0, 0, 0);
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const nextMidnight = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
+  let delayMs = nextMidnight.getTime() - now.getTime();
 
-  const timeUntilNext = tomorrow.getTime() - now.getTime();
-
-  console.log(`[PositionManagement] Scheduled budget forecast update in ${(timeUntilNext / 1000 / 60).toFixed(0)} minutes`);
-
-  setTimeout(() => {
-    dailyBudgetUpdateCycle();
-    // Repeat every 24 hours
-    setInterval(dailyBudgetUpdateCycle, 24 * 60 * 60 * 1000);
-  }, timeUntilNext);
-}
-
-/**
- * Daily budget update cycle
- */
-async function dailyBudgetUpdateCycle(): Promise<void> {
-  try {
-    console.log("[PositionManagement] Running daily budget forecast update...");
-
-    // TODO: Get all active users and update their budgets
-    // For now, this is a placeholder
-    // In production, would iterate through all users with active positions
-
-    console.log("[PositionManagement] Daily budget forecast update complete");
-  } catch (error) {
-    console.error("[PositionManagement] Error in daily budget update cycle:", error);
+  // Ensure delay is at least 1 minute
+  if (delayMs < 60000) {
+    delayMs += 24 * 60 * 60 * 1000;
   }
+
+  setTimeout(async () => {
+    try {
+      console.log("[PositionManagement] Running daily budget update...");
+
+      // Get all users
+      const allUsers = await db.select().from(users);
+
+      for (const user of allUsers) {
+        // Get current balance (stub - would need wallet integration)
+        const currentBalance = 0; // TODO: get from wallet service
+        const initialBalance = 1; // TODO: get from user settings
+
+        await updatePositionBudgetForecast(user.id, currentBalance, initialBalance);
+      }
+
+      console.log("[PositionManagement] Daily budget update completed");
+    } catch (err) {
+      console.error("[PositionManagement] Error in daily budget update:", err);
+    }
+
+    // Schedule next day's update
+    scheduleDailyBudgetUpdate();
+  }, delayMs);
 }
 
-/**
- * Schedule daily old data aggregation
- * Runs at 1am UTC (after budget update)
- */
 function scheduleDailyAggregation(): void {
   const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setUTCHours(1, 0, 0, 0);
-  if (tomorrow <= now) {
-    tomorrow.setDate(tomorrow.getDate() + 1);
+  const nextDay1am = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 1, 0, 0));
+  let delayMs = nextDay1am.getTime() - now.getTime();
+
+  // Ensure delay is at least 1 minute
+  if (delayMs < 60000) {
+    delayMs += 24 * 60 * 60 * 1000;
   }
 
-  const timeUntilNext = tomorrow.getTime() - now.getTime();
+  setTimeout(async () => {
+    try {
+      console.log("[PositionManagement] Running daily data aggregation...");
 
-  console.log(`[PositionManagement] Scheduled data aggregation in ${(timeUntilNext / 1000 / 60).toFixed(0)} minutes`);
+      // Get all users
+      const allUsers = await db.select().from(users);
 
-  setTimeout(() => {
-    dailyAggregationCycle();
-    // Repeat every 24 hours
-    setInterval(dailyAggregationCycle, 24 * 60 * 60 * 1000);
-  }, timeUntilNext);
-}
-
-/**
- * Daily aggregation cycle
- */
-async function dailyAggregationCycle(): Promise<void> {
-  try {
-    console.log("[PositionManagement] Running daily data aggregation...");
-
-    // Aggregate metrics older than 8 days
-    await aggregateOldData();
-
-    console.log("[PositionManagement] Daily data aggregation complete");
-  } catch (error) {
-    console.error("[PositionManagement] Error in daily aggregation cycle:", error);
-  }
-}
-
-/**
- * Monitor all open positions for exit conditions
- * Should be called periodically (e.g., every 5 seconds when price data is available)
- */
-export async function monitorOpenPositions(
-  userId: number,
-  priceUpdates: Map<string, number> // tokenMint -> currentPrice
-): Promise<void> {
-  try {
-    const openPositions = await positionExitManager.getOpenPositions(userId);
-
-    for (const position of openPositions) {
-      const currentPrice = priceUpdates.get(position.tokenMint);
-      if (!currentPrice) continue;
-
-      // Check TSL exit
-      const tslHit = await positionExitManager.checkTSLExit(position.id, currentPrice);
-      if (tslHit) {
-        await positionExitManager.exitPosition(position.id, "tsl_hit", currentPrice, userId);
-        continue;
+      for (const user of allUsers) {
+        await aggregateOldData(user.id);
       }
 
-      // Check take profit
-      const tpHit = await positionExitManager.checkTakeProfit(
-        position.id,
-        currentPrice,
-        5.0 // 5x take profit target
-      );
-      if (tpHit) {
-        await positionExitManager.exitPosition(position.id, "profit_take", currentPrice, userId);
-        continue;
-      }
-
-      // Check time stop (cluster-specific)
-      const maxHoldMinutes = getMaxHoldMinutesForCluster(position.entryClusters[0]?.cluster);
-      const timeStopHit = await positionExitManager.checkTimeStop(position.id, maxHoldMinutes);
-      if (timeStopHit) {
-        await positionExitManager.exitPosition(position.id, "time_stop", currentPrice, userId);
-        continue;
-      }
+      console.log("[PositionManagement] Daily aggregation completed");
+    } catch (err) {
+      console.error("[PositionManagement] Error in daily aggregation:", err);
     }
-  } catch (error) {
-    console.error("[PositionManagement] Error monitoring open positions:", error);
-  }
+
+    // Schedule next day's aggregation
+    scheduleDailyAggregation();
+  }, delayMs);
 }
 
-/**
- * Get max hold time for cluster type
- */
-function getMaxHoldMinutesForCluster(cluster: string): number {
-  const maxHoldMap: Record<string, number> = {
-    spike_and_bleed: 120, // 2 hours
-    slow_moon: 480, // 8 hours
-    late_bloomer: 1440, // 24 hours
-    pump_dump: 60, // 1 hour
-    shaky_climb: 240, // 4 hours
-    organic_growth: 720, // 12 hours
+function monitorOpenPositions(): void {
+  // Check open positions every 5-10 seconds for exit conditions
+  const pollInterval = 5000 + Math.random() * 5000; // 5-10 seconds with jitter
+
+  setInterval(async () => {
+    try {
+      // Get all open positions
+      const openPositions = await db
+        .select()
+        .from(activePositions)
+        .where(eq(activePositions.closedAt, null));
+
+      // This is a stub - actual monitoring would require:
+      // 1. Current price data from price feed
+      // 2. Cluster type information
+      // 3. Max hold time configuration
+
+      // TODO: implement actual position monitoring with price feed integration
+    } catch (err) {
+      console.error("[PositionManagement] Error in position monitoring:", err);
+    }
+  }, pollInterval);
+}
+
+// Stub position monitoring implementation
+// Full implementation would require price feed integration
+export async function monitorPositionForExit(
+  positionId: number,
+  userId: number,
+  currentPrice: number,
+  clusterType: string = "spike_and_bleed"
+): Promise<void> {
+  // Define max hold times per cluster
+  const maxHoldMinutes: { [key: string]: number } = {
+    spike_and_bleed: 240, // 4 hours
+    slow_moon: 1440, // 24 hours
+    pump_and_dump: 60, // 1 hour
   };
 
-  return maxHoldMap[cluster] || 240;
+  const maxHold = maxHoldMinutes[clusterType] || 480; // Default 8 hours
+
+  // Check all exit conditions
+  const tslResult = await checkTSLExit(positionId, currentPrice);
+  if (tslResult.shouldExit) {
+    const exitResult = await exitPosition(positionId, "tsl_hit", currentPrice, userId);
+    console.log(`[PositionMonitor] TSL exit executed: ${exitResult.message}`);
+    return;
+  }
+
+  const timeResult = await checkTimeStop(positionId, maxHold);
+  if (timeResult.shouldExit) {
+    const exitResult = await exitPosition(positionId, "time_stop", currentPrice, userId);
+    console.log(`[PositionMonitor] Time stop exit executed: ${exitResult.message}`);
+    return;
+  }
+
+  const tpResult = await checkTakeProfit(positionId, currentPrice, 5.0);
+  if (tpResult.shouldExit) {
+    const exitResult = await exitPosition(positionId, "profit_take", currentPrice, userId);
+    console.log(`[PositionMonitor] Take profit exit executed: ${exitResult.message}`);
+    return;
+  }
 }
