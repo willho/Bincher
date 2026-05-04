@@ -369,7 +369,7 @@ async function openSystemPickPosition(pick: SystemPick): Promise<boolean> {
     // Get current token price and data
     const tokenData = await getTokenData(pick.tokenMint);
     const entryPrice = tokenData.priceUsd || 1;
-    const userId = 1; // For now, assume user 1 (admin)
+    const userId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
 
     // Calculate allocation using new position allocator
     const trajectoryScore = pick.trajectoryScore || 0;

@@ -382,7 +382,7 @@ class AlchemyRealtimeMonitor {
     try {
       const { exitPosition } = await import("./position-exit-manager");
       const now = Math.floor(Date.now() / 1000);
-      const userId = 1; // TODO: Get from session
+      const userId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
 
       const result = await exitPosition(position.id, reason as any, exitPrice, userId);
 
