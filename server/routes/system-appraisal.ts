@@ -21,6 +21,13 @@ const router = Router();
  */
 router.get("/api/system-appraisal", async (req, res) => {
   try {
+    // Check auth token (allow with query param or from env)
+    const token = req.query.token as string;
+    const validToken = process.env.APPRAISAL_TOKEN || "debug";
+    if (token !== validToken) {
+      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    }
+
     const systemUserId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
     const now = Math.floor(Date.now() / 1000);
     const warmupStatus = await getWarmupStatus(systemUserId);
@@ -147,6 +154,12 @@ router.get("/api/system-appraisal", async (req, res) => {
  */
 router.get("/api/system-appraisal/cluster-learning", async (req, res) => {
   try {
+    const token = req.query.token as string;
+    const validToken = process.env.APPRAISAL_TOKEN || "debug";
+    if (token !== validToken) {
+      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    }
+
     const systemUserId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
 
     const clusterData = await db.select().from(clusterLearnings).where(eq(clusterLearnings.userId, systemUserId));
@@ -196,6 +209,12 @@ router.get("/api/system-appraisal/cluster-learning", async (req, res) => {
  */
 router.get("/api/system-appraisal/discovery-patterns", async (req, res) => {
   try {
+    const token = req.query.token as string;
+    const validToken = process.env.APPRAISAL_TOKEN || "debug";
+    if (token !== validToken) {
+      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    }
+
     const systemUserId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
 
     const metrics = await db.select().from(tokenLaunchMetrics).where(eq(tokenLaunchMetrics.userId, systemUserId));
@@ -256,6 +275,12 @@ router.get("/api/system-appraisal/discovery-patterns", async (req, res) => {
  */
 router.get("/api/system-appraisal/fingerprint-quality", async (req, res) => {
   try {
+    const token = req.query.token as string;
+    const validToken = process.env.APPRAISAL_TOKEN || "debug";
+    if (token !== validToken) {
+      return res.status(401).json({ error: "Unauthorized - provide ?token=..." });
+    }
+
     const snapshots = await db.select().from(tokenFingerprintSnapshots);
 
     const withFingerprints = snapshots.filter((s) => s.fingerprintVector && (s.fingerprintVector as number[]).length > 0);
