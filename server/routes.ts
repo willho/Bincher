@@ -9205,6 +9205,10 @@ export async function registerRoutes(
   const retrolearnerRoutes = await import("./routes/retrolearner-routes");
   app.use(retrolearnerRoutes.default);
 
+  // Register system appraisal endpoints (for warm-up monitoring)
+  const systemAppraisalRoutes = await import("./routes/system-appraisal");
+  app.use(systemAppraisalRoutes.default);
+
   return httpServer;
 }
 
