@@ -2570,7 +2570,8 @@ async function executeProposeBuy(
   const priceStr = price ? `$${price.toFixed(8)}` : 'unknown price';
   
   // Calculate USD value for PIN threshold checks
-  const solPriceUsd = await getTokenPrice("So11111111111111111111111111111111111111112") || 100;
+  const { getSolPrice } = await import("./jupiter");
+  const solPriceUsd = await getSolPrice() || 100;
   const amountUsd = solAmount * solPriceUsd;
   
   // Store pending trade - requires explicit confirmation before execute
@@ -5340,7 +5341,8 @@ Stay in character. Be helpful but skeptical. Give opinions, not financial advice
               toolResults.push("No token holdings. You haven't bought anything yet.");
             } else {
               // Get SOL price for USD calculations
-              const solPriceUsd = await getTokenPrice("So11111111111111111111111111111111111111112") || 100;
+              const { getSolPrice } = await import("./jupiter");
+  const solPriceUsd = await getSolPrice() || 100;
               
               // Enrich holdings with calculated values
               const enrichedHoldings = rawHoldings.map(h => {

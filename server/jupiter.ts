@@ -9,6 +9,38 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 const DEFAULT_SLIPPAGE_BPS = 500;
 const DEFAULT_PRIORITY_FEE_LAMPORTS = 100000; // 0.0001 SOL
 
+// SOL price cache (update every 5 minutes)
+interface SolPriceCache {
+  price: number | null;
+  cachedAt: number;
+  ttlMs: number;
+}
+
+const solPriceCache: SolPriceCache = {
+  price: null,
+  cachedAt: 0,
+  ttlMs: 5 * 60 * 1000, // 5 minute TTL
+};
+
+function isSolPriceCacheValid(): boolean {
+  return Date.now() - solPriceCache.cachedAt < solPriceCache.ttlMs;
+}
+
+function getCachedSolPrice(): number | null {
+  if (isSolPriceCacheValid()) {
+    return solPriceCache.price;
+  }
+  return null;
+}
+
+function setSolPriceCache(price: number | null): void {
+  solPriceCache.price = price;
+  solPriceCache.cachedAt = Date.now();
+  if (price) {
+    console.log(`[SolPrice] Updated cache: $${price.toFixed(2)}`);
+  }
+}
+
 // Slippage configuration for trades
 export interface SlippageConfig {
   mode: "auto" | "fixed";
@@ -459,24 +491,53 @@ export async function getTokenPrice(tokenMint: string): Promise<number | null> {
     console.warn(`DexScreener API blocked: ${budgetCheck.reason}`);
     return null;
   }
-  
+
   try {
     const response = await rateLimitedFetch(`https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`);
     if (!response.ok) return null;
-    
+
     const data = await response.json();
-    await trackApiCall("dexscreener", "getTokenPrice"); // Track after successful response
+    await trackApiCall("dexscreener", "getTokenPrice");
+
     if (data.pairs && data.pairs.length > 0) {
-      const sortedPairs = data.pairs.sort((a: any, b: any) => 
+      const sortedPairs = data.pairs.sort((a: any, b: any) =>
         (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0)
       );
-      return parseFloat(sortedPairs[0].priceUsd);
+      const tokenPrice = parseFloat(sortedPairs[0].priceUsd);
+
+      // Piggyback: extract SOL price from quote pair if available
+      const bestPair = sortedPairs[0];
+      if (bestPair.quoteToken?.address === SOL_MINT && bestPair.priceNative) {
+        // Token is priced in SOL, so we can derive SOL/USD price
+        const tokenPriceInSol = parseFloat(bestPair.priceNative);
+        if (tokenPriceInSol > 0 && tokenPrice > 0) {
+          const derivedSolPrice = tokenPrice / tokenPriceInSol;
+          setSolPriceCache(derivedSolPrice);
+        }
+      }
+
+      return tokenPrice;
     }
     return null;
   } catch (error) {
     console.error("Failed to get token price:", error);
     return null;
   }
+}
+
+export async function getSolPrice(): Promise<number | null> {
+  // Check cache first (5 minute TTL)
+  const cached = getCachedSolPrice();
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Fallback: fetch SOL price directly (only if cache expired)
+  const solPrice = await getTokenPrice(SOL_MINT);
+  if (solPrice !== null) {
+    setSolPriceCache(solPrice);
+  }
+  return solPrice;
 }
 
 export interface BatchPriceResult {
