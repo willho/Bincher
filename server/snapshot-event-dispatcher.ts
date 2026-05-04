@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { activePositions, tokenSnapshots, positionBudgets } from "@shared/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, isNull, and } from "drizzle-orm";
 import { calculateAllocation } from "./position-allocator";
 import { getLearnedParameters, getDefaultTsl, getDefaultTrajectoryThreshold } from "./retrolearner-phase-d";
 
@@ -60,9 +60,8 @@ export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<
       `confidence=${aggregateConfidence.toFixed(2)}, trajectory=${trajectoryScore.toFixed(2)}, negative=${negativeOutcomeProbability.toFixed(2)}`
     );
 
-    // Determine if user is trading (stub - would come from config or strategy)
-    const userId = 1; // TODO: get from context/config
-    const currentBalance = 1.0; // TODO: get from position budget forecaster
+    // Determine which user to trade for (from env config, defaults to 1 for system picks)
+    const userId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
 
     // Check if position already exists for this token
     const existingPosition = await db
@@ -110,6 +109,14 @@ export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<
       const apeBudget = budget.length > 0
         ? budget[0].apeBudget || 0
         : 0;
+
+      // Estimate current balance from budget forecast data
+      // baseAllocationPerPosition = currentBalance / (expectedPositionsPerDay * 1.2)
+      // So: currentBalance ≈ baseAllocationPerPosition * expectedPositionsPerDay * 1.2
+      const expectedPosPerDay = budget.length > 0
+        ? budget[0].expectedPositionsPerDay || 10
+        : 10;
+      const currentBalance = baseAllocationPerPosition * expectedPosPerDay * 1.2;
 
       const openDecision = await evaluateOpenNewPosition(
         userId,
@@ -219,6 +226,20 @@ export async function evaluateOpenNewPosition(
     return {
       opened: false,
       reason: `Confidence ${aggregateConfidence.toFixed(2)} or trajectory ${trajectoryScore.toFixed(2)} below threshold`,
+    };
+  }
+
+  // Check max concurrent positions (prevent fund fragmentation)
+  const maxSimultaneousPositions = 50; // From SYSTEM_PICKS_CONFIG
+  const openPositions = await db
+    .select()
+    .from(activePositions)
+    .where(and(eq(activePositions.userId, userId), isNull(activePositions.closedAt)));
+
+  if (openPositions.length >= maxSimultaneousPositions) {
+    return {
+      opened: false,
+      reason: `Max concurrent positions reached (${openPositions.length}/${maxSimultaneousPositions})`,
     };
   }
 

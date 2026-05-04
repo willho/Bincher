@@ -12,6 +12,13 @@ export async function initializePositionManagement(): Promise<void> {
 
   console.log("[PositionManagement] Initializing Phase A position management system...");
 
+  try {
+    // Initialize budget for system account (user 1) at startup
+    await initializeSystemAccountBudget();
+  } catch (err) {
+    console.error("[PositionManagement] Error initializing system account budget:", err);
+  }
+
   // Schedule daily budget update at midnight UTC
   scheduleDailyBudgetUpdate();
 
@@ -23,6 +30,27 @@ export async function initializePositionManagement(): Promise<void> {
 
   isInitialized = true;
   console.log("[PositionManagement] Initialization complete");
+}
+
+async function initializeSystemAccountBudget(): Promise<void> {
+  const systemUserId = 1; // System picks fund account
+  const { getHotWalletBalance } = await import("./wallet");
+
+  try {
+    // Get actual wallet balance for system account
+    const currentBalance = await getHotWalletBalance(systemUserId);
+    const initialBalance = currentBalance; // Use current balance as initial for startup
+
+    console.log(`[PositionManagement] Initializing user ${systemUserId} with wallet balance: ${currentBalance.toFixed(4)} SOL`);
+
+    // Calculate and store budget forecast
+    await updatePositionBudgetForecast(systemUserId, currentBalance, initialBalance);
+    console.log(`[PositionManagement] Budget forecast initialized for user ${systemUserId}`);
+  } catch (err) {
+    console.warn("[PositionManagement] Could not get wallet balance, will use defaults:", err instanceof Error ? err.message : err);
+    // Fallback: initialize with safe defaults
+    await updatePositionBudgetForecast(systemUserId, 0, 0);
+  }
 }
 
 function scheduleDailyBudgetUpdate(): void {
@@ -41,13 +69,19 @@ function scheduleDailyBudgetUpdate(): void {
 
       // Get all users
       const allUsers = await db.select().from(users);
+      const { getHotWalletBalance } = await import("./wallet");
 
       for (const user of allUsers) {
-        // Get current balance (stub - would need wallet integration)
-        const currentBalance = 0; // TODO: get from wallet service
-        const initialBalance = 1; // TODO: get from user settings
+        try {
+          // Get current wallet balance
+          const currentBalance = await getHotWalletBalance(user.id);
+          // TODO: get initialBalance from user settings if available
+          const initialBalance = currentBalance;
 
-        await updatePositionBudgetForecast(user.id, currentBalance, initialBalance);
+          await updatePositionBudgetForecast(user.id, currentBalance, initialBalance);
+        } catch (err) {
+          console.warn(`[PositionManagement] Error updating budget for user ${user.id}:`, err instanceof Error ? err.message : err);
+        }
       }
 
       console.log("[PositionManagement] Daily budget update completed");
