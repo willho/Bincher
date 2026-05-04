@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { activePositions, tokenSnapshots } from "@shared/schema";
+import { activePositions, tokenSnapshots, positionBudgets } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 import { calculateAllocation } from "./position-allocator";
 import { getLearnedParameters, getDefaultTsl, getDefaultTrajectoryThreshold } from "./retrolearner-phase-d";
@@ -93,7 +93,7 @@ export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<
         else if (exitDecision.reason.includes("Trajectory")) exitReason = "trajectory_collapse";
         else if (exitDecision.reason.includes("Time")) exitReason = "time_stop";
 
-        const exitResult = await exitPosition(userId, position.id, snapshot.priceUsd, exitReason);
+        const exitResult = await exitPosition(position.id, exitReason, snapshot.priceUsd, userId);
         console.log(`[SnapshotDispatcher] EXIT: ${snapshot.tokenSymbol} - ${exitResult.message}`);
       }
     } else {
@@ -122,8 +122,7 @@ export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<
         trajectoryScore,
         currentBalance,
         baseAllocationPerPosition,
-        apeBudget,
-        clusterType
+        apeBudget
       );
 
       if (openDecision.opened) {
