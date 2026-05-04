@@ -4,7 +4,6 @@ import { hotWallet, tradeConfig, holdings, pendingBuys } from "@shared/schema";
 import type { HotWallet, TradeConfig, Holding, PendingBuy } from "@shared/schema";
 import { eq, and, or } from "drizzle-orm";
 import * as crypto from "crypto";
-import { fetchTopHolders } from "./helius";
 import { createSnapshot, getSnapshotByToken } from "./ai";
 import { logCopyTradeDecision, type CopyTradeDecision } from "./system-logger";
 import { getConnection, rpcCall } from "./rpc-provider";

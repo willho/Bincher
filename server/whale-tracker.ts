@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { familiarWhales, whaleTokenPositions, tokenDataPool, FamiliarWhale } from "@shared/schema";
 import { eq, and, desc, gte, inArray, sql, or } from "drizzle-orm";
-import { addWhaleWallet, removeWhaleWallet, addWhaleWatchWallet, removeWhaleWatchWallet } from "./unified-webhook";
+// Helius webhooks removed - whale tracking now via PumpFun WebSocket only
 
 const MAX_ACTIVE_WHALES = 50;
 const MAX_WATCH_WHALES = 200;
@@ -68,19 +68,13 @@ export async function setWhaleTier(whaleId: number, tier: WhaleTier): Promise<vo
     })
     .where(eq(familiarWhales.id, whaleId));
   
-  // Manage webhook registrations
+  // Update tier (webhooks removed)
   if (tier === "active" && oldTier !== "active") {
-    if (oldTier === "watch") removeWhaleWatchWallet(whale.walletAddress);
-    addWhaleWallet(whale.walletAddress, { whaleId: whale.id });
-    console.log(`[WhaleTracker] Promoted ${whale.walletAddress.slice(0,8)} to ACTIVE (webhook P4)`);
+    console.log(`[WhaleTracker] Promoted ${whale.walletAddress.slice(0,8)} to ACTIVE`);
   } else if (tier === "watch" && oldTier !== "watch") {
-    if (oldTier === "active") removeWhaleWallet(whale.walletAddress);
-    addWhaleWatchWallet(whale.walletAddress, { whaleId: whale.id });
-    console.log(`[WhaleTracker] Moved ${whale.walletAddress.slice(0,8)} to WATCH (webhook P5)`);
+    console.log(`[WhaleTracker] Moved ${whale.walletAddress.slice(0,8)} to WATCH`);
   } else if (tier === "archive") {
-    if (oldTier === "active") removeWhaleWallet(whale.walletAddress);
-    if (oldTier === "watch") removeWhaleWatchWallet(whale.walletAddress);
-    console.log(`[WhaleTracker] Archived ${whale.walletAddress.slice(0,8)} (removed from webhook)`);
+    console.log(`[WhaleTracker] Archived ${whale.walletAddress.slice(0,8)}`);
   }
 }
 
@@ -229,19 +223,11 @@ export function getTrackerStats(): {
 }
 
 export async function initializeWhaleTracker(): Promise<void> {
-  // Register existing active-tier whales with the unified webhook
+  // Load whale tiers from database (webhooks removed)
   const activeWhales = await getWhalesByTier("active");
-  for (const whale of activeWhales) {
-    addWhaleWallet(whale.walletAddress, { whaleId: whale.id });
-  }
-
-  // Register existing watch-tier whales with the unified webhook (P5)
   const watchWhales = await getWhalesByTier("watch");
-  for (const whale of watchWhales) {
-    addWhaleWatchWallet(whale.walletAddress, { whaleId: whale.id });
-  }
 
-  console.log(`[WhaleTracker] Initialized: ${activeWhales.length} active (P4) + ${watchWhales.length} watch (P5) whales on webhook`);
+  console.log(`[WhaleTracker] Initialized: ${activeWhales.length} active + ${watchWhales.length} watch whales`);
 
   // Start weekly tier rotation (no more polling timer needed)
   rotationTimer = setInterval(async () => {

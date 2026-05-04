@@ -57,7 +57,7 @@ expertMode = true
 [userenv]
 
 [userenv.development]
-HELIUS_API_KEY_DEV = "7c10819e-0451-4eaf-846d-3a9d3b60df06"
+# Helius removed - using Shyft + Chainstack for token metadata
 
 [userenv.production]
-HELIUS_API_KEY_PROD = "088e86b5-b807-41eb-923b-3d6aa1ec8e5a"
+# Helius removed - using Shyft + Chainstack for token metadata

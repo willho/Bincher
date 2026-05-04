@@ -12,7 +12,6 @@ import {
   type PortfolioSnapshotTier
 } from "@shared/schema";
 import { eq, and, lt, desc, gt } from "drizzle-orm";
-import { fetchTopHolders, type TopHolderInfo, type TopHoldersResult } from "./helius";
 import { BatchPriceResult } from "./jupiter";
 
 // Tick data structure for in-memory buffer
