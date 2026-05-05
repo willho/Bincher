@@ -5,7 +5,7 @@ import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SecurityProvider } from "@/contexts/security-context";
-import { Loader2, Shell, PieChart, Compass, Radio } from "lucide-react";
+import { Loader2, Shell, PieChart, Compass, Radio, Settings } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import PortfolioPage from "@/pages/portfolio";
 import SignalsPage from "@/pages/signals";
@@ -103,20 +103,36 @@ function StatusBar({ username }: { username?: string }) {
       </div>
 
       {username && (
-        <button
-          onClick={handleLogout}
-          className="text-xs px-2 py-1 rounded"
-          style={{
-            color: "var(--shell-muted)",
-            fontFamily: "var(--font-mono)",
-            background: "transparent",
-            border: "1px solid var(--shell-border)",
-            cursor: "pointer",
-          }}
-          data-testid="button-logout"
-        >
-          {username}&nbsp;·&nbsp;out
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/settings"
+            className="flex items-center justify-center w-7 h-7 rounded"
+            style={{
+              background: "var(--shell-border)",
+              color: "var(--shell-muted)",
+              cursor: "pointer",
+              display: "flex",
+            }}
+            aria-label="Settings"
+            data-testid="button-settings"
+          >
+            <Settings size={14} />
+          </Link>
+          <button
+            onClick={handleLogout}
+            className="text-xs px-2 py-1 rounded"
+            style={{
+              color: "var(--shell-muted)",
+              fontFamily: "var(--font-mono)",
+              background: "transparent",
+              border: "1px solid var(--shell-border)",
+              cursor: "pointer",
+            }}
+            data-testid="button-logout"
+          >
+            {username}&nbsp;·&nbsp;out
+          </button>
+        </div>
       )}
     </header>
   );

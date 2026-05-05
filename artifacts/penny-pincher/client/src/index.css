@@ -17,6 +17,7 @@
   --shell-border: rgba(255,255,255,0.07);
   --shell-muted: rgba(255,255,255,0.45);
   --font-display: 'Instrument Serif', Georgia, serif;
+  --font-prose: 'Geist', system-ui, sans-serif;
 }
 
 /* ── Shell layout ── */

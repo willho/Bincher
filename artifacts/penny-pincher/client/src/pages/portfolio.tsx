@@ -3,7 +3,8 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useDocumentMeta } from "@/hooks/use-document-meta";
-import { Loader2 } from "lucide-react";
+import { Link } from "wouter";
+import { Loader2, Settings } from "lucide-react";
 import type { Holding, Swap } from "@shared/schema";
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -11,7 +12,8 @@ import type { Holding, Swap } from "@shared/schema";
 interface MonitoringStatus {
   isActive: boolean;
   webhookId?: string | null;
-  lastActivity?: number | null;
+  lastUpdated?: number;
+  totalSwapsDetected?: number;
 }
 
 interface FundStats {
@@ -105,13 +107,9 @@ function Sparkline({
   });
 
   const path = `M ${pts.join(" L ")}`;
-
-  const fillPts = [
-    `0,${height}`,
-    ...pts,
-    `${width},${height}`,
-  ];
+  const fillPts = [`0,${height}`, ...pts, `${width},${height}`];
   const fillPath = `M ${fillPts.join(" L ")} Z`;
+  const gradId = `sg${color.replace(/[^a-z0-9]/gi, "").slice(0, 8)}`;
 
   return (
     <svg
@@ -122,13 +120,44 @@ function Sparkline({
       preserveAspectRatio="none"
     >
       <defs>
-        <linearGradient id={`sg-${color.replace(/[^a-z0-9]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.25" />
           <stop offset="100%" stopColor={color} stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path d={fillPath} fill={`url(#sg-${color.replace(/[^a-z0-9]/gi, "")})`} />
+      <path d={fillPath} fill={`url(#${gradId})`} />
       <path d={path} stroke={color} strokeWidth={strokeWidth} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// ── Win-rate Donut ─────────────────────────────────────────────────────────
+
+function WinRateDonut({ rate }: { rate: number }) {
+  const pct = Math.max(0, Math.min(1, rate));
+  const r = 16;
+  const circ = 2 * Math.PI * r;
+  const filled = circ * pct;
+  const gap = circ - filled;
+
+  return (
+    <svg width={42} height={42} viewBox="0 0 42 42">
+      <circle cx="21" cy="21" r={r} fill="none" stroke="var(--shell-border)" strokeWidth="4" />
+      <circle
+        cx="21"
+        cy="21"
+        r={r}
+        fill="none"
+        stroke="var(--mint)"
+        strokeWidth="4"
+        strokeDasharray={`${filled} ${gap}`}
+        strokeDashoffset={circ * 0.25}
+        strokeLinecap="round"
+        style={{ transition: "stroke-dasharray 0.6s ease" }}
+      />
+      <text x="21" y="21" textAnchor="middle" dominantBaseline="central" fill="var(--mint)" fontSize="9" fontFamily="var(--font-mono)" fontWeight="bold">
+        {Math.round(pct * 100)}%
+      </text>
     </svg>
   );
 }
@@ -157,27 +186,26 @@ function AutoTradingRow({
 
   const isActive = status?.isActive ?? false;
   const isPending = startMon.isPending || stopMon.isPending;
+  const swapCount = status?.totalSwapsDetected ?? 0;
 
   return (
     <div
       className="pincher-card mx-4 mt-3 px-4 py-3 flex items-center gap-3"
       data-testid="card-auto-trading"
     >
-      {/* Pulse indicator */}
+      {/* Pulse */}
       <div className="flex-shrink-0 relative w-5 h-5 flex items-center justify-center">
         {isActive ? (
           <span className="pulse-dot" />
         ) : (
-          <span
-            style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--shell-muted)", display: "inline-block" }}
-          />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--shell-muted)", display: "inline-block" }} />
         )}
       </div>
 
       {/* Labels */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold text-white">Auto-Trading</span>
+          <span className="text-xs font-semibold text-white" style={{ fontFamily: "var(--font-prose)" }}>Auto-Trading</span>
           <span
             className="text-xs font-mono px-1.5 py-0.5 rounded"
             style={{
@@ -190,12 +218,15 @@ function AutoTradingRow({
             {isActive ? "LIVE" : "OFF"}
           </span>
         </div>
-        <div className="flex items-center gap-3 mt-0.5">
+        <div className="flex items-center gap-3 mt-0.5 flex-wrap">
           {balance !== undefined && (
             <span className="text-xs font-mono" style={{ color: "var(--shell-muted)" }} data-testid="text-sol-balance">
               {fmtSol(balance)} SOL
             </span>
           )}
+          <span className="text-xs font-mono" style={{ color: "var(--shell-muted)" }} data-testid="text-scan-rate">
+            {swapCount.toLocaleString()} swaps
+          </span>
         </div>
       </div>
 
@@ -203,6 +234,7 @@ function AutoTradingRow({
       <button
         className="flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-all"
         style={{
+          fontFamily: "var(--font-prose)",
           background: isActive ? "var(--rose-dim)" : "var(--mint-dim)",
           color: isActive ? "var(--rose)" : "var(--mint)",
           border: `1px solid ${isActive ? "var(--rose)" : "var(--mint)"}20`,
@@ -213,13 +245,7 @@ function AutoTradingRow({
         disabled={isPending}
         data-testid="button-monitoring-toggle"
       >
-        {isPending ? (
-          <Loader2 className="h-3 w-3 animate-spin" />
-        ) : isActive ? (
-          "Stop"
-        ) : (
-          "Start"
-        )}
+        {isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : isActive ? "Stop" : "Start"}
       </button>
     </div>
   );
@@ -235,46 +261,29 @@ function HeroPnl({
   snapshots: PortfolioSnapshot[];
 }) {
   const pnl = stats?.totalPnl ?? 0;
-  const pnlPct =
-    stats && stats.solAllocated > 0 ? (pnl / stats.solAllocated) * 100 : 0;
+  const pnlPct = stats && stats.solAllocated > 0 ? (pnl / stats.solAllocated) * 100 : 0;
   const isPositive = pnl >= 0;
-
-  const sparkData = snapshots.map((s) => s.totalValueSol);
+  const sparkData = snapshots.slice(-48).map((s) => s.totalValueSol);
 
   return (
     <div className="pincher-card mx-4 mt-3 px-5 py-4" data-testid="card-hero-pnl">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div
-            className="text-xs mb-1"
-            style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}
-          >
+          <div className="text-xs mb-1" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}>
             Session P&amp;L
           </div>
           <div
             className="text-4xl font-bold leading-none"
-            style={{
-              color: isPositive ? "var(--mint)" : "var(--rose)",
-              fontFamily: "var(--font-display)",
-            }}
+            style={{ color: isPositive ? "var(--mint)" : "var(--rose)", fontFamily: "var(--font-display)" }}
             data-testid="text-hero-pnl"
           >
-            {isPositive ? "+" : ""}
-            {fmtSol(pnl)}
-            <span className="text-base ml-1" style={{ opacity: 0.7 }}>
-              SOL
-            </span>
+            {isPositive ? "+" : ""}{fmtSol(pnl)}
+            <span className="text-base ml-1" style={{ opacity: 0.7 }}>SOL</span>
           </div>
-          <div
-            className="text-sm mt-1 font-mono"
-            style={{ color: isPositive ? "var(--mint)" : "var(--rose)" }}
-            data-testid="text-hero-pnl-pct"
-          >
+          <div className="text-sm mt-1 font-mono" style={{ color: isPositive ? "var(--mint)" : "var(--rose)" }} data-testid="text-hero-pnl-pct">
             {fmtPct(pnlPct)}
           </div>
         </div>
-
-        {/* Sparkline */}
         <div className="flex-shrink-0 mt-1">
           <Sparkline
             data={sparkData.length >= 2 ? sparkData : [0, 0.2, 0.1, 0.3, 0.4, 0.35, 0.5]}
@@ -284,49 +293,48 @@ function HeroPnl({
           />
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Stats row */}
-      <div
-        className="flex items-center gap-4 mt-3 pt-3"
-        style={{ borderTop: "1px solid var(--shell-border)" }}
-      >
-        <div className="text-center">
-          <div
-            className="text-xs"
-            style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}
-          >
-            Trades
-          </div>
-          <div className="text-sm font-bold text-white" data-testid="text-trade-count">
-            {stats?.totalTrades ?? 0}
-          </div>
+// ── Performance Stats Row ─────────────────────────────────────────────────
+
+function PerformanceStatsRow({ stats }: { stats: FundStats | undefined }) {
+  const winRate = stats?.winRate ?? 0;
+  const profitFactor = stats?.profitFactor ?? 0;
+  const netPnl = stats?.totalPnl ?? 0;
+  const isNetPositive = netPnl >= 0;
+
+  return (
+    <div className="pincher-card mx-4 mt-3 px-4 py-3 flex items-center justify-around" data-testid="card-perf-stats">
+      {/* Win-rate donut */}
+      <div className="flex flex-col items-center gap-1">
+        <WinRateDonut rate={winRate} />
+        <span className="text-xs" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>WIN RATE</span>
+      </div>
+
+      <div style={{ width: 1, height: 40, background: "var(--shell-border)" }} />
+
+      {/* Profit factor */}
+      <div className="flex flex-col items-center gap-1">
+        <div className="text-xl font-bold font-mono" style={{ color: profitFactor >= 1 ? "var(--mint)" : "var(--rose)" }} data-testid="text-stat-profit-factor">
+          {profitFactor.toFixed(2)}x
         </div>
-        <div className="text-center">
-          <div
-            className="text-xs"
-            style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}
-          >
-            Win Rate
-          </div>
-          <div
-            className="text-sm font-bold"
-            style={{ color: "var(--mint)" }}
-            data-testid="text-win-rate"
-          >
-            {((stats?.winRate ?? 0) * 100).toFixed(0)}%
-          </div>
+        <span className="text-xs" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>PROFIT FACTOR</span>
+      </div>
+
+      <div style={{ width: 1, height: 40, background: "var(--shell-border)" }} />
+
+      {/* Net P&L */}
+      <div className="flex flex-col items-center gap-1">
+        <div
+          className="text-xl font-bold font-mono"
+          style={{ color: isNetPositive ? "var(--mint)" : "var(--rose)" }}
+          data-testid="text-stat-net-pnl"
+        >
+          {isNetPositive ? "+" : ""}{fmtSol(netPnl)}
         </div>
-        <div className="text-center">
-          <div
-            className="text-xs"
-            style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}
-          >
-            Profit Factor
-          </div>
-          <div className="text-sm font-bold text-white" data-testid="text-profit-factor">
-            {(stats?.profitFactor ?? 0).toFixed(2)}x
-          </div>
-        </div>
+        <span className="text-xs" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>NET P&amp;L</span>
       </div>
     </div>
   );
@@ -335,17 +343,16 @@ function HeroPnl({
 // ── 4-up Portfolio Grid ────────────────────────────────────────────────────
 
 type ClosedPeriod = "1H" | "24H" | "7D";
+const SOL_MINT = "So11111111111111111111111111111111111111112";
 
 function PortfolioGrid({
   holdings,
   swaps,
   config,
-  balance,
 }: {
   holdings: Holding[] | undefined;
   swaps: Swap[] | undefined;
   config: TradeConfig | undefined;
-  balance: number | undefined;
 }) {
   const [closedPeriod, setClosedPeriod] = useState<ClosedPeriod>("24H");
 
@@ -361,23 +368,18 @@ function PortfolioGrid({
 
   const closedStats = useMemo(() => {
     const now = Math.floor(Date.now() / 1000);
-    const cutoffs: Record<ClosedPeriod, number> = {
-      "1H": now - 3600,
-      "24H": now - 86400,
-      "7D": now - 604800,
-    };
+    const cutoffs: Record<ClosedPeriod, number> = { "1H": now - 3600, "24H": now - 86400, "7D": now - 604800 };
     const cutoff = cutoffs[closedPeriod];
-    const periodSwaps = (swaps ?? []).filter(
-      (s) => s.timestamp >= cutoff && s.toToken === "So11111111111111111111111111111111111111112"
+    const sellSwaps = (swaps ?? []).filter(
+      (s) => s.timestamp >= cutoff && s.toToken === SOL_MINT
     );
-    const wins = periodSwaps.filter((s) => {
-      const matching = (swaps ?? []).find(
-        (b) => b.toToken === s.fromToken && b.timestamp < s.timestamp
+    const wins = sellSwaps.filter((s) => {
+      const buy = (swaps ?? []).find(
+        (b) => b.toToken === s.fromToken && b.fromToken === SOL_MINT && b.timestamp < s.timestamp
       );
-      if (!matching) return false;
-      return s.toAmount > matching.fromAmount;
+      return buy ? s.toAmount > buy.fromAmount : false;
     });
-    return { total: periodSwaps.length, wins: wins.length, losses: periodSwaps.length - wins.length };
+    return { total: sellSwaps.length, wins: wins.length, losses: sellSwaps.length - wins.length };
   }, [swaps, closedPeriod]);
 
   const tiles: { label: React.ReactNode; value: string; sub: string; color: string; testId: string }[] = [
@@ -392,16 +394,18 @@ function PortfolioGrid({
       label: (
         <div className="flex items-center gap-1">
           <span>Closed</span>
-          <div className="flex" style={{ fontSize: "0.55rem" }}>
+          <div className="flex">
             {(["1H", "24H", "7D"] as ClosedPeriod[]).map((p) => (
               <button
                 key={p}
                 onClick={(e) => { e.stopPropagation(); setClosedPeriod(p); }}
                 className="px-1 rounded"
                 style={{
+                  fontSize: "0.55rem",
                   background: closedPeriod === p ? "var(--violet-dim)" : "transparent",
                   color: closedPeriod === p ? "var(--violet)" : "var(--shell-muted)",
                   fontFamily: "var(--font-mono)",
+                  cursor: "pointer",
                 }}
                 data-testid={`button-closed-period-${p}`}
               >
@@ -435,24 +439,14 @@ function PortfolioGrid({
   return (
     <div className="mx-4 mt-3 grid grid-cols-2 gap-2" data-testid="grid-portfolio">
       {tiles.map((tile, i) => (
-        <div
-          key={i}
-          className="pincher-card px-3 py-3"
-          data-testid={tile.testId}
-        >
-          <div
-            className="text-xs mb-1"
-            style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}
-          >
+        <div key={i} className="pincher-card px-3 py-3" data-testid={tile.testId}>
+          <div className="text-xs mb-1" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}>
             {tile.label}
           </div>
-          <div
-            className="text-xl font-bold leading-tight"
-            style={{ color: tile.color, fontFamily: "var(--font-mono)" }}
-          >
+          <div className="text-xl font-bold leading-tight" style={{ color: tile.color, fontFamily: "var(--font-mono)" }}>
             {tile.value}
           </div>
-          <div className="text-xs mt-0.5" style={{ color: "var(--shell-muted)" }}>
+          <div className="text-xs mt-0.5" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-prose)" }}>
             {tile.sub}
           </div>
         </div>
@@ -463,7 +457,13 @@ function PortfolioGrid({
 
 // ── Open Positions List ────────────────────────────────────────────────────
 
-function PositionCard({ holding }: { holding: Holding }) {
+function PositionCard({
+  holding,
+  snapshotValues,
+}: {
+  holding: Holding;
+  snapshotValues: number[];
+}) {
   const symbol = holding.tokenSymbol || truncate(holding.tokenMint, 4);
   const badgeChar = symbol.slice(0, 2).toUpperCase();
   const badgeColor = tickerBadgeColor(symbol);
@@ -475,7 +475,20 @@ function PositionCard({ holding }: { holding: Holding }) {
   const pnlPct = costBasis > 0 ? (pnlSol / costBasis) * 100 : 0;
   const isPositive = pnlSol >= 0;
 
-  const dummySparkline = [costBasis, (costBasis + currentValue) / 2, currentValue];
+  // Derive a sparkline from portfolio snapshots (proxy) or a 3-point estimate
+  const sparkData = snapshotValues.length >= 2
+    ? snapshotValues
+    : [costBasis, (costBasis + currentValue) / 2, currentValue];
+
+  // Status chip derivation from available fields
+  const hasStopLoss = (holding.stopLossPercent !== undefined && holding.stopLossPercent !== null);
+  const highestMult = holding.highestMultiplier ?? 1;
+  const isDrawdown = currentValue > 0 && costBasis > 0 && pnlPct < -15;
+  const isHighMult = highestMult >= 2;
+  const h = holding as unknown as Record<string, unknown>;
+  const hasCluster = Boolean(h.clusterId ?? h.cluster_id);
+  const hasWhale = Boolean(h.whaleConfirmed ?? h.whale_confirmed);
+  const hasTrailingStop = Boolean(h.trailingStop ?? h.trailing_stop ?? hasStopLoss);
 
   return (
     <div
@@ -493,32 +506,27 @@ function PositionCard({ holding }: { holding: Holding }) {
       {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-sm font-semibold text-white truncate">{symbol}</span>
+          <span className="text-sm font-semibold text-white truncate" style={{ fontFamily: "var(--font-prose)" }}>
+            {symbol}
+          </span>
           <span
             className="text-sm font-bold font-mono flex-shrink-0"
             style={{ color: isPositive ? "var(--mint)" : "var(--rose)" }}
           >
-            {isPositive ? "+" : ""}
-            {fmtSol(pnlSol)} SOL
+            {isPositive ? "+" : ""}{fmtSol(pnlSol)} SOL
           </span>
         </div>
 
-        <div
-          className="flex items-center justify-between gap-2 mt-0.5"
-          style={{ color: "var(--shell-muted)" }}
-        >
+        <div className="flex items-center justify-between gap-2 mt-0.5" style={{ color: "var(--shell-muted)" }}>
           <span className="text-xs font-mono">
-            {fmtSol(costBasis)} → {fmtSol(currentValue)} SOL
+            {fmtSol(costBasis)} → {fmtSol(currentValue)}
           </span>
           <div className="flex items-center gap-2">
-            <span
-              className="text-xs font-mono"
-              style={{ color: isPositive ? "var(--mint)" : "var(--rose)" }}
-            >
+            <span className="text-xs font-mono" style={{ color: isPositive ? "var(--mint)" : "var(--rose)" }}>
               {fmtPct(pnlPct)}
             </span>
             <Sparkline
-              data={dummySparkline}
+              data={sparkData}
               width={48}
               height={20}
               color={isPositive ? "#34d399" : "#f43f5e"}
@@ -529,28 +537,44 @@ function PositionCard({ holding }: { holding: Holding }) {
 
         {/* Status chips */}
         <div className="flex flex-wrap gap-1 mt-1.5">
-          {Boolean((holding as Record<string, unknown>).trailingStopEnabled) && (
+          {hasTrailingStop && (
             <span
-              className="text-xs px-1.5 py-0.5 rounded"
+              className="px-1.5 py-0.5 rounded"
               style={{ background: "var(--amber-dim)", color: "var(--amber)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
             >
               TSL
             </span>
           )}
-          {Boolean((holding as Record<string, unknown>).whaleConfirmed) && (
+          {hasWhale && (
             <span
-              className="text-xs px-1.5 py-0.5 rounded"
+              className="px-1.5 py-0.5 rounded"
               style={{ background: "var(--mint-dim)", color: "var(--mint)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
             >
               WHALE
             </span>
           )}
-          {Boolean((holding as Record<string, unknown>).clusterId) && (
+          {hasCluster && (
             <span
-              className="text-xs px-1.5 py-0.5 rounded"
+              className="px-1.5 py-0.5 rounded"
               style={{ background: "var(--violet-dim)", color: "var(--violet)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
             >
               CLUSTER
+            </span>
+          )}
+          {isHighMult && (
+            <span
+              className="px-1.5 py-0.5 rounded"
+              style={{ background: "var(--mint-dim)", color: "var(--mint)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
+            >
+              {highestMult.toFixed(1)}x
+            </span>
+          )}
+          {isDrawdown && (
+            <span
+              className="px-1.5 py-0.5 rounded"
+              style={{ background: "var(--rose-dim)", color: "var(--rose)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
+            >
+              DRAWDOWN
             </span>
           )}
         </div>
@@ -559,11 +583,20 @@ function PositionCard({ holding }: { holding: Holding }) {
   );
 }
 
-function OpenPositionsList({ holdings }: { holdings: Holding[] | undefined }) {
+function OpenPositionsList({
+  holdings,
+  snapshots,
+}: {
+  holdings: Holding[] | undefined;
+  snapshots: PortfolioSnapshot[];
+}) {
   const open = useMemo(
     () => (holdings ?? []).filter((h) => !h.reclaimed && h.currentAmount > 0),
     [holdings]
   );
+
+  // Use recent portfolio snapshot values as a proxy sparkline for each position
+  const snapshotValues = snapshots.slice(-12).map((s) => s.totalValueSol);
 
   if (open.length === 0) {
     return (
@@ -573,7 +606,7 @@ function OpenPositionsList({ holdings }: { holdings: Holding[] | undefined }) {
         data-testid="text-no-positions"
       >
         <div className="text-2xl mb-2">🔍</div>
-        <div className="text-sm">No open positions</div>
+        <div className="text-sm" style={{ fontFamily: "var(--font-prose)" }}>No open positions</div>
       </div>
     );
   }
@@ -587,7 +620,7 @@ function OpenPositionsList({ holdings }: { holdings: Holding[] | undefined }) {
         OPEN POSITIONS ({open.length})
       </div>
       {open.map((h) => (
-        <PositionCard key={h.tokenMint} holding={h} />
+        <PositionCard key={h.tokenMint} holding={h} snapshotValues={snapshotValues} />
       ))}
     </div>
   );
@@ -595,58 +628,119 @@ function OpenPositionsList({ holdings }: { holdings: Holding[] | undefined }) {
 
 // ── Transaction Timeline ───────────────────────────────────────────────────
 
-const SOL_MINT = "So11111111111111111111111111111111111111112";
+interface TimelineEvent {
+  id: string;
+  ts: number;
+  type: "buy" | "sell-profit" | "sell-loss" | "system" | "deposit" | "toggle";
+  label: string;
+  detail?: string;
+}
 
-function TimelineRow({ swap }: { swap: Swap }) {
-  const isBuy = swap.fromToken === SOL_MINT;
-  const isSell = swap.toToken === SOL_MINT;
+function buildTimeline(swaps: Swap[] | undefined, monStatus: MonitoringStatus | undefined): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
 
-  let dotColor = "var(--violet)";
-  let label = "Swap";
-  let detail = "";
+  // Swap events
+  (swaps ?? []).forEach((s) => {
+    const isBuy = s.fromToken === SOL_MINT;
+    const isSell = s.toToken === SOL_MINT;
+    if (isBuy) {
+      events.push({
+        id: `swap-${s.id}`,
+        ts: s.timestamp,
+        type: "buy",
+        label: `Buy ${s.toTokenSymbol || truncate(s.toToken || "", 4)}`,
+        detail: `${fmtSol(s.fromAmount)} SOL`,
+      });
+    } else if (isSell) {
+      const fromBuy = (swaps ?? []).find(
+        (b) => b.toToken === s.fromToken && b.fromToken === SOL_MINT && b.timestamp < s.timestamp
+      );
+      const isProfit = fromBuy ? s.toAmount > fromBuy.fromAmount : true;
+      events.push({
+        id: `swap-${s.id}`,
+        ts: s.timestamp,
+        type: isProfit ? "sell-profit" : "sell-loss",
+        label: `Sell ${s.fromTokenSymbol || truncate(s.fromToken || "", 4)}`,
+        detail: `+${fmtSol(s.toAmount)} SOL`,
+      });
+    } else {
+      // Other swap (non-SOL pair)
+      events.push({
+        id: `swap-${s.id}`,
+        ts: s.timestamp,
+        type: "system",
+        label: `Swap ${s.fromTokenSymbol || "token"}`,
+        detail: undefined,
+      });
+    }
+  });
 
-  if (isBuy) {
-    dotColor = "var(--mint)";
-    label = `Buy ${swap.toTokenSymbol || truncate(swap.toToken || "", 4)}`;
-    detail = `${fmtSol(swap.fromAmount)} SOL`;
-  } else if (isSell) {
-    const pnl = swap.toAmount - swap.fromAmount;
-    dotColor = pnl >= 0 ? "var(--mint)" : "var(--rose)";
-    label = `Sell ${swap.fromTokenSymbol || truncate(swap.fromToken || "", 4)}`;
-    detail = `+${fmtSol(swap.toAmount)} SOL`;
+  // Synthetic toggle event from monitoring status
+  if (monStatus?.lastUpdated && monStatus.lastUpdated > 0) {
+    events.push({
+      id: "toggle-latest",
+      ts: monStatus.lastUpdated,
+      type: "toggle",
+      label: `Auto-trading ${monStatus.isActive ? "started" : "stopped"}`,
+      detail: undefined,
+    });
   }
 
+  // Sort descending and take top 15
+  return events.sort((a, b) => b.ts - a.ts).slice(0, 15);
+}
+
+const DOT_COLORS: Record<TimelineEvent["type"], { bg: string; border?: string }> = {
+  buy: { bg: "transparent", border: "var(--mint)" },
+  "sell-profit": { bg: "var(--mint)" },
+  "sell-loss": { bg: "var(--rose)" },
+  system: { bg: "var(--violet)" },
+  deposit: { bg: "var(--amber)" },
+  toggle: { bg: "var(--amber)" },
+};
+
+const LABEL_COLORS: Record<TimelineEvent["type"], string> = {
+  buy: "var(--mint)",
+  "sell-profit": "var(--mint)",
+  "sell-loss": "var(--rose)",
+  system: "var(--violet)",
+  deposit: "var(--amber)",
+  toggle: "var(--amber)",
+};
+
+function TimelineRow({ event, isLast }: { event: TimelineEvent; isLast: boolean }) {
+  const dot = DOT_COLORS[event.type];
+  const detailColor = LABEL_COLORS[event.type];
+
   return (
-    <div className="flex items-start gap-3" data-testid={`timeline-row-${swap.signature?.slice(0, 8) ?? swap.id}`}>
-      {/* Dot + line */}
+    <div className="flex items-start gap-3" data-testid={`timeline-row-${event.id}`}>
       <div className="flex flex-col items-center flex-shrink-0 mt-0.5">
         <div
           style={{
             width: 8,
             height: 8,
             borderRadius: "50%",
-            background: isBuy ? "transparent" : dotColor,
-            border: isBuy ? `2px solid ${dotColor}` : "none",
+            background: dot.bg,
+            border: dot.border ? `2px solid ${dot.border}` : "none",
             flexShrink: 0,
           }}
         />
-        <div style={{ width: 1, flex: 1, minHeight: 16, background: "var(--shell-border)" }} />
+        {!isLast && (
+          <div style={{ width: 1, flex: 1, minHeight: 16, background: "var(--shell-border)" }} />
+        )}
       </div>
-
-      {/* Content */}
       <div className="flex-1 min-w-0 pb-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-white">{label}</span>
+          <span className="text-xs font-semibold text-white" style={{ fontFamily: "var(--font-prose)" }}>
+            {event.label}
+          </span>
           <span className="text-xs font-mono flex-shrink-0" style={{ color: "var(--shell-muted)" }}>
-            {fmtTimeAgo(swap.timestamp)}
+            {fmtTimeAgo(event.ts)}
           </span>
         </div>
-        {detail && (
-          <span
-            className="text-xs font-mono"
-            style={{ color: isBuy ? "var(--mint)" : dotColor }}
-          >
-            {detail}
+        {event.detail && (
+          <span className="text-xs font-mono" style={{ color: detailColor }}>
+            {event.detail}
           </span>
         )}
       </div>
@@ -654,11 +748,14 @@ function TimelineRow({ swap }: { swap: Swap }) {
   );
 }
 
-function TransactionTimeline({ swaps }: { swaps: Swap[] | undefined }) {
-  const recent = useMemo(
-    () => [...(swaps ?? [])].sort((a, b) => b.timestamp - a.timestamp).slice(0, 15),
-    [swaps]
-  );
+function TransactionTimeline({
+  swaps,
+  monStatus,
+}: {
+  swaps: Swap[] | undefined;
+  monStatus: MonitoringStatus | undefined;
+}) {
+  const events = useMemo(() => buildTimeline(swaps, monStatus), [swaps, monStatus]);
 
   return (
     <div className="mx-4 mt-3 mb-2" data-testid="section-timeline">
@@ -668,18 +765,18 @@ function TransactionTimeline({ swaps }: { swaps: Swap[] | undefined }) {
       >
         RECENT ACTIVITY
       </div>
-      {recent.length === 0 ? (
+      {events.length === 0 ? (
         <div
           className="pincher-card px-4 py-6 text-center text-xs"
-          style={{ color: "var(--shell-muted)" }}
+          style={{ color: "var(--shell-muted)", fontFamily: "var(--font-prose)" }}
           data-testid="text-no-activity"
         >
           No recent activity
         </div>
       ) : (
         <div className="pincher-card px-4 pt-4 pb-1">
-          {recent.map((s) => (
-            <TimelineRow key={s.id} swap={s} />
+          {events.map((e, i) => (
+            <TimelineRow key={e.id} event={e} isLast={i === events.length - 1} />
           ))}
         </div>
       )}
@@ -730,28 +827,16 @@ export default function PortfolioPage() {
     staleTime: 60000,
   });
 
+  const snapshots = snapshotsData?.snapshots ?? [];
+
   return (
     <div className="page-scroll" data-testid="page-portfolio">
-      <AutoTradingRow
-        status={status}
-        balance={balanceData?.balance}
-      />
-
-      <HeroPnl
-        stats={fundStats}
-        snapshots={snapshotsData?.snapshots ?? []}
-      />
-
-      <PortfolioGrid
-        holdings={holdings}
-        swaps={swaps}
-        config={config}
-        balance={balanceData?.balance}
-      />
-
-      <OpenPositionsList holdings={holdings} />
-
-      <TransactionTimeline swaps={swaps} />
+      <AutoTradingRow status={status} balance={balanceData?.balance} />
+      <HeroPnl stats={fundStats} snapshots={snapshots} />
+      <PortfolioGrid holdings={holdings} swaps={swaps} config={config} />
+      <PerformanceStatsRow stats={fundStats} />
+      <OpenPositionsList holdings={holdings} snapshots={snapshots} />
+      <TransactionTimeline swaps={swaps} monStatus={status} />
     </div>
   );
 }
