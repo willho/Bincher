@@ -347,50 +347,188 @@ export default function PortfolioPage() {
         </TabsContent>
 
         <TabsContent value="system-picks" className="space-y-4">
+          {/* Warm-up Status & Auto-Trading Toggle */}
+          <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Zap className="h-5 w-5" />
+                System Picks Fund - Auto-Trading Control
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                {/* Warm-up Status */}
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Warm-up Status</p>
+                  <div className="space-y-1">
+                    <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">7 Days Initialization</p>
+                    <p className="text-xs text-muted-foreground">System collecting data before live trading</p>
+                  </div>
+                </div>
+
+                {/* Auto-Trading Toggle */}
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Auto-Trading Status</p>
+                  <div className="flex items-center gap-3 rounded-lg border p-3">
+                    <div className="flex-1">
+                      <p className="text-sm">Real SOL Trading</p>
+                      <p className="text-xs text-muted-foreground">Live positions with actual funds</p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={true}
+                      className="cursor-not-allowed"
+                      title="Enable after warm-up completes"
+                    >
+                      Disabled
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Portfolio Overview */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <BarChart3 className="h-5 w-5" />
-                System Picks Fund
+                <Briefcase className="h-5 w-5" />
+                Portfolio Overview
               </CardTitle>
-              <CardDescription>1 SOL simulated trading performance</CardDescription>
+              <CardDescription>System picks performance and allocation</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 md:grid-cols-3">
+              <div className="grid gap-4 md:grid-cols-4">
+                {/* Expected Positions Today */}
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>Fund Value</CardDescription>
+                    <CardDescription>Expected Today</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold">1.00 SOL</div>
-                    <p className="text-xs text-muted-foreground">Starting capital</p>
+                    <div className="text-2xl font-bold">{positionBudget?.expectedPositionsPerDay.toFixed(1) || "—"}</div>
+                    <p className="text-xs text-muted-foreground">Positions this period</p>
                   </CardContent>
                 </Card>
 
+                {/* Base Allocation */}
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>Total Picks</CardDescription>
+                    <CardDescription>Base Allocation</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold">—</div>
-                    <p className="text-xs text-muted-foreground">System enabled trades</p>
+                    <div className="text-2xl font-bold">{formatSol(positionBudget?.baseAllocationPerPosition || 0)} SOL</div>
+                    <p className="text-xs text-muted-foreground">Per position</p>
                   </CardContent>
                 </Card>
 
+                {/* Current Positions */}
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>Win Rate</CardDescription>
+                    <CardDescription>Open Positions</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="text-2xl font-bold">—</div>
-                    <p className="text-xs text-muted-foreground">Successful picks</p>
+                    <div className="text-2xl font-bold">{openPositions.length || "0"}</div>
+                    <p className="text-xs text-muted-foreground">Active trades</p>
+                  </CardContent>
+                </Card>
+
+                {/* Ape Budget */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Ape Budget</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{formatSol(positionBudget?.apeBudget || 0)} SOL</div>
+                    <p className="text-xs text-muted-foreground">Bonus allocation</p>
                   </CardContent>
                 </Card>
               </div>
+            </CardContent>
+          </Card>
 
-              <div className="border-t pt-4">
-                <p className="text-sm text-muted-foreground">System picks are disabled until validation gates are met (30%+ gain, 50+ trades, 65%+ win rate).</p>
-              </div>
+          {/* Performance Analytics */}
+          {positionAnalytics && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Performance Analytics</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-4">
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">Total Positions</p>
+                    <p className="text-2xl font-bold">{positionAnalytics.totalPositions}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">Win Rate</p>
+                    <p className={`text-2xl font-bold ${positionAnalytics.totalPositions > 0 && (positionAnalytics.winningPositions / positionAnalytics.totalPositions) > 0.5 ? "text-green-500" : "text-red-500"}`}>
+                      {positionAnalytics.totalPositions > 0 ? ((positionAnalytics.winningPositions / positionAnalytics.totalPositions) * 100).toFixed(0) : 0}%
+                    </p>
+                    <p className="text-xs text-muted-foreground">{positionAnalytics.winningPositions}/{positionAnalytics.totalPositions} won</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">Profit Factor</p>
+                    <p className={`text-2xl font-bold ${positionAnalytics.profitFactor >= 1 ? "text-green-500" : "text-red-500"}`}>
+                      {positionAnalytics.profitFactor.toFixed(2)}x
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground">Total P&L</p>
+                    <p className={`text-2xl font-bold ${positionAnalytics.totalPnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                      {positionAnalytics.totalPnl >= 0 ? "+" : ""}{formatUsd(positionAnalytics.totalPnl)}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Open Positions */}
+          {openPositions.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Open Positions ({openPositions.length})</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {openPositions.map((position) => {
+                    const currentValue = position.entryPrice * position.highestPrice;
+                    const pnl = currentValue - position.entrySol;
+                    const pnlPercent = (pnl / position.entrySol) * 100;
+                    const holdMinutes = (Date.now() - position.openedAt) / 60000;
+
+                    return (
+                      <div key={position.id} className="flex items-center justify-between rounded-lg border p-3">
+                        <div className="flex-1">
+                          <div className="font-semibold">{position.tokenSymbol}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {formatSol(position.entrySol)} SOL @ {position.entryPrice.toFixed(6)} • Held {holdMinutes < 60 ? `${Math.round(holdMinutes)}m` : `${(holdMinutes / 60).toFixed(1)}h`}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-semibold">{formatUsd(currentValue)}</div>
+                          <div className={`text-sm ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
+                            {pnl >= 0 ? "+" : ""}{formatUsd(pnl)} ({pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%)
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Info */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">System Status</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground space-y-2">
+              <p>✓ Collecting 7-day warm-up data before enabling real SOL trading</p>
+              <p>✓ Expected daily positions: {positionBudget?.expectedPositionsPerDay.toFixed(1) || "—"}</p>
+              <p>✓ Base allocation per position: {formatSol(positionBudget?.baseAllocationPerPosition || 0)} SOL</p>
+              <p>✓ Check /api/system-appraisal?passkey=debug for detailed learning metrics</p>
             </CardContent>
           </Card>
         </TabsContent>
