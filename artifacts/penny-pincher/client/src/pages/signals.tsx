@@ -272,7 +272,7 @@ export default function SignalsPage() {
             <CardDescription>Enter a Solana wallet address to monitor for trade signals</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3">
               <div className="space-y-2">
                 <Label htmlFor="wallet-address">Wallet Address</Label>
                 <Input
@@ -310,7 +310,7 @@ export default function SignalsPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <Card data-testid="card-total-signals">
           <CardHeader className="pb-2">
             <CardDescription>Signal Wallets</CardDescription>

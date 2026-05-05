@@ -5,185 +5,161 @@ import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SecurityProvider } from "@/contexts/security-context";
-import {
-  SidebarProvider,
-  SidebarTrigger,
-  Sidebar,
-  SidebarContent,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarMenu,
-  SidebarMenuItem,
-  SidebarMenuButton,
-  SidebarHeader,
-  SidebarFooter,
-} from "@/components/ui/sidebar";
-import { Button } from "@/components/ui/button";
-import DashboardConsolidated from "@/pages/dashboard-consolidated";
-import TradingPage from "@/pages/trading";
+import { Loader2, Shell, PieChart, Compass, Radio, Settings, Menu } from "lucide-react";
+import { apiRequest } from "@/lib/queryClient";
+import PortfolioPage from "@/pages/portfolio";
+import SignalsPage from "@/pages/signals";
+import DiscoveryPage from "@/pages/discovery";
 import TokenPage from "@/pages/token";
 import TokenDetailPage from "@/pages/token-detail";
 import WalletDetailPage from "@/pages/wallet-detail";
 import SignalWalletPage from "@/pages/signal-wallet";
 import CopySettingsPage from "@/pages/copy-settings";
 import HoldingsPage from "@/pages/holdings";
-import SignalsPage from "@/pages/signals";
-import { Redirect } from "wouter";
 import SettingsPage from "@/pages/settings";
+import TradingPage from "@/pages/trading";
 import Login from "@/pages/login";
 import ResetPassword from "@/pages/reset-password";
-import DiscoveryPage from "@/pages/discovery";
 import NotFound from "@/pages/not-found";
-import { PincherFooter } from "@/components/pincher-footer";
-import { Loader2, LayoutDashboard, Eye, TrendingUp, Settings, LogOut, Shell, TestTube, Droplet, Wallet, Coins, Radio, FlaskConical, Compass } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { SidebarGroupLabel } from "@/components/ui/sidebar";
-import { apiRequest } from "@/lib/queryClient";
+import { Redirect } from "wouter";
 
-const overviewItems = [
-  { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { title: "Discovery", href: "/discovery", icon: Compass },
-];
+// ── Bottom Nav ────────────────────────────────────────────────────────────
 
-const tradingItems = [
-  { title: "Holdings", href: "/holdings", icon: Coins, description: "Your Positions" },
-  { title: "Signals", href: "/signals", icon: Radio, description: "Signal Wallets" },
-  { title: "Trading", href: "/trading", icon: TrendingUp, description: "Hot Wallet" },
-];
+const NAV_TABS = [
+  { label: "Portfolio", href: "/", icon: PieChart },
+  { label: "Discovery", href: "/discovery", icon: Compass },
+  { label: "Appraisal", href: "/signals", icon: Radio },
+] as const;
 
-const systemItems = [
-  { title: "Settings", href: "/settings", icon: Settings },
-];
-
-function AppSidebar() {
+function BottomNav() {
   const [location] = useLocation();
 
+  const activeTab: string = (() => {
+    if (location === "/" || location === "/portfolio") return "/";
+    if (location.startsWith("/discovery")) return "/discovery";
+    if (location.startsWith("/signals") || location.startsWith("/signal/")) return "/signals";
+    return "/";
+  })();
+
+  return (
+    <nav className="bottom-nav" data-testid="bottom-nav">
+      <div className="flex items-center justify-around px-2 py-2">
+        {NAV_TABS.map(({ label, href, icon: Icon }) => {
+          const isActive = activeTab === href;
+          return (
+            <Link key={href} href={href}>
+              <div
+                className="flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl transition-all cursor-pointer"
+                style={{ background: isActive ? "var(--mint-dim)" : "transparent" }}
+                data-testid={`nav-tab-${label.toLowerCase()}`}
+              >
+                <Icon
+                  size={20}
+                  style={{ color: isActive ? "var(--mint)" : "var(--shell-muted)" }}
+                />
+                <span
+                  className="text-xs font-semibold"
+                  style={{
+                    color: isActive ? "var(--mint)" : "var(--shell-muted)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: "0.6rem",
+                    letterSpacing: "0.05em",
+                  }}
+                >
+                  {label.toUpperCase()}
+                </span>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}
+
+// ── Status Bar ─────────────────────────────────────────────────────────────
+
+function StatusBar({ username }: { username?: string }) {
   const handleLogout = async () => {
     await apiRequest("POST", "/api/auth/logout");
     queryClient.invalidateQueries({ queryKey: ["/api/auth/session"] });
   };
 
   return (
-    <Sidebar>
-      <SidebarHeader className="p-4 border-b">
-        <Link href="/dashboard">
-          <div className="flex items-center gap-2 cursor-pointer" data-testid="link-logo">
-            <Shell className="h-6 w-6 text-primary" />
-            <span className="font-bold text-lg">Penny Pincher</span>
-          </div>
-        </Link>
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Overview</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {overviewItems.map((item) => {
-                const isActive = location === item.href || location === "/";
-                return (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton 
-                      asChild 
-                      data-active={isActive}
-                      className="data-[active=true]:bg-sidebar-accent"
-                    >
-                      <Link href={item.href} data-testid={`link-nav-${item.title.toLowerCase()}`}>
-                        <item.icon className="h-4 w-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Trading</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {tradingItems.map((item) => {
-                const isActive = location === item.href || 
-                  (item.href === "/trading" && location.startsWith("/trading/")) ||
-                  (item.href === "/holdings" && location.startsWith("/holdings/"));
-                return (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton 
-                      asChild 
-                      data-active={isActive}
-                      className="data-[active=true]:bg-sidebar-accent"
-                    >
-                      <Link href={item.href} data-testid={`link-nav-${item.title.toLowerCase()}`}>
-                        <item.icon className="h-4 w-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>System</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {systemItems.map((item) => {
-                const isActive = location === item.href;
-                return (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton 
-                      asChild 
-                      data-active={isActive}
-                      className="data-[active=true]:bg-sidebar-accent"
-                    >
-                      <Link href={item.href} data-testid={`link-nav-${item.title.toLowerCase()}`}>
-                        <item.icon className="h-4 w-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter className="p-4 border-t">
-        <Button 
-          variant="ghost" 
-          className="w-full justify-start gap-2"
-          onClick={handleLogout}
-          data-testid="button-logout"
+    <header
+      className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+      style={{ borderBottom: "1px solid var(--shell-border)", background: "var(--shell-bg)" }}
+      data-testid="status-bar"
+    >
+      <div className="flex items-center gap-2">
+        <Shell size={18} style={{ color: "var(--mint)" }} />
+        <span
+          className="font-bold text-sm text-white"
+          style={{ letterSpacing: "0.02em" }}
+          data-testid="link-logo"
         >
-          <LogOut className="h-4 w-4" />
-          Logout
-        </Button>
-      </SidebarFooter>
-    </Sidebar>
+          Penny Pincher
+        </span>
+      </div>
+
+      {username && (
+        <div className="flex items-center gap-2">
+          <Link
+            href="/settings"
+            className="flex items-center justify-center w-7 h-7 rounded"
+            style={{
+              background: "var(--shell-border)",
+              color: "var(--shell-muted)",
+              cursor: "pointer",
+              display: "flex",
+            }}
+            aria-label="Menu"
+            data-testid="button-menu"
+          >
+            <Menu size={14} />
+          </Link>
+          <button
+            onClick={handleLogout}
+            className="text-xs px-2 py-1 rounded"
+            style={{
+              color: "var(--shell-muted)",
+              fontFamily: "var(--font-mono)",
+              background: "transparent",
+              border: "1px solid var(--shell-border)",
+              cursor: "pointer",
+            }}
+            data-testid="button-logout"
+          >
+            {username}&nbsp;·&nbsp;out
+          </button>
+        </div>
+      )}
+    </header>
   );
 }
+
+// ── Scrollable wrapper for pages that need padding ────────────────────────
+
+function PageWrap({ children }: { children: React.ReactNode }) {
+  return <div className="page-scroll p-4">{children}</div>;
+}
+
+// ── Authenticated Shell ───────────────────────────────────────────────────
 
 function AuthenticatedApp() {
   const [authKey, setAuthKey] = useState(0);
   const [location] = useLocation();
-  
-  const { data: session, isLoading, refetch } = useQuery<{ authenticated: boolean; username?: string }>({
+
+  const { data: session, isLoading, refetch } = useQuery<{
+    authenticated: boolean;
+    username?: string;
+  }>({
     queryKey: ["/api/auth/session"],
     staleTime: 0,
   });
 
-  const { data: networkMode } = useQuery<{ mode: "mainnet" | "devnet"; faucetUrl: string | null }>({
-    queryKey: ["/api/network-mode"],
-    enabled: !!session?.authenticated,
-  });
-  
   useEffect(() => {
-    if (authKey > 0) {
-      refetch();
-    }
+    if (authKey > 0) refetch();
   }, [authKey, refetch]);
 
   if (location.startsWith("/reset-password")) {
@@ -192,74 +168,50 @@ function AuthenticatedApp() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: "var(--shell-bg)" }}
+      >
+        <Loader2 className="h-8 w-8 animate-spin" style={{ color: "var(--mint)" }} />
       </div>
     );
   }
 
   if (!session?.authenticated) {
-    return <Login onLoginSuccess={() => setAuthKey(k => k + 1)} />;
+    return <Login onLoginSuccess={() => setAuthKey((k) => k + 1)} />;
   }
 
-  const sidebarStyle = {
-    "--sidebar-width": "16rem",
-    "--sidebar-width-icon": "3rem",
-  };
-
   return (
-    <SidebarProvider style={sidebarStyle as React.CSSProperties}>
-      <div className="flex min-h-screen w-full">
-        <AppSidebar />
-        <div className="flex flex-col flex-1 min-w-0">
-          <header className="flex items-center gap-4 p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-10">
-            <SidebarTrigger data-testid="button-sidebar-toggle" />
-            {networkMode?.mode === "devnet" && (
-              <div className="flex items-center gap-2">
-                <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/30" data-testid="badge-devnet">
-                  <TestTube className="h-3 w-3 mr-1" />
-                  Devnet
-                </Badge>
-                {networkMode.faucetUrl && (
-                  <a 
-                    href={networkMode.faucetUrl} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-xs text-yellow-600 hover:underline flex items-center gap-1"
-                    data-testid="link-faucet"
-                  >
-                    <Droplet className="h-3 w-3" />
-                    Get Test SOL
-                  </a>
-                )}
-              </div>
-            )}
-          </header>
-          <main className="flex-1 p-6 overflow-auto pb-20">
-            <Switch>
-              <Route path="/" component={DashboardConsolidated} />
-              <Route path="/dashboard" component={DashboardConsolidated} />
-              <Route path="/discovery" component={DiscoveryPage} />
-              <Route path="/holdings" component={HoldingsPage} />
-              <Route path="/holdings/:token" component={HoldingsPage} />
-              <Route path="/signals" component={SignalsPage} />
-              <Route path="/signal/:id" component={SignalWalletPage} />
-              <Route path="/signal/:id/copy-settings" component={CopySettingsPage} />
-              <Route path="/trading" component={TradingPage} />
-              <Route path="/trading/:token" component={TokenPage} />
-              <Route path="/token/:mint" component={TokenDetailPage} />
-              <Route path="/wallet/:address" component={WalletDetailPage} />
-              <Route path="/paper"><Redirect to="/holdings" /></Route>
-              <Route path="/settings" component={SettingsPage} />
-              <Route component={NotFound} />
-            </Switch>
-          </main>
-        </div>
-        <PincherFooter />
+    <div style={{ background: "#070c17", minHeight: "100dvh", display: "flex", justifyContent: "center" }}>
+      <div className="pincher-shell">
+        <StatusBar username={session.username} />
+
+        <Switch>
+          <Route path="/" component={PortfolioPage} />
+          <Route path="/portfolio" component={PortfolioPage} />
+          <Route path="/discovery" component={() => <PageWrap><DiscoveryPage /></PageWrap>} />
+          <Route path="/signals" component={() => <PageWrap><SignalsPage /></PageWrap>} />
+          <Route path="/signal/:id" component={SignalWalletPage} />
+          <Route path="/signal/:id/copy-settings" component={CopySettingsPage} />
+          <Route path="/holdings" component={() => <PageWrap><HoldingsPage /></PageWrap>} />
+          <Route path="/holdings/:token" component={() => <PageWrap><HoldingsPage /></PageWrap>} />
+          <Route path="/trading" component={() => <PageWrap><TradingPage /></PageWrap>} />
+          <Route path="/trading/:token" component={TokenPage} />
+          <Route path="/token/:mint" component={TokenDetailPage} />
+          <Route path="/wallet/:address" component={WalletDetailPage} />
+          <Route path="/settings" component={() => <PageWrap><SettingsPage /></PageWrap>} />
+          <Route path="/paper"><Redirect to="/" /></Route>
+          <Route path="/dashboard"><Redirect to="/" /></Route>
+          <Route component={NotFound} />
+        </Switch>
+
+        <BottomNav />
       </div>
-    </SidebarProvider>
+    </div>
   );
 }
+
+// ── Root ──────────────────────────────────────────────────────────────────
 
 function App() {
   return (

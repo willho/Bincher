@@ -146,34 +146,37 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="api-keys" className="w-full">
-        <TabsList className={`grid w-full`} style={{ gridTemplateColumns: `repeat(${totalTabs}, minmax(0, 1fr))` }}>
-          <TabsTrigger value="api-keys" className="flex items-center gap-2" data-testid="tab-api-keys">
-            <Key className="h-4 w-4" />
-            <span className="hidden sm:inline">API Keys</span>
-          </TabsTrigger>
-          <TabsTrigger value="notifications" className="flex items-center gap-2" data-testid="tab-notifications">
-            <Bell className="h-4 w-4" />
-            <span className="hidden sm:inline">Alerts</span>
-          </TabsTrigger>
-          <TabsTrigger value="account" className="flex items-center gap-2" data-testid="tab-account">
-            <User className="h-4 w-4" />
-            <span className="hidden sm:inline">Account</span>
-          </TabsTrigger>
-          <TabsTrigger value="security" className="flex items-center gap-2" data-testid="tab-security">
-            <Lock className="h-4 w-4" />
-            <span className="hidden sm:inline">Security</span>
-          </TabsTrigger>
-          <TabsTrigger value="trading" className="flex items-center gap-2" data-testid="tab-trading">
-            <TrendingUp className="h-4 w-4" />
-            <span className="hidden sm:inline">Trading</span>
-          </TabsTrigger>
-          {isAdmin && (
-            <TabsTrigger value="admin" className="flex items-center gap-2" data-testid="tab-admin">
-              <Shield className="h-4 w-4" />
-              <span className="hidden sm:inline">Admin</span>
+        {/* Tabs scroll horizontally on narrow shells (480px) */}
+        <div className="overflow-x-auto -mx-0.5 px-0.5 pb-0.5">
+          <TabsList className="flex w-max min-w-full" data-testid="tabs-list-settings">
+            <TabsTrigger value="api-keys" className="flex items-center gap-1.5 flex-1 min-w-[60px]" data-testid="tab-api-keys">
+              <Key className="h-4 w-4 flex-shrink-0" />
+              <span className="text-xs">Keys</span>
             </TabsTrigger>
-          )}
-        </TabsList>
+            <TabsTrigger value="notifications" className="flex items-center gap-1.5 flex-1 min-w-[60px]" data-testid="tab-notifications">
+              <Bell className="h-4 w-4 flex-shrink-0" />
+              <span className="text-xs">Alerts</span>
+            </TabsTrigger>
+            <TabsTrigger value="account" className="flex items-center gap-1.5 flex-1 min-w-[60px]" data-testid="tab-account">
+              <User className="h-4 w-4 flex-shrink-0" />
+              <span className="text-xs">Account</span>
+            </TabsTrigger>
+            <TabsTrigger value="security" className="flex items-center gap-1.5 flex-1 min-w-[60px]" data-testid="tab-security">
+              <Lock className="h-4 w-4 flex-shrink-0" />
+              <span className="text-xs">Security</span>
+            </TabsTrigger>
+            <TabsTrigger value="trading" className="flex items-center gap-1.5 flex-1 min-w-[60px]" data-testid="tab-trading">
+              <TrendingUp className="h-4 w-4 flex-shrink-0" />
+              <span className="text-xs">Trading</span>
+            </TabsTrigger>
+            {isAdmin && (
+              <TabsTrigger value="admin" className="flex items-center gap-1.5 flex-1 min-w-[60px]" data-testid="tab-admin">
+                <Shield className="h-4 w-4 flex-shrink-0" />
+                <span className="text-xs">Admin</span>
+              </TabsTrigger>
+            )}
+          </TabsList>
+        </div>
 
         <TabsContent value="api-keys" className="mt-6">
           <ApiKeysSettings />
