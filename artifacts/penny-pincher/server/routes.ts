@@ -705,16 +705,8 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No wallets to monitor. Add a wallet first." });
       }
 
-      const { addSignalWallet, syncWebhookAddresses, getUnifiedWebhookId } = await import("./unified-webhook");
-      for (const addr of walletAddresses) {
-        addSignalWallet(addr);
-      }
-      await syncWebhookAddresses();
-
-      const webhookId = getUnifiedWebhookId();
       const updatedStatus = await storage.updateMonitoringStatus({
         isActive: true,
-        webhookId: webhookId || undefined,
       });
 
       broadcastStatus(updatedStatus);
@@ -728,13 +720,6 @@ export async function registerRoutes(
   // Stop monitoring
   app.post("/api/monitoring/stop", async (req, res) => {
     try {
-      const { removeSignalWallet, getTrackedAddressesByType, syncWebhookAddresses } = await import("./unified-webhook");
-      const signalWallets = getTrackedAddressesByType("signal_wallet");
-      for (const addr of signalWallets) {
-        removeSignalWallet(addr);
-      }
-      await syncWebhookAddresses();
-
       const updatedStatus = await storage.updateMonitoringStatus({
         isActive: false,
         webhookId: undefined,
@@ -769,128 +754,10 @@ export async function registerRoutes(
           continue;
         }
 
-        // Extract wallet address that made the swap (check all payload fields against registry)
-        const { routeWebhookEvent } = await import("./unified-webhook");
-        const isTracked = (addr: string) => routeWebhookEvent(addr) !== null;
-        const swapWalletAddress = getSwapWalletAddress(payload, isTracked);
+        // Extract wallet address that made the swap
+        const swapWalletAddress = getSwapWalletAddress(payload, () => true);
         if (!swapWalletAddress) {
           continue;
-        }
-
-        // Unified webhook routing: classify this event by address type
-        const routing = routeWebhookEvent(swapWalletAddress);
-        
-        if (routing && routing.type === "whale_active") {
-          // Whale wallet swap - extract price data and emit whale event
-          const whaleParsed = parseSwapFromWebhook(payload);
-          if (whaleParsed) {
-            const whaleIsBuy = isBaseCurrency(whaleParsed.fromToken);
-            const whaleTokenMint = whaleIsBuy ? whaleParsed.toToken : whaleParsed.fromToken;
-            const whaleTokenSymbol = whaleIsBuy ? whaleParsed.toTokenSymbol : whaleParsed.fromTokenSymbol;
-            
-            console.log(`[UnifiedWebhook] Whale ${swapWalletAddress.slice(0,8)} ${whaleIsBuy ? 'bought' : 'sold'} ${whaleTokenSymbol || whaleTokenMint.slice(0,8)}`);
-            
-            // Update price from whale swap
-            const { getSolPriceUsd } = await import("./jupiter");
-            const solPriceWhale = await getSolPriceUsd();
-            const baseAmtW = whaleIsBuy ? whaleParsed.fromAmount : whaleParsed.toAmount;
-            const tokenAmtW = whaleIsBuy ? whaleParsed.toAmount : whaleParsed.fromAmount;
-            if (tokenAmtW && tokenAmtW > 0 && baseAmtW && baseAmtW > 0 && solPriceWhale) {
-              const priceSolW = baseAmtW / tokenAmtW;
-              const priceUsdW = priceSolW * solPriceWhale;
-              const { upsertTokenData } = await import("./data-pool");
-              await upsertTokenData(whaleTokenMint, {
-                tokenSymbol: whaleTokenSymbol || undefined,
-                priceUsd: priceUsdW,
-              }, 'whale_swap');
-            }
-
-            // Re-activate archived tokens if high-performing whale buys them
-            if (whaleIsBuy) {
-              try {
-                const archivedToken = await db
-                  .select()
-                  .from(tokenDataPool)
-                  .where(and(eq(tokenDataPool.tokenMint, whaleTokenMint), eq(tokenDataPool.isDeathbed, true)))
-                  .limit(1);
-
-                if (archivedToken.length > 0) {
-                  await db
-                    .update(tokenDataPool)
-                    .set({
-                      isDeathbed: false,
-                      deathbedDetectedAt: null,
-                      deathbedSnapshotCreated: false,
-                    })
-                    .where(eq(tokenDataPool.tokenMint, whaleTokenMint));
-
-                  console.log(`[WhaleReactivation] Whale ${swapWalletAddress.slice(0, 8)} reactivated archived token ${whaleTokenMint.slice(0, 8)}`);
-                }
-              } catch (_) {}
-            }
-
-            // Whale-sourced token discovery
-            try {
-              const { processWhaleTokenDiscovery, discoverNewWhalesFromToken } = await import("./whale-discovery");
-              await processWhaleTokenDiscovery(
-                swapWalletAddress,
-                whaleTokenMint,
-                whaleTokenSymbol || undefined,
-                whaleIsBuy ? "buy" : "sell"
-              );
-              // Multi-hop: discover new whales from this token's holders
-              if (whaleIsBuy) {
-                discoverNewWhalesFromToken(whaleTokenMint, swapWalletAddress).catch(() => {});
-              }
-            } catch (_) {}
-            
-            // Emit whale discovery event for the event bus
-            try {
-              const { emit } = await import("./discovery-event-bus");
-              await emit({
-                type: whaleIsBuy ? "whale_buy" as any : "whale_sell" as any,
-                tokenMint: whaleTokenMint,
-                tokenSymbol: whaleTokenSymbol || undefined,
-                source: "unified_webhook",
-                data: {
-                  walletAddress: swapWalletAddress,
-                  action: whaleIsBuy ? "buy" : "sell",
-                  fromAmount: whaleParsed.fromAmount,
-                  toAmount: whaleParsed.toAmount,
-                },
-                timestamp: Date.now(),
-                urgency: 7,
-              });
-            } catch (_) {}
-          }
-          continue; // Skip signal wallet processing
-        }
-        
-        if (routing && (routing.type === "paper_position_token" || routing.type === "real_position_token")) {
-          // Token mint swap event - extract price update only
-          const tokenParsed = parseSwapFromWebhook(payload);
-          if (tokenParsed) {
-            const tokenIsBuy = isBaseCurrency(tokenParsed.fromToken);
-            const trackedMint = tokenIsBuy ? tokenParsed.toToken : tokenParsed.fromToken;
-            const trackedSymbol = tokenIsBuy ? tokenParsed.toTokenSymbol : tokenParsed.fromTokenSymbol;
-            
-            const { getSolPriceUsd } = await import("./jupiter");
-            const solPriceToken = await getSolPriceUsd();
-            const baseAmtT = tokenIsBuy ? tokenParsed.fromAmount : tokenParsed.toAmount;
-            const tokenAmtT = tokenIsBuy ? tokenParsed.toAmount : tokenParsed.fromAmount;
-            
-            if (tokenAmtT && tokenAmtT > 0 && baseAmtT && baseAmtT > 0 && solPriceToken) {
-              const priceUsdT = (baseAmtT / tokenAmtT) * solPriceToken;
-              const { upsertTokenData } = await import("./data-pool");
-              await upsertTokenData(trackedMint, {
-                tokenSymbol: trackedSymbol || undefined,
-                priceUsd: priceUsdT,
-              }, 'position_swap');
-              
-              console.log(`[UnifiedWebhook] Price update for ${routing.type} ${trackedSymbol || trackedMint.slice(0,8)}: $${priceUsdT.toFixed(10)}`);
-            }
-          }
-          continue; // Skip signal wallet processing
         }
 
         // Look up which user is monitoring this wallet (only enabled wallets)
@@ -4901,8 +4768,7 @@ export async function registerRoutes(
             await storage.updateMonitoringStatus({ isActive: true, webhookId });
             console.log(`[NetworkSwitch] New webhook created on ${mode}:`, webhookId);
           } else {
-            console.warn(`[NetworkSwitch] Failed to create webhook on ${mode}, starting retry loop`);
-            startMonitoringRetryLoop();
+            console.warn(`[NetworkSwitch] Failed to create webhook on ${mode}`);
           }
         }
       }
@@ -5003,29 +4869,7 @@ export async function registerRoutes(
       telegram: { success: false, message: "" },
     };
 
-    try {
-      const { addSignalWallet, syncWebhookAddresses, getUnifiedWebhookId, getRegistryStats } = await import("./unified-webhook");
-      const wallets = await storage.getAllWalletsAdmin();
-      const walletAddresses = wallets.filter((w: { enabled: boolean; walletAddress: string }) => w.enabled).map((w: { walletAddress: string }) => w.walletAddress);
-      
-      for (const addr of walletAddresses) {
-        addSignalWallet(addr);
-      }
-      await syncWebhookAddresses();
-      
-      const stats = getRegistryStats();
-      const webhookId = getUnifiedWebhookId();
-      if (webhookId) {
-        await storage.updateMonitoringStatus({ isActive: walletAddresses.length > 0, webhookId });
-        results.helius = { success: true, message: `Unified webhook synced: ${stats.total} addresses (${stats.signalWallets} signal, ${stats.whaleWallets} whale_active, ${stats.whaleWatchWallets} whale_watch)` };
-      } else if (walletAddresses.length === 0 && stats.total === 0) {
-        results.helius = { success: true, message: "No addresses to monitor" };
-      } else {
-        results.helius = { success: false, message: "Failed to sync unified webhook" };
-      }
-    } catch (error: any) {
-      results.helius = { success: false, message: error.message || "Helius sync failed" };
-    }
+    results.helius = { success: true, message: "Helius webhook removed — using PumpFun WebSocket and DexPaprika" };
 
     try {
       // 2. Update Telegram webhook
@@ -9196,7 +9040,6 @@ export async function registerRoutes(
   return httpServer;
 }
 
-let monitoringRetryTimer: ReturnType<typeof setInterval> | null = null;
 let pollingFallbackTimer: ReturnType<typeof setInterval> | null = null;
 let pollingIdleCount = 0;
 
@@ -9388,49 +9231,6 @@ function stopPollingFallback() {
   }
 }
 
-async function attemptWebhookCreation(fullUrl: string, uniqueAddresses: string[]): Promise<string | null> {
-  const delays = [0, 5000, 15000, 45000];
-  for (let attempt = 0; attempt < delays.length; attempt++) {
-    if (delays[attempt] > 0) {
-      console.log(`[Monitoring] Retry ${attempt + 1}/${delays.length - 1} in ${delays[attempt] / 1000}s...`);
-      await new Promise(r => setTimeout(r, delays[attempt]));
-    }
-    const webhookId = await createWebhook(fullUrl, uniqueAddresses);
-    if (webhookId) return webhookId;
-    console.warn(`[Monitoring] Webhook creation attempt ${attempt + 1}/${delays.length} failed`);
-  }
-  return null;
-}
-
-function startMonitoringRetryLoop() {
-  if (monitoringRetryTimer) return;
-  const RETRY_INTERVAL = 5 * 60 * 1000;
-  console.log("[Monitoring] Starting background retry (every 5min) until unified webhook is created");
-  monitoringRetryTimer = setInterval(async () => {
-    try {
-      const { getUnifiedWebhookId, syncWebhookAddresses } = await import("./unified-webhook");
-      if (getUnifiedWebhookId()) {
-        console.log("[Monitoring] Unified webhook now active, stopping background retry");
-        if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
-        stopPollingFallback();
-        return;
-      }
-      console.log("[Monitoring] Background retry: syncing unified webhook...");
-      await syncWebhookAddresses();
-      if (getUnifiedWebhookId()) {
-        const webhookId = getUnifiedWebhookId()!;
-        await storage.updateMonitoringStatus({ isActive: true, webhookId });
-        console.log("[Monitoring] Background retry succeeded, unified webhook active:", webhookId);
-        if (monitoringRetryTimer) { clearInterval(monitoringRetryTimer); monitoringRetryTimer = null; }
-        stopPollingFallback();
-      } else {
-        console.warn("[Monitoring] Background retry: unified webhook sync failed, will retry in 5min");
-      }
-    } catch (error) {
-      console.error("[Monitoring] Background retry error:", error);
-    }
-  }, RETRY_INTERVAL);
-}
 
 async function restoreMonitoring() {
   try {
@@ -9441,23 +9241,13 @@ async function restoreMonitoring() {
     const walletAddresses = allWallets.filter(w => w.enabled).map(w => w.walletAddress);
     const uniqueAddresses = [...new Set(walletAddresses)];
 
-    const { initializeUnifiedWebhook, getUnifiedWebhookId, getRegistryStats } = await import("./unified-webhook");
-    const existingUnifiedId = getUnifiedWebhookId() || status.webhookId;
-    await initializeUnifiedWebhook(uniqueAddresses, existingUnifiedId || undefined);
-    
-    const webhookId = getUnifiedWebhookId();
-    const stats = getRegistryStats();
-    console.log(`[Monitoring] Unified webhook active: ${webhookId}, ${stats.total} addresses (signal=${stats.signalWallets}, whale_active=${stats.whaleWallets}, whale_watch=${stats.whaleWatchWallets}, paper=${stats.paperTokens})`);
-
-    if (uniqueAddresses.length > 0 && webhookId) {
-      await storage.updateMonitoringStatus({ isActive: true, webhookId });
-    } else if (uniqueAddresses.length === 0) {
+    console.log(`[Monitoring] Restored: ${uniqueAddresses.length} wallet(s) tracked via PumpFun WebSocket`);
+    if (uniqueAddresses.length === 0) {
       console.log("[Monitoring] No enabled signal wallets, monitoring inactive");
-      await storage.updateMonitoringStatus({ isActive: false, webhookId: webhookId || undefined });
+      await storage.updateMonitoringStatus({ isActive: false });
     }
   } catch (error) {
     console.error("[Monitoring] Error restoring monitoring:", error);
-    startMonitoringRetryLoop();
     startPollingFallback();
   }
 }

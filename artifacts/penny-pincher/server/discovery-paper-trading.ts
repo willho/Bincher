@@ -376,32 +376,9 @@ async function _openDiscoveryTokenTradeInner(params: {
         takeProfitMultiplier: slot.takeProfitMultiplier,
       });
 
-      // Assign price tier: try to get realtime webhook tracking, fall back to batch
-      const { addTokenForPaperPosition, hasWebhookCapacity } = await import("./unified-webhook");
-      let priceTier: "realtime" | "batch_30m" = "batch_30m";
-      let learningWeight = 0.5;
-      
-      if (positionsOpened === 0) { // Only try webhook for first slot of this token
-        const added = await addTokenForPaperPosition(params.tokenMint);
-        if (added) {
-          priceTier = "realtime";
-          learningWeight = 1.0;
-        }
-      } else {
-        // Inherit tier from first slot
-        const firstSlotTier = await db.select({ priceTier: paperPositions.priceTier })
-          .from(paperPositions)
-          .where(and(
-            eq(paperPositions.tokenMint, params.tokenMint),
-            eq(paperPositions.status, "open"),
-            eq(paperPositions.userId, DISCOVERY_USER_ID)
-          ))
-          .limit(1);
-        if (firstSlotTier.length > 0 && firstSlotTier[0].priceTier === "realtime") {
-          priceTier = "realtime";
-          learningWeight = 1.0;
-        }
-      }
+      // Price tier: always batch mode (Helius webhook removed)
+      const priceTier: "realtime" | "batch_30m" = "batch_30m";
+      const learningWeight = 0.5;
 
       await db.update(paperPositions)
         .set({
