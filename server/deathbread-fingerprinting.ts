@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { tokenFingerprints, tokenDataPool, rawTokenTrades } from "@shared/schema";
 import { eq, and, gte, lt } from "drizzle-orm";
+import { archiveTokenAndUpdateOutcomes } from "./fingerprint-cluster-management";
 
 /**
  * Deathbread Fingerprinting Strategy
@@ -111,6 +112,28 @@ export async function recordDeathbreadFingerprint(
     console.log(
       `[Deathbread] ${tokenMint}: Recorded lifecycle ${lifecycleDays}d (T0→Death), reason: ${archiveReason}`
     );
+
+    // Absorb all snapshots into their respective cluster centroids
+    try {
+      const tokenAgeMinutes = lifecycleDays * 24 * 60;
+      const maxMultiplierReached = tokenData[0]?.maxMultiplier || deathMetrics.finalMultiplier || 1.0;
+
+      await archiveTokenAndUpdateOutcomes(
+        tokenMint,
+        deathMetrics.finalMultiplier,
+        maxMultiplierReached,
+        tokenAgeMinutes,
+        archiveReason === "rug" ? now : undefined,
+        archiveReason === "rug" ? (now - t0Timestamp) / 60 : undefined
+      );
+
+      console.log(
+        `[Deathbread] ${tokenMint}: Absorbed snapshots into cluster centroids`
+      );
+    } catch (error) {
+      console.error(`[Deathbread] Failed to archive outcomes for ${tokenMint}:`, error);
+      // Don't fail the deathbread recording if archiving fails
+    }
 
     return {
       success: true,
