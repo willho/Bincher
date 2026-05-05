@@ -5,7 +5,7 @@ import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SecurityProvider } from "@/contexts/security-context";
-import { Loader2, Shell, PieChart, Compass, Radio, Settings } from "lucide-react";
+import { Loader2, Shell, PieChart, Compass, Radio, Settings, Menu } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import PortfolioPage from "@/pages/portfolio";
 import SignalsPage from "@/pages/signals";
@@ -113,10 +113,10 @@ function StatusBar({ username }: { username?: string }) {
               cursor: "pointer",
               display: "flex",
             }}
-            aria-label="Settings"
-            data-testid="button-settings"
+            aria-label="Menu"
+            data-testid="button-menu"
           >
-            <Settings size={14} />
+            <Menu size={14} />
           </Link>
           <button
             onClick={handleLogout}

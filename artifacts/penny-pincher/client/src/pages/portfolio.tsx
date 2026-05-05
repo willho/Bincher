@@ -1,13 +1,25 @@
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useDocumentMeta } from "@/hooks/use-document-meta";
-import { Link } from "wouter";
-import { Loader2, Settings } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import type { Holding, Swap } from "@shared/schema";
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── Extended Holding type ─────────────────────────────────────────────────
+// The API returns fields that exist in the DB holdings table but are not
+// included in the base holdingSchema zod type (they were added in later
+// phases). Declaring them explicitly here avoids any type-escape casts.
+
+interface ExtendedHolding extends Holding {
+  trailingStop?: boolean;
+  trailingStopPercent?: number;
+  clusterId?: number | null;
+  whaleConfirmed?: boolean;
+  stopLossTriggered?: boolean;
+}
+
+// ── Other types ────────────────────────────────────────────────────────────
 
 interface MonitoringStatus {
   isActive: boolean;
@@ -42,6 +54,17 @@ interface PortfolioSnapshot {
   timestamp: number;
   totalValueSol: number;
   totalValueUsd?: number;
+}
+
+interface AiEvent {
+  id: number;
+  eventType: string;
+  title?: string;
+  description?: string;
+  tokenMint?: string;
+  tokenSymbol?: string;
+  createdAt?: number;
+  timestamp?: number;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -109,13 +132,12 @@ function Sparkline({
   const path = `M ${pts.join(" L ")}`;
   const fillPts = [`0,${height}`, ...pts, `${width},${height}`];
   const fillPath = `M ${fillPts.join(" L ")} Z`;
-  const gradId = `sg${color.replace(/[^a-z0-9]/gi, "").slice(0, 8)}`;
+  const gradId = `sg${Math.abs(color.split("").reduce((a, c) => a + c.charCodeAt(0), 0))}`;
 
   return (
     <svg
       width={width}
       height={height}
-      className="sparkline"
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
     >
@@ -193,7 +215,6 @@ function AutoTradingRow({
       className="pincher-card mx-4 mt-3 px-4 py-3 flex items-center gap-3"
       data-testid="card-auto-trading"
     >
-      {/* Pulse */}
       <div className="flex-shrink-0 relative w-5 h-5 flex items-center justify-center">
         {isActive ? (
           <span className="pulse-dot" />
@@ -202,7 +223,6 @@ function AutoTradingRow({
         )}
       </div>
 
-      {/* Labels */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-semibold text-white" style={{ fontFamily: "var(--font-prose)" }}>Auto-Trading</span>
@@ -225,12 +245,11 @@ function AutoTradingRow({
             </span>
           )}
           <span className="text-xs font-mono" style={{ color: "var(--shell-muted)" }} data-testid="text-scan-rate">
-            {swapCount.toLocaleString()} swaps
+            {swapCount.toLocaleString()} swaps detected
           </span>
         </div>
       </div>
 
-      {/* Toggle */}
       <button
         className="flex-shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-all"
         style={{
@@ -256,19 +275,23 @@ function AutoTradingRow({
 function HeroPnl({
   stats,
   snapshots,
+  bestMultiplier,
 }: {
   stats: FundStats | undefined;
   snapshots: PortfolioSnapshot[];
+  bestMultiplier: number;
 }) {
   const pnl = stats?.totalPnl ?? 0;
   const pnlPct = stats && stats.solAllocated > 0 ? (pnl / stats.solAllocated) * 100 : 0;
   const isPositive = pnl >= 0;
   const sparkData = snapshots.slice(-48).map((s) => s.totalValueSol);
+  const tradeCount = stats?.totalTrades ?? 0;
+  const winRate = stats?.winRate ?? 0;
 
   return (
     <div className="pincher-card mx-4 mt-3 px-5 py-4" data-testid="card-hero-pnl">
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="flex-1 min-w-0">
           <div className="text-xs mb-1" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}>
             Session P&amp;L
           </div>
@@ -283,7 +306,31 @@ function HeroPnl({
           <div className="text-sm mt-1 font-mono" style={{ color: isPositive ? "var(--mint)" : "var(--rose)" }} data-testid="text-hero-pnl-pct">
             {fmtPct(pnlPct)}
           </div>
+
+          {/* Trade stats row */}
+          <div className="flex items-center gap-3 mt-2 flex-wrap">
+            <span className="text-xs font-mono" style={{ color: "var(--shell-muted)" }} data-testid="text-hero-trade-count">
+              {tradeCount} trades
+            </span>
+            <span className="text-xs font-mono" style={{ color: "var(--shell-muted)" }}>·</span>
+            <span className="text-xs font-mono" style={{ color: winRate >= 0.5 ? "var(--mint)" : "var(--rose)" }} data-testid="text-hero-win-rate">
+              {Math.round(winRate * 100)}% win
+            </span>
+            {bestMultiplier > 1 && (
+              <>
+                <span className="text-xs font-mono" style={{ color: "var(--shell-muted)" }}>·</span>
+                <span
+                  className="text-xs font-mono px-1 rounded"
+                  style={{ background: "var(--violet-dim)", color: "var(--violet)" }}
+                  data-testid="text-hero-best-run"
+                >
+                  best {bestMultiplier.toFixed(1)}x
+                </span>
+              </>
+            )}
+          </div>
         </div>
+
         <div className="flex-shrink-0 mt-1">
           <Sparkline
             data={sparkData.length >= 2 ? sparkData : [0, 0.2, 0.1, 0.3, 0.4, 0.35, 0.5]}
@@ -307,7 +354,6 @@ function PerformanceStatsRow({ stats }: { stats: FundStats | undefined }) {
 
   return (
     <div className="pincher-card mx-4 mt-3 px-4 py-3 flex items-center justify-around" data-testid="card-perf-stats">
-      {/* Win-rate donut */}
       <div className="flex flex-col items-center gap-1">
         <WinRateDonut rate={winRate} />
         <span className="text-xs" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>WIN RATE</span>
@@ -315,7 +361,6 @@ function PerformanceStatsRow({ stats }: { stats: FundStats | undefined }) {
 
       <div style={{ width: 1, height: 40, background: "var(--shell-border)" }} />
 
-      {/* Profit factor */}
       <div className="flex flex-col items-center gap-1">
         <div className="text-xl font-bold font-mono" style={{ color: profitFactor >= 1 ? "var(--mint)" : "var(--rose)" }} data-testid="text-stat-profit-factor">
           {profitFactor.toFixed(2)}x
@@ -325,7 +370,6 @@ function PerformanceStatsRow({ stats }: { stats: FundStats | undefined }) {
 
       <div style={{ width: 1, height: 40, background: "var(--shell-border)" }} />
 
-      {/* Net P&L */}
       <div className="flex flex-col items-center gap-1">
         <div
           className="text-xl font-bold font-mono"
@@ -350,11 +394,11 @@ function PortfolioGrid({
   swaps,
   config,
 }: {
-  holdings: Holding[] | undefined;
+  holdings: ExtendedHolding[] | undefined;
   swaps: Swap[] | undefined;
   config: TradeConfig | undefined;
 }) {
-  const [closedPeriod, setClosedPeriod] = useState<ClosedPeriod>("24H");
+  const [closedPeriod, setClosedPeriod] = React.useState<ClosedPeriod>("24H");
 
   const openPositions = useMemo(
     () => (holdings ?? []).filter((h) => !h.reclaimed && h.currentAmount > 0),
@@ -459,10 +503,10 @@ function PortfolioGrid({
 
 function PositionCard({
   holding,
-  snapshotValues,
+  positionSnapshots,
 }: {
-  holding: Holding;
-  snapshotValues: number[];
+  holding: ExtendedHolding;
+  positionSnapshots: number[];
 }) {
   const symbol = holding.tokenSymbol || truncate(holding.tokenMint, 4);
   const badgeChar = symbol.slice(0, 2).toUpperCase();
@@ -475,27 +519,25 @@ function PositionCard({
   const pnlPct = costBasis > 0 ? (pnlSol / costBasis) * 100 : 0;
   const isPositive = pnlSol >= 0;
 
-  // Derive a sparkline from portfolio snapshots (proxy) or a 3-point estimate
-  const sparkData = snapshotValues.length >= 2
-    ? snapshotValues
+  // Per-position sparkline: global snapshots filtered to only those after this
+  // position's buy timestamp, giving each card a distinct timeline.
+  const sparkData: number[] = positionSnapshots.length >= 2
+    ? positionSnapshots
     : [costBasis, (costBasis + currentValue) / 2, currentValue];
 
-  // Status chip derivation from available fields
-  const hasStopLoss = (holding.stopLossPercent !== undefined && holding.stopLossPercent !== null);
   const highestMult = holding.highestMultiplier ?? 1;
   const isDrawdown = currentValue > 0 && costBasis > 0 && pnlPct < -15;
   const isHighMult = highestMult >= 2;
-  const h = holding as unknown as Record<string, unknown>;
-  const hasCluster = Boolean(h.clusterId ?? h.cluster_id);
-  const hasWhale = Boolean(h.whaleConfirmed ?? h.whale_confirmed);
-  const hasTrailingStop = Boolean(h.trailingStop ?? h.trailing_stop ?? hasStopLoss);
+  const hasTrailingStop = Boolean(holding.trailingStop) || Boolean(holding.trailingStopPercent);
+  const hasStopLoss = holding.stopLossTriggered === true;
+  const hasCluster = holding.clusterId !== undefined && holding.clusterId !== null;
+  const hasWhale = Boolean(holding.whaleConfirmed);
 
   return (
     <div
       className="pincher-card px-4 py-3 flex items-start gap-3"
       data-testid={`card-position-${holding.tokenMint.slice(0, 8)}`}
     >
-      {/* Badge */}
       <div
         className="flex-shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold"
         style={{ background: `${badgeColor}22`, color: badgeColor, fontFamily: "var(--font-mono)" }}
@@ -503,7 +545,6 @@ function PositionCard({
         {badgeChar}
       </div>
 
-      {/* Info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between gap-2">
           <span className="text-sm font-semibold text-white truncate" style={{ fontFamily: "var(--font-prose)" }}>
@@ -535,45 +576,34 @@ function PositionCard({
           </div>
         </div>
 
-        {/* Status chips */}
         <div className="flex flex-wrap gap-1 mt-1.5">
           {hasTrailingStop && (
-            <span
-              className="px-1.5 py-0.5 rounded"
-              style={{ background: "var(--amber-dim)", color: "var(--amber)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
-            >
+            <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--amber-dim)", color: "var(--amber)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>
               TSL
             </span>
           )}
           {hasWhale && (
-            <span
-              className="px-1.5 py-0.5 rounded"
-              style={{ background: "var(--mint-dim)", color: "var(--mint)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
-            >
+            <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--mint-dim)", color: "var(--mint)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>
               WHALE
             </span>
           )}
           {hasCluster && (
-            <span
-              className="px-1.5 py-0.5 rounded"
-              style={{ background: "var(--violet-dim)", color: "var(--violet)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
-            >
+            <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--violet-dim)", color: "var(--violet)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>
               CLUSTER
             </span>
           )}
           {isHighMult && (
-            <span
-              className="px-1.5 py-0.5 rounded"
-              style={{ background: "var(--mint-dim)", color: "var(--mint)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
-            >
+            <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--mint-dim)", color: "var(--mint)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>
               {highestMult.toFixed(1)}x
             </span>
           )}
+          {hasStopLoss && (
+            <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--amber-dim)", color: "var(--amber)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>
+              SL HIT
+            </span>
+          )}
           {isDrawdown && (
-            <span
-              className="px-1.5 py-0.5 rounded"
-              style={{ background: "var(--rose-dim)", color: "var(--rose)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}
-            >
+            <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--rose-dim)", color: "var(--rose)", fontFamily: "var(--font-mono)", fontSize: "0.6rem" }}>
               DRAWDOWN
             </span>
           )}
@@ -585,18 +615,15 @@ function PositionCard({
 
 function OpenPositionsList({
   holdings,
-  snapshots,
+  allSnapshots,
 }: {
-  holdings: Holding[] | undefined;
-  snapshots: PortfolioSnapshot[];
+  holdings: ExtendedHolding[] | undefined;
+  allSnapshots: PortfolioSnapshot[];
 }) {
   const open = useMemo(
     () => (holdings ?? []).filter((h) => !h.reclaimed && h.currentAmount > 0),
     [holdings]
   );
-
-  // Use recent portfolio snapshot values as a proxy sparkline for each position
-  const snapshotValues = snapshots.slice(-12).map((s) => s.totalValueSol);
 
   if (open.length === 0) {
     return (
@@ -613,15 +640,19 @@ function OpenPositionsList({
 
   return (
     <div className="mx-4 mt-3 space-y-2" data-testid="list-open-positions">
-      <div
-        className="text-xs font-semibold px-1 mb-1"
-        style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}
-      >
+      <div className="text-xs font-semibold px-1 mb-1" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}>
         OPEN POSITIONS ({open.length})
       </div>
-      {open.map((h) => (
-        <PositionCard key={h.tokenMint} holding={h} snapshotValues={snapshotValues} />
-      ))}
+      {open.map((h) => {
+        // Per-position sparkline: filter global snapshots to those at or after
+        // this position's buy timestamp, giving each card a unique timeline.
+        const positionSnapshots = allSnapshots
+          .filter((s) => s.timestamp >= h.buyTimestamp)
+          .slice(-12)
+          .map((s) => s.totalValueSol);
+
+        return <PositionCard key={h.tokenMint} holding={h} positionSnapshots={positionSnapshots} />;
+      })}
     </div>
   );
 }
@@ -631,15 +662,19 @@ function OpenPositionsList({
 interface TimelineEvent {
   id: string;
   ts: number;
-  type: "buy" | "sell-profit" | "sell-loss" | "system" | "deposit" | "toggle";
+  type: "buy" | "sell-profit" | "sell-loss" | "system" | "toggle";
   label: string;
   detail?: string;
 }
 
-function buildTimeline(swaps: Swap[] | undefined, monStatus: MonitoringStatus | undefined): TimelineEvent[] {
+function buildTimeline(
+  swaps: Swap[] | undefined,
+  aiEvents: AiEvent[] | undefined,
+  monStatus: MonitoringStatus | undefined
+): TimelineEvent[] {
   const events: TimelineEvent[] = [];
 
-  // Swap events
+  // Swap events (buys and sells)
   (swaps ?? []).forEach((s) => {
     const isBuy = s.fromToken === SOL_MINT;
     const isSell = s.toToken === SOL_MINT;
@@ -661,21 +696,30 @@ function buildTimeline(swaps: Swap[] | undefined, monStatus: MonitoringStatus | 
         ts: s.timestamp,
         type: isProfit ? "sell-profit" : "sell-loss",
         label: `Sell ${s.fromTokenSymbol || truncate(s.fromToken || "", 4)}`,
-        detail: `+${fmtSol(s.toAmount)} SOL`,
-      });
-    } else {
-      // Other swap (non-SOL pair)
-      events.push({
-        id: `swap-${s.id}`,
-        ts: s.timestamp,
-        type: "system",
-        label: `Swap ${s.fromTokenSymbol || "token"}`,
-        detail: undefined,
+        detail: `${fmtSol(s.toAmount)} SOL`,
       });
     }
   });
 
-  // Synthetic toggle event from monitoring status
+  // System events from /api/ai/events
+  (aiEvents ?? []).forEach((e) => {
+    const ts = e.createdAt ?? e.timestamp ?? 0;
+    if (ts === 0) return;
+    const isToggle =
+      e.eventType === "monitoring_started" ||
+      e.eventType === "monitoring_stopped" ||
+      e.eventType === "auto_trading_toggle";
+
+    events.push({
+      id: `ai-${e.id}`,
+      ts,
+      type: isToggle ? "toggle" : "system",
+      label: e.title || e.eventType.replace(/_/g, " "),
+      detail: e.description,
+    });
+  });
+
+  // Synthetic toggle event from monitoring status lastUpdated
   if (monStatus?.lastUpdated && monStatus.lastUpdated > 0) {
     events.push({
       id: "toggle-latest",
@@ -686,16 +730,14 @@ function buildTimeline(swaps: Swap[] | undefined, monStatus: MonitoringStatus | 
     });
   }
 
-  // Sort descending and take top 15
   return events.sort((a, b) => b.ts - a.ts).slice(0, 15);
 }
 
-const DOT_COLORS: Record<TimelineEvent["type"], { bg: string; border?: string }> = {
+const DOT_STYLES: Record<TimelineEvent["type"], { bg: string; border?: string }> = {
   buy: { bg: "transparent", border: "var(--mint)" },
   "sell-profit": { bg: "var(--mint)" },
   "sell-loss": { bg: "var(--rose)" },
   system: { bg: "var(--violet)" },
-  deposit: { bg: "var(--amber)" },
   toggle: { bg: "var(--amber)" },
 };
 
@@ -704,13 +746,11 @@ const LABEL_COLORS: Record<TimelineEvent["type"], string> = {
   "sell-profit": "var(--mint)",
   "sell-loss": "var(--rose)",
   system: "var(--violet)",
-  deposit: "var(--amber)",
   toggle: "var(--amber)",
 };
 
 function TimelineRow({ event, isLast }: { event: TimelineEvent; isLast: boolean }) {
-  const dot = DOT_COLORS[event.type];
-  const detailColor = LABEL_COLORS[event.type];
+  const dot = DOT_STYLES[event.type];
 
   return (
     <div className="flex items-start gap-3" data-testid={`timeline-row-${event.id}`}>
@@ -739,7 +779,7 @@ function TimelineRow({ event, isLast }: { event: TimelineEvent; isLast: boolean 
           </span>
         </div>
         {event.detail && (
-          <span className="text-xs font-mono" style={{ color: detailColor }}>
+          <span className="text-xs font-mono" style={{ color: LABEL_COLORS[event.type] }}>
             {event.detail}
           </span>
         )}
@@ -750,19 +790,18 @@ function TimelineRow({ event, isLast }: { event: TimelineEvent; isLast: boolean 
 
 function TransactionTimeline({
   swaps,
+  aiEvents,
   monStatus,
 }: {
   swaps: Swap[] | undefined;
+  aiEvents: AiEvent[] | undefined;
   monStatus: MonitoringStatus | undefined;
 }) {
-  const events = useMemo(() => buildTimeline(swaps, monStatus), [swaps, monStatus]);
+  const events = useMemo(() => buildTimeline(swaps, aiEvents, monStatus), [swaps, aiEvents, monStatus]);
 
   return (
     <div className="mx-4 mt-3 mb-2" data-testid="section-timeline">
-      <div
-        className="text-xs font-semibold px-1 mb-2"
-        style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}
-      >
+      <div className="text-xs font-semibold px-1 mb-2" style={{ color: "var(--shell-muted)", fontFamily: "var(--font-mono)" }}>
         RECENT ACTIVITY
       </div>
       {events.length === 0 ? (
@@ -785,6 +824,8 @@ function TransactionTimeline({
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────
+
+import React from "react";
 
 export default function PortfolioPage() {
   useDocumentMeta({
@@ -812,7 +853,7 @@ export default function PortfolioPage() {
     staleTime: 60000,
   });
 
-  const { data: holdings } = useQuery<Holding[]>({
+  const { data: holdings } = useQuery<ExtendedHolding[]>({
     queryKey: ["/api/copy-trade/holdings"],
     refetchInterval: 15000,
   });
@@ -827,16 +868,26 @@ export default function PortfolioPage() {
     staleTime: 60000,
   });
 
+  const { data: aiEvents } = useQuery<AiEvent[]>({
+    queryKey: ["/api/ai/events"],
+    staleTime: 30000,
+  });
+
   const snapshots = snapshotsData?.snapshots ?? [];
+
+  // Best multiplier across all open positions for hero card "best run" label
+  const bestMultiplier = useMemo(() => {
+    return (holdings ?? []).reduce((best, h) => Math.max(best, h.highestMultiplier ?? 1), 1);
+  }, [holdings]);
 
   return (
     <div className="page-scroll" data-testid="page-portfolio">
       <AutoTradingRow status={status} balance={balanceData?.balance} />
-      <HeroPnl stats={fundStats} snapshots={snapshots} />
+      <HeroPnl stats={fundStats} snapshots={snapshots} bestMultiplier={bestMultiplier} />
       <PortfolioGrid holdings={holdings} swaps={swaps} config={config} />
       <PerformanceStatsRow stats={fundStats} />
-      <OpenPositionsList holdings={holdings} snapshots={snapshots} />
-      <TransactionTimeline swaps={swaps} monStatus={status} />
+      <OpenPositionsList holdings={holdings} allSnapshots={snapshots} />
+      <TransactionTimeline swaps={swaps} aiEvents={aiEvents} monStatus={status} />
     </div>
   );
 }
