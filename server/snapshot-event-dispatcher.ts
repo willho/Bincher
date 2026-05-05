@@ -1,9 +1,8 @@
 import { db } from "./db";
-import { activePositions, tokenSnapshots, positionBudgets } from "@shared/schema";
+import { activePositions, tokenSnapshots, positionBudgets, users } from "@shared/schema";
 import { eq, desc, isNull, and } from "drizzle-orm";
 import { calculateAllocation } from "./position-allocator";
 import { getLearnedParameters, getDefaultTsl, getDefaultTrajectoryThreshold } from "./retrolearner-phase-d";
-import { isAutoTradingEnabled } from "./warmup-gate";
 
 interface SnapshotForDispatch {
   id: number;
@@ -99,11 +98,17 @@ export async function onSnapshotCreated(snapshot: SnapshotForDispatch): Promise<
     } else {
       // OPEN DECISION: Check if we should open a new position
 
-      // Check warm-up gate first
-      const autoTradingEnabled = await isAutoTradingEnabled(userId);
+      // Check system-picks toggle
+      const userRecord = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+      const autoTradingEnabled = userRecord.length > 0 ? userRecord[0].autoTradingEnabled : false;
       if (!autoTradingEnabled) {
         console.log(
-          `[SnapshotDispatcher] SKIP: ${snapshot.tokenSymbol} - Auto-trading disabled (warm-up period in progress)`
+          `[SnapshotDispatcher] SKIP: ${snapshot.tokenSymbol} - System picks disabled`
         );
       } else {
         const budget = await db
