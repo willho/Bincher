@@ -1,7 +1,10 @@
 import { db } from "./db";
 import { familiarWhales, whaleTokenPositions, tokenDataPool, FamiliarWhale } from "@shared/schema";
 import { eq, and, desc, gte, inArray, sql, or } from "drizzle-orm";
-import { addWhaleWallet, removeWhaleWallet, addWhaleWatchWallet, removeWhaleWatchWallet } from "./unified-webhook";
+const addWhaleWallet = (_addr: string, _meta?: object) => {};
+const removeWhaleWallet = (_addr: string) => {};
+const addWhaleWatchWallet = (_addr: string, _meta?: object) => {};
+const removeWhaleWatchWallet = (_addr: string) => {};
 
 const MAX_ACTIVE_WHALES = 50;
 const MAX_WATCH_WHALES = 200;
