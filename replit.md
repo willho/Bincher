@@ -19,7 +19,9 @@ Penny Pincher is an automated Solana trading platform offering copy trading from
 The application uses a client-server architecture with a React frontend, an Express.js backend, and a PostgreSQL database. Real-time communication is handled by WebSockets, and Helius webhooks enable push-based swap detection. User data is strictly isolated.
 
 ### Frontend
-The UI is built with React and Vite, featuring a dark theme with crypto-themed green accents. It includes a Dashboard, Watchlist, Trading (with Token sub-page), Settings, and an omnipresent AI chat component. Navigation is dashboard-centric, using panels.
+The UI is built with React and Vite, featuring a dark mobile-first shell (480px centered column) on a near-black background. Navigation uses a fixed bottom nav with three tabs: **Portfolio** (`/`), **Discovery** (`/discovery`), and **Appraisal** (`/signals`). The old sidebar layout has been replaced entirely. Design tokens use `--mint` (#34d399), `--rose`, `--amber`, `--violet` CSS variables. Typography: JetBrains Mono for numbers/addresses, Instrument Serif for display headings, Inter for body text.
+
+The Portfolio page (`/pages/portfolio.tsx`) contains: auto-trading toggle row wired to `/api/monitoring/start` / `/api/monitoring/stop`; hero P&L card with sparkline from `/api/portfolio/snapshots`; 4-up grid (open positions, closed trades with 1H/24H/7D switcher, base allocation, ape budget); open positions list with position cards (ticker badge, entry→current value, P&L, sparkline, status chips); transaction timeline from swap history.
 
 ### Backend
 The Express backend manages user authentication (session-based), Solana service integrations, and business logic. It processes Helius webhooks, uses Resend for email, and integrates Jupiter for token swaps. A WebSocket server broadcasts real-time updates.

@@ -2,6 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Mockup design tokens ── */
+:root {
+  --mint: #34d399;
+  --mint-dim: rgba(52, 211, 153, 0.15);
+  --rose: #f43f5e;
+  --rose-dim: rgba(244, 63, 94, 0.15);
+  --amber: #f59e0b;
+  --amber-dim: rgba(245, 158, 11, 0.15);
+  --violet: #8b5cf6;
+  --violet-dim: rgba(139, 92, 246, 0.15);
+  --shell-bg: #0a0f1a;
+  --shell-card: #111827;
+  --shell-border: rgba(255,255,255,0.07);
+  --shell-muted: rgba(255,255,255,0.45);
+  --font-display: 'Instrument Serif', Georgia, serif;
+}
+
+/* ── Shell layout ── */
+.pincher-shell {
+  width: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  background: var(--shell-bg);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.pincher-card {
+  background: var(--shell-card);
+  border: 1px solid var(--shell-border);
+  border-radius: 1rem;
+}
+
+/* ── Bottom nav ── */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 100%;
+  max-width: 480px;
+  background: rgba(10,15,26,0.92);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid var(--shell-border);
+  z-index: 50;
+}
+
+/* ── Pulsing dot ── */
+@keyframes ping-green {
+  75%, 100% { transform: scale(2); opacity: 0; }
+}
+.pulse-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--mint);
+  position: relative;
+  display: inline-block;
+}
+.pulse-dot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--mint);
+  animation: ping-green 1.4s cubic-bezier(0,0,0.2,1) infinite;
+}
+
+/* ── Sparkline SVG ── */
+.sparkline { overflow: visible; }
+
+/* ── Scrollable page content ── */
+.page-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 80px;
+  -webkit-overflow-scrolling: touch;
+}
+
 /* LIGHT MODE */
 :root {
   --button-outline: rgba(0,0,0, .10);
