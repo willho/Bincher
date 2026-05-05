@@ -9209,6 +9209,10 @@ export async function registerRoutes(
   const systemAppraisalRoutes = await import("./routes/system-appraisal");
   app.use(systemAppraisalRoutes.default);
 
+  // Register portfolio history routes (transaction log)
+  const portfolioHistoryRoutes = await import("./routes/portfolio-history-routes");
+  app.use(portfolioHistoryRoutes.default);
+
   return httpServer;
 }
 

@@ -85,6 +85,10 @@ export default function PortfolioPage() {
     queryKey: ["/api/position-analytics"],
   });
 
+  const { data: portfolioHistoryData, isLoading: historyLoading } = useQuery<any>({
+    queryKey: ["/api/portfolio/history"],
+  });
+
   const formatUsd = (val: number) => {
     if (val >= 1000000) return `$${(val / 1000000).toFixed(2)}M`;
     if (val >= 1000) return `$${(val / 1000).toFixed(2)}K`;
@@ -509,6 +513,53 @@ export default function PortfolioPage() {
                           <div className="font-semibold">{formatUsd(currentValue)}</div>
                           <div className={`text-sm ${pnl >= 0 ? "text-green-500" : "text-red-500"}`}>
                             {pnl >= 0 ? "+" : ""}{formatUsd(pnl)} ({pnlPercent >= 0 ? "+" : ""}{pnlPercent.toFixed(1)}%)
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Portfolio History */}
+          {portfolioHistoryData?.history && portfolioHistoryData.history.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Transaction History</CardTitle>
+                <CardDescription>Session events and trades</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {portfolioHistoryData.history.map((event: any, idx: number) => {
+                    const eventTime = new Date(event.timestamp * 1000).toLocaleString();
+                    const isBuy = event.type === "buy";
+                    const isSell = event.type === "sell";
+                    const isReset = event.type === "session_reset" || event.type === "autotrading_enabled" || event.type === "fund_topup";
+
+                    return (
+                      <div key={idx} className="flex items-start gap-3 border-l-2 border-muted pl-3 py-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            {isBuy && <span className="text-xs bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-1 rounded">BUY</span>}
+                            {isSell && <span className="text-xs bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 px-2 py-1 rounded">SELL</span>}
+                            {event.type === "autotrading_enabled" && <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded">⚡ ENABLED</span>}
+                            {event.type === "session_reset" && <span className="text-xs bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 px-2 py-1 rounded">↻ RESET</span>}
+                            {event.type === "fund_topup" && <span className="text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-2 py-1 rounded">💰 TOPUP</span>}
+                            <span className="text-xs text-muted-foreground">{eventTime}</span>
+                          </div>
+                          <div className="text-sm mt-1">
+                            {isBuy && <span>{event.description}</span>}
+                            {isSell && (
+                              <span>
+                                {event.description}
+                                {event.pnl && <span className={`ml-2 font-semibold ${event.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>
+                                  {event.pnl >= 0 ? "+" : ""}{formatUsd(event.pnl)}
+                                </span>}
+                              </span>
+                            )}
+                            {isReset && <span className="font-semibold">{event.description}</span>}
                           </div>
                         </div>
                       </div>

@@ -4910,6 +4910,7 @@ export const positionBudgets = pgTable("position_budgets", {
   forecastBreakdown: jsonb("forecast_breakdown").$type<Array<{ hour: number; dayOfWeek: string; expectedPositions: number }>>().default([]),
   nextBusyPeriods: jsonb("next_busy_periods").$type<Array<{ startHour: number; dayOfWeek: string; endHour: number; expectedPositions: number }>>().default([]),
   lastCalculatedAt: integer("last_calculated_at"),
+  sessionStartedAt: integer("session_started_at"), // When current session started (reset on fund topup/autotrading enable)
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at"),
 }, (table) => [
@@ -4951,6 +4952,31 @@ export const activePositions = pgTable("active_positions", {
 export const insertActivePositionSchema = createInsertSchema(activePositions).omit({ id: true, createdAt: true, updatedAt: true });
 export type ActivePosition = typeof activePositions.$inferSelect;
 export type InsertActivePosition = z.infer<typeof insertActivePositionSchema>;
+
+// Portfolio history - transaction and event log for tracking sessions and trades
+export const portfolioHistory = pgTable("portfolio_history", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  eventType: text("event_type").notNull(), // 'buy' | 'sell' | 'autotrading_enabled' | 'session_reset' | 'fund_topup'
+  tokenMint: text("token_mint"), // For buy/sell events
+  tokenSymbol: text("token_symbol"), // For buy/sell events
+  amount: real("amount"), // SOL amount for buy/sell
+  price: real("price"), // Entry or exit price
+  pnl: real("pnl"), // Realized P&L for sell events
+  pnlPercent: real("pnl_percent"), // P&L as percentage for sell events
+  description: text("description"), // Human-readable description
+  sessionId: text("session_id"), // Groups trades in a session (reset on major events)
+  recordedAt: integer("recorded_at").notNull(),
+  createdAt: integer("created_at").notNull(),
+}, (table) => [
+  index("idx_ph_user_id").on(table.userId),
+  index("idx_ph_session_id").on(table.sessionId),
+  index("idx_ph_recorded_at").on(table.recordedAt),
+]);
+
+export const insertPortfolioHistorySchema = createInsertSchema(portfolioHistory).omit({ id: true, createdAt: true });
+export type PortfolioHistory = typeof portfolioHistory.$inferSelect;
+export type InsertPortfolioHistory = z.infer<typeof insertPortfolioHistorySchema>;
 
 // Token launch metrics - 8-day rolling window for budget forecasting
 export const tokenLaunchMetrics = pgTable("token_launch_metrics", {
