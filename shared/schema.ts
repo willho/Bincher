@@ -44,9 +44,9 @@ export const users = pgTable("users", {
   // Onboarding state
   onboardingCompleted: boolean("onboarding_completed").default(false),
 
-  // Warm-up period for auto-trading (7-day data collection before enabling)
+  // Warm-up period for auto-trading (24-hour data collection before enabling)
   warmupStartedAt: integer("warmup_started_at"), // Timestamp when warm-up started
-  warmupEnabledAt: integer("warmup_enabled_at"), // Timestamp when 7-day period completes
+  warmupEnabledAt: integer("warmup_enabled_at"), // Timestamp when 24-hour period completes
   autoTradingEnabled: boolean("auto_trading_enabled").default(false), // Can only be true after warmupEnabledAt
 
   // Security settings

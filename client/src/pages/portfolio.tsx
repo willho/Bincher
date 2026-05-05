@@ -584,7 +584,7 @@ export default function PortfolioPage() {
               <CardTitle className="text-sm">System Status</CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground space-y-2">
-              <p>✓ Collecting 7-day warm-up data before enabling real SOL trading</p>
+              <p>✓ Collecting 24-hour warm-up data before enabling real SOL trading</p>
               <p>✓ Expected daily positions: {positionBudget?.expectedPositionsPerDay.toFixed(1) || "—"}</p>
               <p>✓ Base allocation per position: {formatSol(positionBudget?.baseAllocationPerPosition || 0)} SOL</p>
               <p>✓ Check /api/system-appraisal?passkey=debug for detailed learning metrics</p>

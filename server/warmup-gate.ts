@@ -2,7 +2,7 @@ import { db } from "./db";
 import { users } from "@shared/schema";
 import { eq } from "drizzle-orm";
 
-const WARMUP_PERIOD_DAYS = 7;
+const WARMUP_PERIOD_DAYS = 1;
 const WARMUP_PERIOD_SECONDS = WARMUP_PERIOD_DAYS * 24 * 60 * 60;
 
 export async function isAutoTradingEnabled(userId: number): Promise<boolean> {
@@ -103,7 +103,7 @@ export async function startWarmupPeriod(userId: number): Promise<void> {
     .where(eq(users.id, userId));
 
   console.log(
-    `[WarmupGate] Started 7-day warm-up for user ${userId} (will complete at ${new Date(
+    `[WarmupGate] Started 24-hour warm-up for user ${userId} (will complete at ${new Date(
       willCompleteAt * 1000
     ).toISOString()})`
   );
