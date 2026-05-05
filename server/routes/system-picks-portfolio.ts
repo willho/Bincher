@@ -6,6 +6,9 @@ import {
   resetFund,
 } from "../system-picks";
 import { systemPicksFund, type FundSession, type Position } from "../system-picks-fund";
+import { db } from "../db";
+import { users } from "@shared/schema";
+import { eq } from "drizzle-orm";
 
 const router = Router();
 
@@ -106,6 +109,63 @@ router.post("/fund/reset", async (req: Request, res: Response) => {
       success: true,
       message: `Fund reset. New session: ${newSession.sessionId}`,
       newSession,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
+ * POST /api/system-picks/toggle
+ * Enable or disable system-picks auto-trading
+ *
+ * Body: { enabled: boolean }
+ */
+router.post("/toggle", async (req: Request, res: Response) => {
+  try {
+    const { enabled } = req.body;
+    const userId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
+
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be boolean" });
+    }
+
+    await db
+      .update(users)
+      .set({ autoTradingEnabled: enabled })
+      .where(eq(users.id, userId));
+
+    return res.json({
+      success: true,
+      message: `System picks ${enabled ? "enabled" : "disabled"}`,
+      autoTradingEnabled: enabled,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+/**
+ * GET /api/system-picks/status
+ * Get current system-picks status
+ */
+router.get("/status", async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(process.env.SYSTEM_PICKS_USER_ID || "1", 10);
+
+    const user = await db
+      .select({ autoTradingEnabled: users.autoTradingEnabled })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+
+    return res.json({
+      success: true,
+      autoTradingEnabled: user.length > 0 ? user[0].autoTradingEnabled : false,
     });
   } catch (error) {
     return res.status(500).json({
