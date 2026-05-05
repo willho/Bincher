@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { positionBudgets, tokenLaunchMetrics, dayOfWeekAggregates } from "@shared/schema";
+import { positionBudgets, tokenLaunchMetrics, dayOfWeekAggregates, users } from "@shared/schema";
 import { eq, and, gte, lt } from "drizzle-orm";
 
 interface BudgetForecast {
@@ -117,10 +117,47 @@ export async function updatePositionBudgetForecast(
   initialBalance: number
 ): Promise<BudgetForecast> {
   const now = Math.floor(Date.now() / 1000);
-  const forecastBreakdown = await calculateExpectedPositionsFor24Hours(userId);
 
-  // Calculate expected positions per day from forecast breakdown
-  const expectedPositionsPerDay = forecastBreakdown.reduce((sum, entry) => sum + entry.expectedPositions, 0) / 7; // Average across week
+  // Check if warm-up period is less than 7 days old
+  const user = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  const warmupStartedAt = user.length > 0 ? user[0].warmupStartedAt : null;
+  const isFirstWeek = warmupStartedAt && (now - warmupStartedAt) < 604800; // 7 days in seconds
+
+  let forecastBreakdown: Array<{ hour: number; dayOfWeek: string; expectedPositions: number }>;
+  let expectedPositionsPerDay: number;
+
+  if (isFirstWeek) {
+    // First week: use simple daily average (no day-of-week breakdown)
+    const dailyMetrics = await db
+      .select()
+      .from(tokenLaunchMetrics)
+      .where(eq(tokenLaunchMetrics.userId, userId));
+
+    const totalMatched = dailyMetrics.reduce((sum, m) => sum + (m.matchedCount || 0), 0);
+    const uniqueDays = new Set(dailyMetrics.map(m => m.capturedDate)).size;
+    const dailyAverage = uniqueDays > 0 ? totalMatched / uniqueDays : 0;
+
+    // Fill all 24 hours with the same daily average
+    forecastBreakdown = [];
+    for (let hour = 0; hour < 24; hour++) {
+      forecastBreakdown.push({
+        hour,
+        dayOfWeek: "Daily Average",
+        expectedPositions: dailyAverage / 24, // Spread evenly across hours
+      });
+    }
+
+    expectedPositionsPerDay = dailyAverage;
+  } else {
+    // After first week: use day-of-week breakdown
+    forecastBreakdown = await calculateExpectedPositionsFor24Hours(userId);
+    expectedPositionsPerDay = forecastBreakdown.reduce((sum, entry) => sum + entry.expectedPositions, 0) / 7; // Average across week
+  }
 
   // Base allocation: conservative reserve across expected discovery velocity
   const conservativeFactor = 1.2; // 20% safety margin
