@@ -537,6 +537,7 @@ export default function PortfolioPage() {
                     const isBuy = event.type === "buy";
                     const isSell = event.type === "sell";
                     const isReset = event.type === "session_reset" || event.type === "autotrading_enabled" || event.type === "fund_reset";
+                    const isDeposit = event.type === "fund_deposit";
 
                     return (
                       <div key={idx} className="flex items-start gap-3 border-l-2 border-muted pl-3 py-2">
@@ -544,9 +545,10 @@ export default function PortfolioPage() {
                           <div className="flex items-center gap-2">
                             {isBuy && <span className="text-xs bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-200 px-2 py-1 rounded">BUY</span>}
                             {isSell && <span className="text-xs bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 px-2 py-1 rounded">SELL</span>}
-                            {event.type === "autotrading_enabled" && <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded">⚡ ENABLED</span>}
+                            {isDeposit && <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded">💰 DEPOSIT</span>}
+                            {event.type === "autotrading_enabled" && <span className="text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-2 py-1 rounded">⚡ AUTO-TRADE ON</span>}
                             {event.type === "session_reset" && <span className="text-xs bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 px-2 py-1 rounded">↻ RESET</span>}
-                            {event.type === "fund_reset" && <span className="text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-2 py-1 rounded">↻ RESET 1 SOL</span>}
+                            {event.type === "fund_reset" && <span className="text-xs bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 px-2 py-1 rounded">↻ RESET 1 SOL</span>}
                             <span className="text-xs text-muted-foreground">{eventTime}</span>
                           </div>
                           <div className="text-sm mt-1">
@@ -557,6 +559,12 @@ export default function PortfolioPage() {
                                 {event.pnl && <span className={`ml-2 font-semibold ${event.pnl >= 0 ? "text-green-600" : "text-red-600"}`}>
                                   {event.pnl >= 0 ? "+" : ""}{formatUsd(event.pnl)}
                                 </span>}
+                              </span>
+                            )}
+                            {isDeposit && (
+                              <span className="font-semibold">
+                                {event.description}
+                                <span className="ml-2 text-blue-600 dark:text-blue-400">+{formatSol(event.amount)} SOL</span>
                               </span>
                             )}
                             {isReset && <span className="font-semibold">{event.description}</span>}

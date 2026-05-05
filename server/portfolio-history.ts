@@ -90,11 +90,29 @@ export async function recordAutoTradingEnabledEvent(userId: number): Promise<voi
   console.log(`[PortfolioHistory] Auto-trading enabled for user ${userId}, session reset`);
 }
 
+export async function recordFundDepositEvent(userId: number, depositAmount: number): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const sessionId = await getCurrentSessionId(userId);
+
+  // Record deposit (does NOT reset stats)
+  await db.insert(portfolioHistory).values({
+    userId,
+    eventType: "fund_deposit",
+    amount: depositAmount,
+    description: `Deposited ${depositAmount.toFixed(4)} SOL to fund`,
+    sessionId,
+    recordedAt: now,
+    createdAt: now,
+  });
+
+  console.log(`[PortfolioHistory] Fund deposit ${depositAmount} SOL for user ${userId}`);
+}
+
 export async function recordFundResetEvent(userId: number): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const sessionId = generateSessionId();
 
-  // Record the event
+  // Record the reset (DOES reset stats)
   await db.insert(portfolioHistory).values({
     userId,
     eventType: "fund_reset",
