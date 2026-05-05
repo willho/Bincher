@@ -536,7 +536,7 @@ export default function PortfolioPage() {
                     const eventTime = new Date(event.timestamp * 1000).toLocaleString();
                     const isBuy = event.type === "buy";
                     const isSell = event.type === "sell";
-                    const isReset = event.type === "session_reset" || event.type === "autotrading_enabled" || event.type === "fund_topup";
+                    const isReset = event.type === "session_reset" || event.type === "autotrading_enabled" || event.type === "fund_reset";
 
                     return (
                       <div key={idx} className="flex items-start gap-3 border-l-2 border-muted pl-3 py-2">
@@ -546,7 +546,7 @@ export default function PortfolioPage() {
                             {isSell && <span className="text-xs bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 px-2 py-1 rounded">SELL</span>}
                             {event.type === "autotrading_enabled" && <span className="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded">⚡ ENABLED</span>}
                             {event.type === "session_reset" && <span className="text-xs bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200 px-2 py-1 rounded">↻ RESET</span>}
-                            {event.type === "fund_topup" && <span className="text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-2 py-1 rounded">💰 TOPUP</span>}
+                            {event.type === "fund_reset" && <span className="text-xs bg-purple-100 dark:bg-purple-900 text-purple-800 dark:text-purple-200 px-2 py-1 rounded">↻ RESET 1 SOL</span>}
                             <span className="text-xs text-muted-foreground">{eventTime}</span>
                           </div>
                           <div className="text-sm mt-1">
