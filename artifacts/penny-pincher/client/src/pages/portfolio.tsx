@@ -414,17 +414,25 @@ function PortfolioGrid({
     const now = Math.floor(Date.now() / 1000);
     const cutoffs: Record<ClosedPeriod, number> = { "1H": now - 3600, "24H": now - 86400, "7D": now - 604800 };
     const cutoff = cutoffs[closedPeriod];
-    const sellSwaps = (swaps ?? []).filter(
-      (s) => s.timestamp >= cutoff && s.toToken === SOL_MINT
+
+    // Source of truth: reclaimed holdings (exited positions) within the period
+    const closed = (holdings ?? []).filter(
+      (h) => h.reclaimed && (h.reclaimTimestamp ?? 0) >= cutoff
     );
-    const wins = sellSwaps.filter((s) => {
-      const buy = (swaps ?? []).find(
-        (b) => b.toToken === s.fromToken && b.fromToken === SOL_MINT && b.timestamp < s.timestamp
+
+    const wins = closed.filter((h) => {
+      const costBasis = h.buyPrice * h.amountBought;
+      // Match the corresponding sell swap to get actual SOL received
+      const sellSwap = (swaps ?? []).find(
+        (s) => s.fromToken === h.tokenMint && s.toToken === SOL_MINT && s.timestamp >= h.buyTimestamp
       );
-      return buy ? s.toAmount > buy.fromAmount : false;
+      if (sellSwap) return sellSwap.toAmount > costBasis;
+      // Fallback if no sell swap found: treat highestMultiplier > 1 as a win
+      return (h.highestMultiplier ?? 1) > 1;
     });
-    return { total: sellSwaps.length, wins: wins.length, losses: sellSwaps.length - wins.length };
-  }, [swaps, closedPeriod]);
+
+    return { total: closed.length, wins: wins.length, losses: closed.length - wins.length };
+  }, [holdings, swaps, closedPeriod]);
 
   const tiles: { label: React.ReactNode; value: string; sub: string; color: string; testId: string }[] = [
     {

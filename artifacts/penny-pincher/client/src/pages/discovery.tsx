@@ -425,7 +425,8 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
           <span className="text-sm font-mono text-muted-foreground">{formatVolume(token.volume24h)}</span>
         </div>
 
-        <div className="text-right w-12" data-testid={`score-heat-${token.tokenMint}`}>
+        {/* Heat — hidden on xs (< 640px) to prevent overflow in 480px shell */}
+        <div className="text-right hidden sm:block w-12" data-testid={`score-heat-${token.tokenMint}`}>
           <div className={`inline-flex items-center gap-0.5 text-xs font-mono px-1.5 py-0.5 rounded border ${scoreBg(heat)}`}>
             <Flame className={`h-3 w-3 ${scoreColor(heat)}`} />
             <span className={scoreColor(heat)}>{heat}</span>
@@ -453,20 +454,7 @@ function TokenRow({ token, rank }: { token: RankedToken; rank: number }) {
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 w-16 justify-end">
-          {token.eventCount > 0 && (
-            <span className="text-xs text-muted-foreground flex items-center gap-0.5">
-              <Zap className="h-3 w-3 text-yellow-500" />{token.eventCount}
-            </span>
-          )}
-          {token.insightCount > 0 && (
-            <span className="text-xs text-muted-foreground flex items-center gap-0.5">
-              <Brain className="h-3 w-3 text-purple-500" />{token.insightCount}
-            </span>
-          )}
-        </div>
-
-        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        <ChevronRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
       </div>
     </Link>
   );
@@ -727,33 +715,36 @@ export default function DiscoveryPage() {
               </TabsList>
 
               {activeTab === "tokens" && (
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex items-center gap-1">
-                    {(["1h", "6h", "24h", "7d"] as const).map((tf) => (
-                      <Button
-                        key={tf}
-                        variant={timeframe === tf ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setTimeframe(tf)}
-                        data-testid={`button-timeframe-${tf}`}
-                      >
-                        {tf}
-                      </Button>
-                    ))}
-                  </div>
-                  <span className="text-muted-foreground/30">|</span>
-                  <div className="flex items-center gap-1 flex-wrap">
-                    {sortOptions.map((opt) => (
-                      <Button
-                        key={opt.value}
-                        variant={tokenSort === opt.value ? "default" : "ghost"}
-                        size="sm"
-                        onClick={() => setTokenSort(opt.value)}
-                        data-testid={`button-sort-${opt.value}`}
-                      >
-                        {opt.label}
-                      </Button>
-                    ))}
+                <div className="flex flex-col gap-1 w-full sm:w-auto">
+                  {/* Timeframe + Sort — horizontally scrollable on 480px shell */}
+                  <div className="overflow-x-auto">
+                    <div className="flex items-center gap-1 pb-0.5 w-max">
+                      {(["1h", "6h", "24h", "7d"] as const).map((tf) => (
+                        <Button
+                          key={tf}
+                          variant={timeframe === tf ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setTimeframe(tf)}
+                          data-testid={`button-timeframe-${tf}`}
+                          className="px-2 h-7 text-xs"
+                        >
+                          {tf}
+                        </Button>
+                      ))}
+                      <span className="text-muted-foreground/30 px-1">|</span>
+                      {sortOptions.map((opt) => (
+                        <Button
+                          key={opt.value}
+                          variant={tokenSort === opt.value ? "default" : "ghost"}
+                          size="sm"
+                          onClick={() => setTokenSort(opt.value)}
+                          data-testid={`button-sort-${opt.value}`}
+                          className="px-2 h-7 text-xs"
+                        >
+                          {opt.label}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
@@ -767,9 +758,8 @@ export default function DiscoveryPage() {
                     <span className="flex-1">Token</span>
                     <span className="text-right">Price / {timeframe}</span>
                     <span className="text-right hidden md:block w-20">Vol 24h</span>
-                    <span className="text-right w-12">Heat</span>
-                    <span className="text-right w-14">Pincher</span>
-                    <span className="w-16 text-right">Signals</span>
+                    <span className="text-right hidden sm:block w-12">Heat</span>
+                    <span className="text-right w-14">Score</span>
                     <span className="w-4"></span>
                   </div>
                   {tokensLoading ? (
